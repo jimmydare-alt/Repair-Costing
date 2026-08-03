@@ -4,8 +4,9 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Calculator, FileSpreadsheet, History, Save, Search, Settings } from "lucide-react";
-import { calculateActualSiteDays, calculatePL, calculateProject, calculateRepairLineMaterials, calculateWorkingDays, defaultActuals } from "@/lib/calculations";
-import { money, percent, formatDateTime } from "@/lib/format";
+import { calculateActualSiteDays, calculatePhaseSchedule, calculatePL, calculateProject, calculateProjectRepairMaterials, calculateRepairLineMaterials, calculateWorkingDays, defaultActuals } from "@/lib/calculations";
+import { money, percent, formatDateTime, setMoneyCurrency } from "@/lib/format";
+import { projectCsv } from "@/lib/export";
 import { defaultRates, emptyInput } from "@/lib/rates";
 import { createRepairLine, defaultRepairCatalog, repairTypeByCode } from "@/lib/repairCatalog";
 import { addProjectNote, loadProjects, loadRates, loadRepairCatalog, saveActuals, saveProject, saveRates, saveRepairCatalog, setStorageContext, updateProjectWorkflow } from "@/lib/storage";
@@ -14,10 +15,10 @@ import { hasPermission } from "@/lib/company";
 import { createBrowserSupabaseClient } from "@/lib/supabaseClient";
 import { ProductShell } from "@/components/AppShell";
 import type { AppModuleKey, CurrencyCode, MembershipRole } from "@/lib/company";
-import type { AdditionalItem, AdminRates, DetailTab, LabourMode, Line, PLCategory, PriceType, ProjectInput, ProjectRecord, ProjectStatus, RepairCatalog, RepairLabourMode, RepairLineItem, RepairMaterial, RepairMaterialCategory, RepairSubcontractor, RepairType, RepairUnitType, ScreedTeam, View } from "@/lib/types";
+import type { AdditionalItem, AdminRates, DetailTab, LabourMode, Line, PLCategory, PriceType, ProjectInput, ProjectRecord, ProjectServiceKey, ProjectStatus, RepairCatalog, RepairLabourMode, RepairLineItem, RepairMaterial, RepairMaterialCategory, RepairSubcontractor, RepairType, RepairUnitType, ScreedTeam, View } from "@/lib/types";
 
-const detailTabs: DetailTab[] = ["Overview", "Grinding", "Screeding", "Repairs", "Proposal", "Budget", "P&L", "Time", "Assumptions", "Revisions", "Notes", "Change Log", "Exports", "Audit"];
-type BuilderStep = "Services" | "Project" | "Grinding" | "Screeding" | "Repairs" | "Extras" | "Travel" | "Review";
+const detailTabs: DetailTab[] = ["Summary", "Costing", "Commercial Review", "Client Proposal", "Actual P&L", "Activity"];
+type BuilderStep = "Services" | "Project" | "Phase Schedule" | "Grinding" | "Screeding" | "Repairs" | "Project Management" | "Extras" | "Travel" | "Review";
 type RepairPage = "Details" | "Labour" | "Review";
 type GrindingPage = "Programme" | "Labour" | "Tools & Review";
 type ScreedPage = "Programme" | "Labour" | "Materials" | "Tools & Review";
@@ -191,44 +192,91 @@ function screedReadiness(input: ProjectInput): RepairReadiness {
   return { blockers, warnings };
 }
 
+function projectReadiness(input: ProjectInput, budgetMarkupExact: number, duplicateReference = false, hasCommercialValue = false): RepairReadiness {
+  const blockers: string[] = [];
+  const warnings: string[] = [];
+  if (!input.includeGrinding && !input.includeScreeding && !input.includeRepairs) blockers.push("Select at least one service.");
+  if (!input.projectReference.trim()) blockers.push("Add a project reference.");
+  if (!input.client.trim()) blockers.push("Add the client name.");
+  if (!input.location.trim()) blockers.push("Add the project location.");
+  if (input.exchangeRateToCompanyCurrency <= 0 || input.exchangeRateToGroupCurrency <= 0) blockers.push("Exchange rates must be greater than zero.");
+  if (hasCommercialValue && budgetMarkupExact < 25 && !input.markupOverrideReason.trim()) blockers.push(`Markup is ${percent(budgetMarkupExact)}. Enter a manager approval reason for quotes below 25%.`);
+  if (duplicateReference && input.projectReference.trim()) warnings.push("This project reference already exists. Confirm this is intentional before saving.");
+  if (input.projectManagement.enabled && input.projectManagement.days <= 0) warnings.push("Project management is enabled but no management days are entered.");
+  const grindingServiceTravel = input.includeGrinding && (((["in_house", "both"] as LabourMode[]).includes(input.grinding.productionLabourMode) && (input.grinding.productionTravelDays > 0 || input.grinding.productionOneWayKm > 0)) || ((["in_house", "both"] as LabourMode[]).includes(input.grinding.surveyorLabourMode) && (input.grinding.surveyorTravelDays > 0 || input.grinding.surveyorOneWayKm > 0)));
+  const screedServiceTravel = input.includeScreeding && (((["in_house", "both"] as LabourMode[]).includes(input.screeding.productionLabourMode) && (input.screeding.productionTravelDays > 0 || input.screeding.productionOneWayKm > 0)) || ((["in_house", "both"] as LabourMode[]).includes(input.screeding.surveyorLabourMode) && (input.screeding.surveyorTravelDays > 0 || input.screeding.surveyorOneWayKm > 0)));
+  const repairServiceTravel = input.includeRepairs && (["in_house", "both"] as RepairLabourMode[]).includes(input.repairs.labourMode) && (input.repairs.travelDays > 0 || input.repairs.mobilisationOneWayKm > 0);
+  if (input.travelMode !== "None" && (grindingServiceTravel || screedServiceTravel || repairServiceTravel)) warnings.push("Project-wide travel and service-specific in-house travel are both populated. Check that travel is not duplicated.");
+  return { blockers, warnings };
+}
+
 export default function Workspace() {
   const auth = useAuth();
   const pathname = usePathname();
   const routeView = pathname.includes("new-project") || pathname.includes("grinding") || pathname.includes("screeding") || pathname.includes("repairs") ? "New Project" : pathname.includes("project-search") ? "Project Search" : pathname.includes("admin-rates") ? "Admin Rates" : pathname.includes("company-admin") ? "Company Admin" : "Dashboard";
-  const routeTab: DetailTab = pathname.includes("grinding") ? "Grinding" : pathname.includes("screeding") ? "Screeding" : pathname.includes("repairs") ? "Repairs" : pathname.includes("proposal") ? "Proposal" : pathname.includes("budget") ? "Budget" : pathname.includes("pl") ? "P&L" : "Overview";
+  const routeTab: DetailTab = pathname.includes("grinding") ? "Grinding" : pathname.includes("screeding") ? "Screeding" : pathname.includes("repairs") ? "Repairs" : pathname.includes("proposal") ? "Client Proposal" : pathname.includes("budget") ? "Costing" : pathname.includes("pl") ? "Actual P&L" : "Summary";
   const routeAdminTab: "Rates" | "Repair Types" | "Repair Materials" = pathname.includes("repair-types") ? "Repair Types" : pathname.includes("repair-materials") ? "Repair Materials" : "Rates";
   const [view, setView] = useState<View>(routeView);
   const [detailTab, setDetailTab] = useState<DetailTab>(routeTab);
   const [input, setInput] = useState<ProjectInput>(() => cloneInput(emptyInput));
+  const [baselineInput, setBaselineInput] = useState<ProjectInput>(() => cloneInput(emptyInput));
   const [rates, setRatesState] = useState<AdminRates>(defaultRates);
   const [repairCatalog, setRepairCatalog] = useState<RepairCatalog>(defaultRepairCatalog);
+  const [pricingRates, setPricingRates] = useState<AdminRates>(defaultRates);
+  const [pricingCatalog, setPricingCatalog] = useState<RepairCatalog>(defaultRepairCatalog);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [editingId, setEditingId] = useState("");
   const [note, setNote] = useState("");
+  const [workspaceError, setWorkspaceError] = useState("");
+  const [workspaceLoading, setWorkspaceLoading] = useState(false);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [actuals, setActuals] = useState(defaultActuals(calculateProject(emptyInput, defaultRates, defaultRepairCatalog)));
-  const calculations = useMemo(() => calculateProject(input, rates, repairCatalog), [input, rates, repairCatalog]);
+  const calculations = useMemo(() => calculateProject(input, pricingRates, pricingCatalog), [input, pricingRates, pricingCatalog]);
   const selected = projects.find((project) => project.id === selectedId);
   const selectedCalcs = selected?.calculations ?? calculations;
   const pl = calculatePL(selectedCalcs, selected?.actuals ?? actuals);
   const routeModule = routeModuleKey(pathname);
   const moduleBlocked = routeModule && (routeModule === "company_admin" ? auth.role !== "super_admin" : !auth.enabledModules.includes(routeModule));
+  const displayCurrency = view === "New Project" ? input.quoteCurrency : view === "Project Detail" && selected ? selected.inputs.quoteCurrency : auth.activeCompany.defaultCurrency;
+  const hasUnsavedChanges = view === "New Project" && JSON.stringify(input) !== JSON.stringify(baselineInput);
+  setMoneyCurrency(displayCurrency);
+
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {
+      if (!hasUnsavedChanges) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [hasUnsavedChanges]);
 
   useEffect(() => {
     setView(routeView);
     setDetailTab(routeTab);
-  }, [pathname]);
+  }, [pathname, routeTab, routeView]);
 
   useEffect(() => {
+    if (auth.configured && (!auth.session || !auth.companies.length)) return;
     setStorageContext({
       companyId: auth.activeCompany.id,
       actorName: auth.session?.user.email ?? "James Dare",
       userId: auth.session?.user.id
     });
+    setWorkspaceLoading(true);
+    setWorkspaceError("");
     void Promise.all([loadRates(), loadProjects(), loadRepairCatalog()]).then(([loadedRates, loadedProjects, loadedRepairCatalog]) => {
       setRatesState(loadedRates);
       setRepairCatalog(loadedRepairCatalog);
+      setPricingRates(loadedRates);
+      setPricingCatalog(loadedRepairCatalog);
       setProjects(loadedProjects);
+      const companyBlank = cloneInput(emptyInput);
+      companyBlank.quoteCurrency = auth.activeCompany.defaultCurrency;
+      setInput(companyBlank);
+      setBaselineInput(cloneInput(companyBlank));
+      setEditingId("");
       if (loadedProjects[0]) {
         setSelectedId(loadedProjects[0].id);
         setActuals(loadedProjects[0].actuals ?? defaultActuals(loadedProjects[0].calculations));
@@ -236,12 +284,12 @@ export default function Workspace() {
         setSelectedId("");
         setActuals(defaultActuals(calculateProject(emptyInput, loadedRates, loadedRepairCatalog)));
       }
-    });
-  }, [auth.activeCompany.id, auth.session?.user.email, auth.session?.user.id]);
+    }).catch((error: unknown) => setWorkspaceError(error instanceof Error ? error.message : "Could not load the company workspace.")).finally(() => setWorkspaceLoading(false));
+  }, [auth.activeCompany.defaultCurrency, auth.activeCompany.id, auth.companies.length, auth.configured, auth.session, auth.session?.user.email, auth.session?.user.id]);
 
   useEffect(() => {
     if (selected) setActuals(selected.actuals ?? defaultActuals(selected.calculations));
-  }, [selectedId]);
+  }, [selected, selectedId]);
 
   async function refresh() {
     setProjects(await loadProjects());
@@ -249,33 +297,55 @@ export default function Workspace() {
 
   function startNewProject() {
     const blank = cloneInput(emptyInput);
+    blank.quoteCurrency = auth.activeCompany.defaultCurrency;
+    blank.exchangeRateToCompanyCurrency = 1;
+    blank.exchangeRateToGroupCurrency = auth.activeCompany.defaultCurrency === auth.activeCompany.reportingCurrency ? 1 : blank.exchangeRateToGroupCurrency;
     setInput(blank);
+    setBaselineInput(cloneInput(blank));
+    setPricingRates(rates);
+    setPricingCatalog(repairCatalog);
     setSelectedId("");
     setEditingId("");
     setActuals(defaultActuals(calculateProject(blank, rates, repairCatalog)));
     setView("New Project");
-    setDetailTab("Overview");
+    setDetailTab("Summary");
   }
 
   async function saveCurrentProject(status: ProjectStatus = "Quoted") {
-    const readiness = repairReadiness(input, repairCatalog);
+    const readiness = repairReadiness(input, pricingCatalog);
     const grindingChecks = grindingReadiness(input);
     const screedChecks = screedReadiness(input);
-    const blockers = [...grindingChecks.blockers, ...screedChecks.blockers, ...readiness.blockers];
+    const duplicateReference = projects.some((project) => project.id !== editingId && project.inputs.projectReference.trim().toLowerCase() === input.projectReference.trim().toLowerCase());
+    const exactMarkup = calculations.budgetCost ? calculations.budgetProfit / calculations.budgetCost * 100 : 0;
+    const projectChecks = projectReadiness(input, exactMarkup, duplicateReference, calculations.proposalTotal > 0 || calculations.budgetCost > 0);
+    const blockers = [...projectChecks.blockers, ...grindingChecks.blockers, ...screedChecks.blockers, ...readiness.blockers];
     if (status === "Quoted" && blockers.length) {
       alert(`Save as Draft until these checks are fixed:\n\n${blockers.slice(0, 10).join("\n")}`);
       return;
     }
-    const saved = await saveProject(input, rates, editingId || undefined, auth.session?.user.email ?? "James Dare", repairCatalog, status);
-    setSelectedId(saved.id);
-    setEditingId("");
-    await refresh();
-    setView("Project Detail");
-    setDetailTab("Overview");
+    if (status === "Quoted" && duplicateReference && !confirm("This project reference already exists. Save this quote anyway?")) return;
+    try {
+      setSaveState("saving");
+      setWorkspaceError("");
+      const saved = await saveProject(input, pricingRates, editingId || undefined, auth.session?.user.email ?? "James Dare", pricingCatalog, status);
+      setBaselineInput(cloneInput(saved.inputs));
+      setSelectedId(saved.id);
+      setEditingId("");
+      await refresh();
+      setView("Project Detail");
+      setDetailTab("Summary");
+      setSaveState("saved");
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : "The project could not be saved.");
+      setSaveState("idle");
+    }
   }
 
   function editProject(project: ProjectRecord) {
-    setInput(project.inputs);
+    setInput(cloneInput(project.inputs));
+    setBaselineInput(cloneInput(project.inputs));
+    setPricingRates(project.rateSnapshot ?? rates);
+    setPricingCatalog(project.repairCatalogSnapshot ?? repairCatalog);
     setEditingId(project.id);
     setSelectedId(project.id);
     setView("New Project");
@@ -284,16 +354,21 @@ export default function Workspace() {
   const selectedContext = selected ? `${selected.inputs.projectReference || "Draft"} - ${selected.inputs.client || "No client"} - ${selected.calculations.serviceSummary}` : "No project selected";
   const shellServices = view === "Project Detail" && selected ? serviceFlags(selected.inputs) : serviceFlags(input);
 
+  if (auth.configured && auth.session && !auth.companies.length) return <div className="min-h-screen bg-slate-100 p-8"><div className="mx-auto max-w-xl rounded-2xl border border-amber-200 bg-white p-6 shadow-sm"><h1 className="text-2xl font-bold">No company access</h1><p className="mt-2 text-sm text-slate-600">Your account is signed in but has no active company membership. Ask a super admin to restore the company membership.</p></div></div>;
+
   return (
     <ProductShell view={view} pathname={pathname} selectedContext={selectedContext} activeServices={shellServices} onNewProject={startNewProject}>
       <section className="workspace-page">
+        {workspaceError && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{workspaceError}</div>}
+        {workspaceLoading && <div className="mb-5 rounded-xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-600">Loading company workspace...</div>}
+        {saveState === "saved" && <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-800">Project saved to the company workspace.</div>}
         {moduleBlocked && <ModuleBlocked moduleKey={routeModule} />}
         {!moduleBlocked && <>
         <WorkspaceBanner view={view} selected={selected} projects={projects} />
-        {view === "Dashboard" && <Dashboard projects={projects} open={(project) => { setSelectedId(project.id); setView("Project Detail"); }} />}
-        {view === "New Project" && <ProjectBuilder input={input} setInput={setInput} rates={rates} repairCatalog={repairCatalog} calculations={calculations} onSave={saveCurrentProject} detailTab={detailTab} setDetailTab={setDetailTab} />}
-        {view === "Project Search" && <SearchView projects={projects} open={(project) => { setSelectedId(project.id); setView("Project Detail"); setDetailTab("Overview"); }} edit={editProject} />}
-        {view === "Admin Rates" && <AdminRatesView rates={rates} setRates={setRatesState} repairCatalog={repairCatalog} setRepairCatalog={setRepairCatalog} initialAdminTab={routeAdminTab} save={async () => { await saveRates(rates); await saveRepairCatalog(repairCatalog); alert("Rates and repair database saved."); }} />}
+        {view === "Dashboard" && <Dashboard projects={projects} companyCurrency={auth.activeCompany.defaultCurrency} open={(project) => { setSelectedId(project.id); setView("Project Detail"); }} />}
+        {view === "New Project" && <ProjectBuilder input={input} setInput={setInput} rates={pricingRates} repairCatalog={pricingCatalog} calculations={calculations} onSave={saveCurrentProject} detailTab={detailTab} setDetailTab={setDetailTab} duplicateReference={projects.some((project) => project.id !== editingId && project.inputs.projectReference.trim().toLowerCase() === input.projectReference.trim().toLowerCase())} usingSnapshot={Boolean(editingId && selected?.rateSnapshot)} saving={saveState === "saving"} dirty={hasUnsavedChanges} reprice={() => { setPricingRates(rates); setPricingCatalog(repairCatalog); setInput({ ...input, exchangeRateLockedAt: new Date().toISOString() }); }} />}
+        {view === "Project Search" && <SearchView projects={projects} open={(project) => { setSelectedId(project.id); setView("Project Detail"); setDetailTab("Summary"); }} edit={editProject} />}
+        {view === "Admin Rates" && <AdminRatesView rates={rates} setRates={setRatesState} repairCatalog={repairCatalog} setRepairCatalog={setRepairCatalog} initialAdminTab={routeAdminTab} save={async () => { try { await saveRates(rates); await saveRepairCatalog(repairCatalog); alert("Rates and repair database saved. New quotes will use these values; saved quotes keep their snapshot."); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "Admin data could not be saved."); } }} />}
         {view === "Company Admin" && <CompanyAdminView />}
         {view === "Project Detail" && selected && (
           <ProjectDetail
@@ -302,11 +377,12 @@ export default function Workspace() {
             setTab={setDetailTab}
             actuals={actuals}
             setActuals={setActuals}
-            saveActuals={async () => { const saved = await saveActuals(selected.id, actuals, auth.session?.user.email ?? "James Dare"); setActuals(saved); await refresh(); }}
-            addNote={async () => { if (note.trim()) { await addProjectNote(selected.id, { author: auth.session?.user.email ?? "James Dare", category: "General", text: note.trim() }); setNote(""); await refresh(); } }}
+            saveActuals={async () => { try { const saved = await saveActuals(selected.id, actuals, auth.session?.user.email ?? "James Dare"); setActuals(saved); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "P&L actuals could not be saved."); } }}
+            addNote={async () => { if (note.trim()) { try { await addProjectNote(selected.id, { author: auth.session?.user.email ?? "James Dare", category: "General", text: note.trim() }); setNote(""); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "The note could not be saved."); } } }}
             note={note}
             setNote={setNote}
             edit={() => editProject(selected)}
+            updateStatus={async (status) => { try { await updateProjectWorkflow(selected.id, status, undefined, auth.session?.user.email ?? "James Dare"); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "Project status could not be updated."); } }}
           />
         )}
         </>}
@@ -335,7 +411,8 @@ function ModuleBlocked({ moduleKey }: { moduleKey: AppModuleKey }) {
 }
 
 function WorkspaceBanner({ view, selected, projects }: { view: View; selected?: ProjectRecord; projects: ProjectRecord[] }) {
-  const quoted = projects.reduce((sum, project) => sum + project.calculations.proposalTotal, 0);
+  const auth = useAuth();
+  const quoted = projects.reduce((sum, project) => sum + (project.calculations.proposalCompanyCurrency ?? project.calculations.proposalTotal), 0);
   return (
     <div className="mb-6 rounded-2xl bg-slate-950 p-5 text-white shadow-xl">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -346,7 +423,7 @@ function WorkspaceBanner({ view, selected, projects }: { view: View; selected?: 
         </div>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <Mini label="Projects" value={String(projects.length)} />
-          <Mini label="Quoted" value={money(quoted)} />
+          <Mini label={`Quoted ${auth.activeCompany.defaultCurrency}`} value={money(quoted, auth.activeCompany.defaultCurrency)} />
           <Mini label="Won" value={String(projects.filter((p) => p.status === "Won").length)} />
           <Mini label="Awaiting" value={String(projects.filter((p) => p.accountsStatus === "Awaiting Accounts").length)} />
         </div>
@@ -411,6 +488,8 @@ function CompanyAdminView() {
     setPrimaryColour(auth.activeCompany.branding.primaryColour);
     setAccentColour(auth.activeCompany.branding.accentColour);
     void loadAdminData();
+  // Company admin loading is intentionally keyed to company switching only.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.activeCompany.id]);
 
   async function saveCompanyBasics() {
@@ -591,16 +670,18 @@ function CompanyAdminView() {
 }
 
 function Mini({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-xl bg-white/10 px-4 py-3 ring-1 ring-white/15"><div className="text-[11px] font-bold uppercase text-slate-300">{label}</div><div className="mt-1 text-lg font-bold">{value}</div></div>;
+  return <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-slate-950"><div className="text-[11px] font-bold uppercase text-slate-500">{label}</div><div className="mt-1 break-words text-lg font-bold">{value}</div></div>;
 }
 
-function Dashboard({ projects, open }: { projects: ProjectRecord[]; open: (project: ProjectRecord) => void }) {
+function Dashboard({ projects, companyCurrency, open }: { projects: ProjectRecord[]; companyCurrency: CurrencyCode; open: (project: ProjectRecord) => void }) {
+  const pipeline = projects.reduce((sum, project) => sum + (project.calculations.proposalCompanyCurrency ?? project.calculations.proposalTotal), 0);
+  const budget = projects.reduce((sum, project) => sum + (project.calculations.budgetCompanyCurrency ?? project.calculations.budgetCost), 0);
   return (
     <div className="grid gap-5">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric label="Pipeline" value={money(projects.reduce((sum, p) => sum + p.calculations.proposalTotal, 0))} />
-        <Metric label="Budget Cost" value={money(projects.reduce((sum, p) => sum + p.calculations.budgetCost, 0))} />
-        <Metric label="Average Margin" value={percent(projects.length ? projects.reduce((sum, p) => sum + p.calculations.budgetMargin, 0) / projects.length : 0)} />
+        <Metric label={`Pipeline (${companyCurrency})`} value={money(pipeline, companyCurrency)} />
+        <Metric label={`Budget Cost (${companyCurrency})`} value={money(budget, companyCurrency)} />
+        <Metric label="Average Markup" value={percent(projects.length ? projects.reduce((sum, p) => sum + (p.calculations.budgetMarkup ?? 0), 0) / projects.length : 0)} />
         <Metric label="Projects" value={String(projects.length)} />
       </div>
       <div className="app-card-strong">
@@ -615,15 +696,17 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="app-card min-w-0 border-t-4 border-t-sky-500 p-4"><div className="text-[11px] font-bold uppercase text-slate-500">{label}</div><div className="mt-2 break-words text-xl font-bold text-slate-950 sm:text-2xl">{value}</div></div>;
 }
 
-function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, onSave, detailTab, setDetailTab }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates; repairCatalog: RepairCatalog; calculations: ReturnType<typeof calculateProject>; onSave: (status?: ProjectStatus) => void; detailTab: DetailTab; setDetailTab: (tab: DetailTab) => void }) {
+function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, onSave, detailTab, setDetailTab, duplicateReference, usingSnapshot, saving, dirty, reprice }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates; repairCatalog: RepairCatalog; calculations: ReturnType<typeof calculateProject>; onSave: (status?: ProjectStatus) => void; detailTab: DetailTab; setDetailTab: (tab: DetailTab) => void; duplicateReference: boolean; usingSnapshot: boolean; saving: boolean; dirty: boolean; reprice: () => void }) {
   const initialStep = detailTab === "Grinding" || detailTab === "Screeding" || detailTab === "Repairs" ? detailTab : "Services";
   const [builderStep, setBuilderStep] = useState<BuilderStep>(initialStep);
   const allSteps = [
     { key: "Services", label: "Services", enabled: true },
     { key: "Project", label: "Project", enabled: true },
+    { key: "Phase Schedule", label: "Phase Schedule", enabled: input.includeGrinding || input.includeScreeding || input.includeRepairs },
     { key: "Grinding", label: "Grinding", enabled: input.includeGrinding },
     { key: "Screeding", label: "Screeding", enabled: input.includeScreeding },
     { key: "Repairs", label: "Repairs", enabled: input.includeRepairs },
+    { key: "Project Management", label: "Project Management", enabled: true },
     { key: "Extras", label: "Extras", enabled: true },
     { key: "Travel", label: "Travel", enabled: true },
     { key: "Review", label: "Review", enabled: true }
@@ -633,7 +716,9 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
     const routedStep = detailTab === "Grinding" || detailTab === "Screeding" || detailTab === "Repairs" ? detailTab : builderStep;
     const nextStep = steps.some((step) => step.key === routedStep) ? routedStep : "Services";
     if (builderStep !== nextStep) setBuilderStep(nextStep);
-    if (!tabIsAllowed(detailTab, input)) setDetailTab("Overview");
+    if (!tabIsAllowed(detailTab, input)) setDetailTab("Summary");
+  // The primitive service flags are the intentional routing dependencies.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detailTab, input.includeGrinding, input.includeScreeding, input.includeRepairs, input.grinding.enabled, input.screeding.enabled, input.repairs.enabled]);
   const activeIndex = Math.max(0, steps.findIndex((step) => step.key === builderStep));
   const setStep = (step: typeof builderStep) => {
@@ -646,7 +731,9 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
   const readiness = repairReadiness(input, repairCatalog);
   const grindingChecks = grindingReadiness(input);
   const screedChecks = screedReadiness(input);
-  const quoteBlockers = [...grindingChecks.blockers, ...screedChecks.blockers, ...readiness.blockers];
+  const exactMarkup = calculations.budgetCost ? calculations.budgetProfit / calculations.budgetCost * 100 : 0;
+  const projectChecks = projectReadiness(input, exactMarkup, duplicateReference, calculations.proposalTotal > 0 || calculations.budgetCost > 0);
+  const quoteBlockers = [...projectChecks.blockers, ...grindingChecks.blockers, ...screedChecks.blockers, ...readiness.blockers];
   const canQuote = quoteBlockers.length === 0;
 
   return (
@@ -666,6 +753,8 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
       </div>
 
       <section className="grid min-w-0 gap-5">
+      {usingSnapshot && <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950"><div><b>Saved pricing snapshot in use.</b> Admin rate changes do not alter this quote unless you explicitly reprice it.</div><button className="secondary-button" onClick={reprice}>Reprice with current admin rates</button></div>}
+      {projectChecks.warnings.length > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"><div className="font-bold uppercase">Project checks</div>{projectChecks.warnings.map((warning) => <div className="mt-1" key={warning}>{warning}</div>)}</div>}
       {input.includeRepairs && (readiness.blockers.length > 0 || readiness.warnings.length > 0) && (
         <div className={`rounded-xl border p-4 text-sm ${readiness.blockers.length ? "border-amber-200 bg-amber-50 text-amber-950" : "border-sky-200 bg-sky-50 text-sky-950"}`}>
           <div className="font-bold uppercase">{readiness.blockers.length ? "Repair quote is draft only" : "Repair quote needs review"}</div>
@@ -681,18 +770,20 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
       )}
       <div className="app-card-strong">
         <div className="panel-heading flex flex-wrap items-center justify-between gap-3">
-          <div><h2 className="text-xl font-semibold">New Project</h2><p className="text-sm text-slate-500">Pick services first, then complete only the sections needed for this quote.</p></div>
+          <div><div className="flex flex-wrap items-center gap-2"><h2 className="text-xl font-semibold">New Project</h2>{dirty && <span className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-bold uppercase text-amber-800">Unsaved changes</span>}</div><p className="text-sm text-slate-500">Pick services first, then complete only the sections needed for this quote.</p></div>
           <div className="flex flex-wrap gap-2">
-            <button className="secondary-button" onClick={() => onSave("Draft")}><Save size={16} /> Save Draft</button>
-            <button className="primary-button" onClick={() => onSave("Quoted")} disabled={!canQuote}><Save size={16} /> Save Quote</button>
+            <button className="secondary-button" onClick={() => onSave("Draft")} disabled={saving}><Save size={16} /> {saving ? "Saving..." : "Save Draft"}</button>
+            <button className="primary-button" onClick={() => onSave("Quoted")} disabled={!canQuote || saving}><Save size={16} /> {saving ? "Saving..." : "Save Quote"}</button>
           </div>
         </div>
         <div className="p-5">
           {builderStep === "Services" && <ServiceStep input={input} setInput={setInput} setStep={setStep} />}
-          {builderStep === "Project" && <ProjectBasics input={input} setInput={setInput} />}
+          {builderStep === "Project" && <ProjectBasics input={input} setInput={setInput} duplicateReference={duplicateReference} />}
+          {builderStep === "Phase Schedule" && <PhaseScheduleStep input={input} setInput={setInput} repairCatalog={repairCatalog} />}
           {builderStep === "Grinding" && <GrindingForm input={input} setInput={setInput} rates={rates} />}
           {builderStep === "Screeding" && <ScreedForm input={input} setInput={setInput} rates={rates} />}
-          {builderStep === "Repairs" && <RepairsForm input={input} setInput={setInput} repairCatalog={repairCatalog} rates={rates} />}
+          {builderStep === "Repairs" && <RepairsForm input={input} setInput={setInput} repairCatalog={repairCatalog} rates={rates} projectMaterialCalcs={calculations.repairMaterialCalcs} />}
+          {builderStep === "Project Management" && <ProjectManagementStep input={input} setInput={setInput} rates={rates} />}
           {builderStep === "Extras" && <ExtrasStep input={input} setInput={setInput} />}
           {builderStep === "Travel" && <TravelStep input={input} setInput={setInput} />}
           {builderStep === "Review" && detailTab !== "Audit" && <ReviewStep calculations={calculations} input={input} setInput={setInput} />}
@@ -702,8 +793,8 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
       <div className="flex flex-wrap justify-between gap-3">
         <button className="secondary-button" onClick={previousStep} disabled={activeIndex === 0}>Back</button>
         <div className="flex flex-wrap gap-2">
-          {activeIndex === steps.length - 1 && <button className="secondary-button" onClick={() => onSave("Draft")}>Save Draft</button>}
-          <button className="primary-button" onClick={activeIndex === steps.length - 1 ? () => onSave("Quoted") : nextStep} disabled={activeIndex === steps.length - 1 && !canQuote}>{activeIndex === steps.length - 1 ? "Save Quote" : "Next"}</button>
+          {activeIndex === steps.length - 1 && <button className="secondary-button" onClick={() => onSave("Draft")} disabled={saving}>Save Draft</button>}
+          <button className="primary-button" onClick={activeIndex === steps.length - 1 ? () => onSave("Quoted") : nextStep} disabled={saving || (activeIndex === steps.length - 1 && !canQuote)}>{activeIndex === steps.length - 1 ? saving ? "Saving..." : "Save Quote" : "Next"}</button>
         </div>
       </div>
       <QuoteSummary calculations={calculations} />
@@ -745,13 +836,15 @@ function ServiceStep({ input, setInput, setStep }: { input: ProjectInput; setInp
         {service("includeRepairs", "Repairs", "Joint repair resources, repair material calculator, subcontractors and haulage.", "Repairs")}
       </div>
       <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-        Recommended flow: choose services, add project details, fill each selected service, add project-wide extras, add travel, then review proposal/budget before saving.
+        Recommended flow: choose services, add project details, confirm the phase schedule, complete each service, add shared project management, extras and travel, then complete the commercial review.
       </div>
     </div>
   );
 }
 
-function ProjectBasics({ input, setInput }: { input: ProjectInput; setInput: (input: ProjectInput) => void }) {
+function ProjectBasics({ input, setInput, duplicateReference }: { input: ProjectInput; setInput: (input: ProjectInput) => void; duplicateReference: boolean }) {
+  const auth = useAuth();
+  const currencies = auth.activeCompany.allowedCurrencies.length ? auth.activeCompany.allowedCurrencies : [auth.activeCompany.defaultCurrency];
   return (
     <div>
       <div className="mb-5">
@@ -759,16 +852,78 @@ function ProjectBasics({ input, setInput }: { input: ProjectInput; setInput: (in
         <p className="mt-1 text-sm text-slate-600">Keep this short. The service pages carry the heavy detail.</p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        <Text label="Reference" value={input.projectReference} onChange={(v) => setInput({ ...input, projectReference: v })} />
+        <div><Text label="Project Reference" value={input.projectReference} onChange={(v) => setInput({ ...input, projectReference: v })} />{duplicateReference && <div className="mt-1 text-xs font-bold text-amber-700">Reference already exists. Confirm it is intentional.</div>}</div>
         <Text label="Client" value={input.client} onChange={(v) => setInput({ ...input, client: v })} />
         <Text label="Location" value={input.location} onChange={(v) => setInput({ ...input, location: v })} />
         <Text label="Project Type" value={input.projectType} onChange={(v) => setInput({ ...input, projectType: v })} />
         <Text label="Revision" value={input.revision} onChange={(v) => setInput({ ...input, revision: v })} />
         <Text label="Costed By" value={input.costedBy} onChange={(v) => setInput({ ...input, costedBy: v })} />
-        <Select label="Quote Currency" value={input.quoteCurrency} options={["EUR", "GBP", "PLN", "USD"]} onChange={(v) => setInput({ ...input, quoteCurrency: v as ProjectInput["quoteCurrency"], exchangeRateLockedAt: new Date().toISOString() })} />
-        <NumberInput label="Rate To Company Currency" value={input.exchangeRateToCompanyCurrency} onChange={(v) => setInput({ ...input, exchangeRateToCompanyCurrency: v, exchangeRateLockedAt: new Date().toISOString() })} />
-        <NumberInput label="Rate To Group Currency" value={input.exchangeRateToGroupCurrency} onChange={(v) => setInput({ ...input, exchangeRateToGroupCurrency: v, exchangeRateLockedAt: new Date().toISOString() })} />
+        <Select label="Quote Currency" value={input.quoteCurrency} options={currencies} onChange={(v) => setInput({ ...input, quoteCurrency: v as ProjectInput["quoteCurrency"], exchangeRateToCompanyCurrency: v === auth.activeCompany.defaultCurrency ? 1 : input.exchangeRateToCompanyCurrency, exchangeRateToGroupCurrency: v === auth.activeCompany.reportingCurrency ? 1 : input.exchangeRateToGroupCurrency, exchangeRateLockedAt: new Date().toISOString() })} />
+        <NumberInput label={`1 ${input.quoteCurrency} = Company ${auth.activeCompany.defaultCurrency}`} value={input.exchangeRateToCompanyCurrency} onChange={(v) => setInput({ ...input, exchangeRateToCompanyCurrency: v, exchangeRateLockedAt: new Date().toISOString() })} />
+        <NumberInput label={`1 ${input.quoteCurrency} = Group ${auth.activeCompany.reportingCurrency}`} value={input.exchangeRateToGroupCurrency} onChange={(v) => setInput({ ...input, exchangeRateToGroupCurrency: v, exchangeRateLockedAt: new Date().toISOString() })} />
       </div>
+      {input.exchangeRateLockedAt && <div className="mt-4 text-xs text-slate-500">Exchange rate locked for this costing: {formatDateTime(input.exchangeRateLockedAt)}</div>}
+    </div>
+  );
+}
+
+function PhaseScheduleStep({ input, setInput, repairCatalog }: { input: ProjectInput; setInput: (input: ProjectInput) => void; repairCatalog: RepairCatalog }) {
+  const schedule = calculatePhaseSchedule(input, repairCatalog);
+  const order = schedule.rows.map((row) => row.service);
+  const move = (service: ProjectServiceKey, direction: -1 | 1) => {
+    const index = order.indexOf(service);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= order.length) return;
+    const nextOrder = [...order];
+    [nextOrder[index], nextOrder[target]] = [nextOrder[target], nextOrder[index]];
+    setInput({ ...input, phaseSchedule: { ...input.phaseSchedule, order: [...nextOrder, ...input.phaseSchedule.order.filter((item) => !nextOrder.includes(item))] } });
+  };
+  return (
+    <div className="grid gap-5">
+      <div><h3 className="text-2xl font-bold text-slate-950">Phase schedule</h3><p className="mt-1 text-sm text-slate-600">Set the order of works and show which phases run together. This controls the whole-project site duration.</p></div>
+      <div className="grid gap-3">
+        {schedule.rows.map((row, index) => (
+          <div key={row.service} className="grid items-end gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 lg:grid-cols-[minmax(150px,1fr)_120px_170px_170px_160px]">
+            <div><div className="text-xs font-bold uppercase text-slate-500">Phase {index + 1}</div><div className="mt-1 text-lg font-bold text-slate-950">{row.service}</div><div className="mt-2 flex gap-2"><button className="secondary-button min-h-9 px-3" onClick={() => move(row.service, -1)} disabled={index === 0}>Up</button><button className="secondary-button min-h-9 px-3" onClick={() => move(row.service, 1)} disabled={index === schedule.rows.length - 1}>Down</button></div></div>
+            <Mini label="Calculated" value={`${row.calculatedDays} days`} />
+            <div className={row.inputDays !== row.calculatedDays ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Inputted Phase Days" value={row.inputDays} onChange={(value) => setInput({ ...input, phaseSchedule: { ...input.phaseSchedule, dayOverrides: { ...input.phaseSchedule.dayOverrides, [row.service]: value } } })} /></div>
+            {index > 0 ? <Toggle label="Starts With Previous" checked={row.concurrent} onChange={(value) => setInput({ ...input, phaseSchedule: { ...input.phaseSchedule, startsWithPrevious: { ...input.phaseSchedule.startsWithPrevious, [row.service]: value } } })} /> : <Mini label="Start" value="Project day 1" />}
+            <Mini label="Programme" value={`Day ${row.startDay} to ${row.endDay}`} />
+          </div>
+        ))}
+      </div>
+      <div className="grid gap-4 rounded-xl border border-sky-200 bg-sky-50 p-4 sm:grid-cols-3">
+        <Mini label="Calculated Project Days" value={`${schedule.calculatedProjectDays}`} />
+        <div className={schedule.projectDays !== schedule.calculatedProjectDays ? "rounded-lg border border-amber-300 bg-amber-50 p-2" : ""}><NumberInput label="Inputted Project Days" value={schedule.projectDays} onChange={(value) => setInput({ ...input, phaseSchedule: { ...input.phaseSchedule, projectDaysOverride: value } })} /></div>
+        <Mini label="Days Used in Costing" value={`${schedule.projectDays}`} />
+      </div>
+    </div>
+  );
+}
+
+function ProjectManagementStep({ input, setInput, rates }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates }) {
+  const pm = input.projectManagement;
+  const patch = (next: Partial<typeof pm>) => setInput({ ...input, projectManagement: { ...pm, ...next } });
+  const managerSell = pm.days * rates.projectManagerDayRate * (1 + adminRateMargin(rates, "projectManagerDayRate", rates.defaultMargin));
+  return (
+    <div className="grid gap-5">
+      <div><h3 className="text-2xl font-bold text-slate-950">Project management</h3><p className="mt-1 text-sm text-slate-600">Whole-project management is entered once here, even when several services are included.</p></div>
+      <Toggle label="Include Project Management" checked={pm.enabled} onChange={(enabled) => patch({ enabled })} />
+      {!pm.enabled ? <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">No project-management cost will be added.</div> : <div className="grid gap-5">
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <NumberInput label="Project Manager Days" value={pm.days} onChange={(days) => patch({ days })} />
+          <NumberInput label="Number of Visits" value={pm.visits} onChange={(visits) => patch({ visits })} />
+          <NumberInput label="Travel Days" value={pm.travelDays} onChange={(travelDays) => patch({ travelDays })} />
+          <Mini label="Management Sell" value={money(managerSell)} />
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <Select label="Travel Mode" value={pm.travelMode} options={["None", "Drive", "Fly"]} onChange={(travelMode) => patch({ travelMode: travelMode as ProjectInput["projectManagement"]["travelMode"] })} />
+          {pm.travelMode === "Drive" && <NumberInput label="One-Way Distance km" value={pm.oneWayKm} onChange={(oneWayKm) => patch({ oneWayKm })} />}
+          {pm.travelMode === "Drive" && <NumberInput label="Vehicles" value={pm.vehicles} onChange={(vehicles) => patch({ vehicles })} />}
+          {pm.travelMode === "Fly" && <NumberInput label="Return Flights" value={pm.returnFlights} onChange={(returnFlights) => patch({ returnFlights })} />}
+          <NumberInput label="Hotel Nights" value={pm.hotelNights} onChange={(hotelNights) => patch({ hotelNights })} />
+        </div>
+      </div>}
     </div>
   );
 }
@@ -784,12 +939,12 @@ function TravelStep({ input, setInput }: { input: ProjectInput; setInput: (input
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <Select label="Project-Wide Travel" value={input.travelMode} options={["None", "Drive", "Fly"]} onChange={(v) => setInput({ ...input, travelMode: v as ProjectInput["travelMode"] })} />
         {!hasTravel && <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm font-bold text-sky-950 sm:col-span-2">No project-wide FACE travel will be added. Service-specific in-house travel still prices inside each selected labour section.</div>}
+        {hasTravel && <NumberInput label="People Travelling" value={input.projectTravelPeople} onChange={(v) => setInput({ ...input, projectTravelPeople: v })} />}
         {hasTravel && input.travelMode === "Drive" && <NumberInput label="Distance One-Way km" value={input.distanceKmOneWay} onChange={(v) => setInput({ ...input, distanceKmOneWay: v })} />}
         {hasTravel && input.travelMode === "Drive" && <NumberInput label="Drive Time One-Way Days" value={input.driveTimeDaysOneWay} onChange={(v) => setInput({ ...input, driveTimeDaysOneWay: v })} />}
         {hasTravel && input.travelMode === "Drive" && <NumberInput label="Vehicles" value={input.vehicles} onChange={(v) => setInput({ ...input, vehicles: v })} />}
-        {hasTravel && <Select label="Airport Transport" value={input.airportTransport} options={["N/A", "Drive", "Uber"]} onChange={(v) => setInput({ ...input, airportTransport: v as ProjectInput["airportTransport"] })} />}
-        {hasTravel && <NumberInput label="Additional Flights" value={input.additionalFlights} onChange={(v) => setInput({ ...input, additionalFlights: v })} />}
-        <NumberInput label="Discount %" value={input.discountPercentage} onChange={(v) => setInput({ ...input, discountPercentage: v })} />
+        {input.travelMode === "Fly" && <Select label="Airport Transport" value={input.airportTransport} options={["N/A", "Drive", "Uber"]} onChange={(v) => setInput({ ...input, airportTransport: v as ProjectInput["airportTransport"] })} />}
+        {input.travelMode === "Fly" && <NumberInput label="Additional Flights" value={input.additionalFlights} onChange={(v) => setInput({ ...input, additionalFlights: v })} />}
       </div>
     </div>
   );
@@ -816,6 +971,9 @@ function ExtrasStep({ input, setInput }: { input: ProjectInput; setInput: (input
 }
 
 function ReviewStep({ calculations, input, setInput }: { calculations: ReturnType<typeof calculateProject>; input: ProjectInput; setInput: (input: ProjectInput) => void }) {
+  const auth = useAuth();
+  const canApproveLowMarkup = hasPermission(auth.role, "projects.review");
+  const overallExactMarkup = calculations.budgetCost ? calculations.budgetProfit / calculations.budgetCost * 100 : 0;
   const grouped = calculations.proposalLines.filter((line) => line.total).reduce<Record<string, number>>((acc, line) => {
     acc[line.section] = (acc[line.section] ?? 0) + line.total;
     return acc;
@@ -824,30 +982,31 @@ function ReviewStep({ calculations, input, setInput }: { calculations: ReturnTyp
     const proposal = calculations.proposalLines.filter((line) => linePLCategory(line) === category).reduce((sum, line) => sum + line.total, 0);
     const budget = calculations.budgetLines.filter((line) => linePLCategory(line) === category).reduce((sum, line) => sum + line.total, 0);
     const profit = proposal - budget;
-    const margin = proposal ? (profit / proposal) * 100 : 0;
-    return { category, proposal, budget, profit, margin };
+    const markup = budget ? (profit / budget) * 100 : 0;
+    const grossMargin = proposal ? (profit / proposal) * 100 : 0;
+    return { category, proposal, budget, profit, markup, grossMargin };
   }).filter((row) => row.proposal || row.budget);
-  const marginWarnings = [
-    calculations.proposalTotal && calculations.budgetMargin < 25 ? `Overall margin is ${percent(calculations.budgetMargin)}, below the 25% review threshold.` : "",
+  const markupWarnings = [
+    calculations.proposalTotal && overallExactMarkup < 25 ? `Overall markup is ${percent(overallExactMarkup)}, below the 25% approval threshold.` : "",
     ...categoryRows
-      .filter((row) => row.proposal > 0 && row.margin < 25)
-      .map((row) => `${row.category} margin is ${percent(row.margin)}, below 25%.`)
+      .filter((row) => row.budget > 0 && row.markup < 25)
+      .map((row) => `${row.category} markup is ${percent(row.markup)}, below 25%.`)
   ].filter(Boolean);
   return (
     <div className="grid gap-5">
       <div>
         <h3 className="text-2xl font-bold text-slate-950">Review quote</h3>
-        <p className="mt-1 text-sm text-slate-600">Check the service totals, margin and discount before saving.</p>
+        <p className="mt-1 text-sm text-slate-600">Check the service totals, markup, optional bonus and discount before saving.</p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Metric label="Proposal" value={money(calculations.proposalTotal)} />
         <Metric label="Budget" value={money(calculations.budgetCost)} />
-        <Metric label="Margin" value={percent(calculations.budgetMargin)} />
+        <Metric label="Markup" value={percent(calculations.budgetMarkup)} />
         <Metric label="Site Days" value={String(calculations.siteDays)} />
       </div>
-      <div className={`rounded-xl border p-4 text-sm ${marginWarnings.length ? "border-amber-200 bg-amber-50 text-amber-950" : "border-emerald-200 bg-emerald-50 text-emerald-950"}`}>
-        <div className="mb-2 font-bold uppercase">{marginWarnings.length ? "Margin checks to review" : "Margin checks passed"}</div>
-        {marginWarnings.length ? <div className="grid gap-1">{marginWarnings.map((warning) => <div key={warning}>{warning}</div>)}</div> : <div>All active proposal and P&L category margins are at or above 25%.</div>}
+      <div className={`rounded-xl border p-4 text-sm ${markupWarnings.length ? "border-amber-200 bg-amber-50 text-amber-950" : "border-emerald-200 bg-emerald-50 text-emerald-950"}`}>
+        <div className="mb-2 font-bold uppercase">{markupWarnings.length ? "Markup checks to review" : "Markup checks passed"}</div>
+        {markupWarnings.length ? <div className="grid gap-1">{markupWarnings.map((warning) => <div key={warning}>{warning}</div>)}</div> : <div>All active proposal and P&L categories are at or above 25% markup.</div>}
       </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="app-card p-4">
@@ -857,14 +1016,16 @@ function ReviewStep({ calculations, input, setInput }: { calculations: ReturnTyp
         <div className="app-card p-4">
           <h4 className="mb-3 font-bold">Final Adjustments</h4>
           <NumberInput label="Discount %" value={input.discountPercentage} onChange={(v) => setInput({ ...input, discountPercentage: v })} />
+          <div className="mt-4"><Toggle label={`Include 1% BDM Bonus (${money(calculations.bdmBonusBudget)} budget cost)`} checked={input.bdmBonusRequired} onChange={(bdmBonusRequired) => setInput({ ...input, bdmBonusRequired })} /></div>
           <div className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-600">Discount is applied across proposal lines. Budget cost is not discounted.</div>
         </div>
       </div>
+      {calculations.proposalTotal > 0 && overallExactMarkup < 25 && <div className="app-card p-4"><label className="form-label">Manager approval reason (required below 25% markup)</label><textarea className="input mt-2 min-h-24 w-full" disabled={!canApproveLowMarkup} value={input.markupOverrideReason} onChange={(event) => setInput({ ...input, markupOverrideReason: event.target.value })} placeholder={canApproveLowMarkup ? "Explain why this lower markup is commercially acceptable." : "A manager must enter the approval reason."} />{!canApproveLowMarkup && <div className="mt-2 text-sm font-bold text-amber-700">Your role cannot approve a quote below 25% markup.</div>}</div>}
       <div className="app-card p-4">
         <h4 className="mb-3 font-bold">Budget / Proposal by P&L Category</h4>
         <div className="table-shell border-0">
           <table>
-            <thead><tr><th>P&L Category</th><th>Budget</th><th>Proposal</th><th>Profit</th><th>Margin</th></tr></thead>
+            <thead><tr><th>P&L Category</th><th>Budget</th><th>Proposal</th><th>Profit</th><th>Markup</th><th>Gross Margin</th></tr></thead>
             <tbody>
               {categoryRows.map((row) => (
                 <tr key={row.category}>
@@ -872,10 +1033,11 @@ function ReviewStep({ calculations, input, setInput }: { calculations: ReturnTyp
                   <td>{money(row.budget)}</td>
                   <td>{money(row.proposal)}</td>
                   <td className={row.profit < 0 ? "font-bold text-red-700" : row.profit === 0 ? "font-bold text-amber-700" : "font-bold text-emerald-700"}>{money(row.profit)}</td>
-                  <td className={row.proposal && row.margin < 25 ? "font-bold text-red-700" : "font-bold text-emerald-700"}>{percent(row.margin)}</td>
+                  <td className={row.budget && row.markup < 25 ? "font-bold text-red-700" : "font-bold text-emerald-700"}>{percent(row.markup)}</td>
+                  <td className="font-semibold text-slate-600">{percent(row.grossMargin)}</td>
                 </tr>
               ))}
-              {!categoryRows.length && <tr><td colSpan={5} className="text-slate-500">No active quote lines yet.</td></tr>}
+              {!categoryRows.length && <tr><td colSpan={6} className="text-slate-500">No active quote lines yet.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -886,7 +1048,7 @@ function ReviewStep({ calculations, input, setInput }: { calculations: ReturnTyp
 }
 
 function QuoteSummary({ calculations }: { calculations: ReturnType<typeof calculateProject> }) {
-  const lowMargin = calculations.proposalTotal > 0 && calculations.budgetMargin < 25;
+  const lowMarkup = calculations.proposalTotal > 0 && calculations.budgetCost > 0 && calculations.budgetProfit / calculations.budgetCost < 0.25;
   return (
     <div className="app-card-strong">
       <div className="panel-heading">
@@ -895,7 +1057,7 @@ function QuoteSummary({ calculations }: { calculations: ReturnType<typeof calcul
       <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
         <SummaryRow label="Proposal" value={money(calculations.proposalTotal)} strong />
         <SummaryRow label="Budget" value={money(calculations.budgetCost)} />
-        <SummaryRow label={lowMargin ? "Margin - Review" : "Margin"} value={percent(calculations.budgetMargin)} alert={lowMargin} />
+        <SummaryRow label={lowMarkup ? "Markup - Approval" : "Markup"} value={percent(calculations.budgetMarkup)} alert={lowMarkup} />
         <SummaryRow label="Site Days" value={String(calculations.siteDays)} />
         <SummaryRow label="Daily Rate" value={money(calculations.dailyRate)} />
         <SummaryRow label="Mobilisation" value={money(calculations.mobilisationRate)} />
@@ -1106,7 +1268,7 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
   const patch = (next: Partial<typeof s>) => setInput({ ...input, screeding: { ...s, ...next } });
   const updateTeam = (index: number, next: Partial<ScreedTeam>) => patch({ teams: s.teams.map((team, i) => i === index ? { ...team, ...next } : team) });
   const removeTeam = (index: number) => patch({ teams: s.teams.filter((_, i) => i !== index) });
-  const addTeam = () => patch({ teams: [...s.teams, { enabled: true, contractorName: `Screed subcontractor ${s.teams.length + 1}`, scabble: false, prep: false, screed: true, grind: false, mobilisation: 0, priceType: "day", daysProgrammed: screedDays, rate: 0 }] });
+  const addTeam = () => patch({ teams: [...s.teams, { enabled: true, contractorName: `Screed subcontractor ${s.teams.length + 1}`, scabble: false, prep: false, screed: true, grind: false, mobilisation: 0, mobilisationMargin: 0.3, priceType: "day", daysProgrammed: screedDays, rate: 0, margin: 0.3 }] });
   const screedDays = s.totalDaysOnSite || s.teams.reduce((sum, team) => sum + (team.enabled ? team.daysProgrammed : 0), 0);
   const productionMode = s.productionLabourMode ?? "subcontract";
   const surveyorMode = s.surveyorLabourMode ?? "in_house";
@@ -1121,7 +1283,7 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
   const productionSubcontractSell = s.teams.reduce((sum, team) => {
     if (!team.enabled) return sum;
     const qty = team.priceType === "day" ? team.daysProgrammed || screedDays : team.rate ? 1 : 0;
-    return sum + (team.mobilisation * (1 + rates.subcontractMargin)) + (team.rate * qty * (1 + rates.subcontractMargin));
+    return sum + (team.mobilisation * (1 + (team.mobilisationMargin ?? rates.subcontractMargin))) + (team.rate * qty * (1 + (team.margin ?? rates.subcontractMargin)));
   }, 0);
   const surveyorSubcontractSell = repairSubcontractorSell(s.surveyorSubcontractors);
   const productionLabourSell = usesProductionInHouse ? s.productionMen * productionDays * rates.productionLabourDayRate * (1 + adminRateMargin(rates, "productionLabourDayRate", rates.defaultMargin)) : 0;
@@ -1199,7 +1361,7 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
               const scope = [team.scabble && "Scabble", team.prep && "Prep", team.screed && "Screed", team.grind && "Grind"].filter(Boolean).join(", ") || "Scope not set";
               const qty = team.priceType === "day" ? team.daysProgrammed || screedDays : team.rate ? 1 : 0;
               const daysOverridden = team.priceType === "day" && team.daysProgrammed !== screedDays;
-              const sell = team.enabled ? (team.mobilisation * (1 + rates.subcontractMargin)) + (team.rate * qty * (1 + rates.subcontractMargin)) : 0;
+              const sell = team.enabled ? (team.mobilisation * (1 + (team.mobilisationMargin ?? rates.subcontractMargin))) + (team.rate * qty * (1 + (team.margin ?? rates.subcontractMargin))) : 0;
               return (
                 <div className="grid gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4" key={index}>
                   <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1210,9 +1372,11 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
                     <Text label="Subcontractor / Scope" value={team.contractorName} onChange={(v) => updateTeam(index, { contractorName: v })} />
                     <Select label="Price Type" value={team.priceType} options={["day", "lump sum"]} onChange={(v) => updateTeam(index, { priceType: v as ScreedTeam["priceType"] })} />
                     <NumberInput label="Rate / Budget Cost" value={team.rate} onChange={(v) => updateTeam(index, { rate: v })} />
+                    <NumberInput label="Margin %" value={(team.margin ?? rates.subcontractMargin) * 100} onChange={(v) => updateTeam(index, { margin: v / 100 })} />
                     {team.priceType === "day" ? <div className={daysOverridden ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Days Programmed" value={team.daysProgrammed} onChange={(v) => updateTeam(index, { daysProgrammed: v })} /></div> : <Mini label="Quantity" value="1 lump sum" />}
                     <Mini label="Proposal Cost" value={money(sell)} />
                     <NumberInput label="Mobilisation" value={team.mobilisation} onChange={(v) => updateTeam(index, { mobilisation: v })} />
+                    <NumberInput label="Mobilisation Margin %" value={(team.mobilisationMargin ?? rates.subcontractMargin) * 100} onChange={(v) => updateTeam(index, { mobilisationMargin: v / 100 })} />
                     <Toggle label="Scabble" checked={team.scabble} onChange={(v) => updateTeam(index, { scabble: v })} />
                     <Toggle label="Prep" checked={team.prep} onChange={(v) => updateTeam(index, { prep: v })} />
                     <Toggle label="Screed" checked={team.screed} onChange={(v) => updateTeam(index, { screed: v })} />
@@ -1359,7 +1523,7 @@ function ScreedPageTabs({ screedPage, setScreedPage, placement = "top" }: { scre
   );
 }
 
-function RepairsForm({ input, setInput, repairCatalog, rates }: { input: ProjectInput; setInput: (input: ProjectInput) => void; repairCatalog: RepairCatalog; rates: AdminRates }) {
+function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCalcs }: { input: ProjectInput; setInput: (input: ProjectInput) => void; repairCatalog: RepairCatalog; rates: AdminRates; projectMaterialCalcs: ReturnType<typeof calculateProjectRepairMaterials> }) {
   const r = input.repairs;
   const [repairMode, setRepairMode] = useState<"Simple" | "Advanced">("Simple");
   const [repairPage, setRepairPage] = useState<RepairPage>("Details");
@@ -1389,7 +1553,6 @@ function RepairsForm({ input, setInput, repairCatalog, rates }: { input: Project
   };
   const readiness = repairReadiness(input, repairCatalog);
   const repairLineMaterialTotal = r.repairLines.reduce((sum, repairLine) => sum + materialCost(repairLine), 0);
-  const projectMaterialCalcs = r.repairLines.flatMap((repairLine) => calculateRepairLineMaterials(repairLine, repairCatalog));
   const materialTypesRequired = new Set(projectMaterialCalcs.map((calc) => calc.product.replace(/^Type\s*[\w. -]+ - /, ""))).size;
   const repairLineDaysTotal = Math.ceil(r.repairLines.reduce((sum, repairLine) => sum + repairLineDays(repairLine, repairCatalog), 0));
   const effectiveRepairDays = r.labourDays > 0 ? r.labourDays : repairLineDaysTotal;
@@ -1790,32 +1953,95 @@ function AdditionalItems({ title, items, onChange }: { title: string; items: Add
   );
 }
 
-function ProjectDetail({ project, tab, setTab, actuals, setActuals, saveActuals, note, setNote, addNote, edit }: { project: ProjectRecord; tab: DetailTab; setTab: (tab: DetailTab) => void; actuals: ReturnType<typeof defaultActuals>; setActuals: (a: ReturnType<typeof defaultActuals>) => void; saveActuals: () => void; note: string; setNote: (v: string) => void; addNote: () => void; edit: () => void }) {
+function ProjectDetail({ project, tab, setTab, actuals, setActuals, saveActuals, note, setNote, addNote, edit, updateStatus }: { project: ProjectRecord; tab: DetailTab; setTab: (tab: DetailTab) => void; actuals: ReturnType<typeof defaultActuals>; setActuals: (a: ReturnType<typeof defaultActuals>) => void; saveActuals: () => void; note: string; setNote: (v: string) => void; addNote: () => void; edit: () => void; updateStatus: (status: ProjectStatus) => void }) {
+  const auth = useAuth();
+  const canEdit = hasPermission(auth.role, "projects.update");
   const summary = calculatePL(project.calculations, actuals);
   useEffect(() => {
-    if (!tabIsAllowed(tab, project.inputs)) setTab("Overview");
+    if (!tabIsAllowed(tab, project.inputs)) setTab("Summary");
+  // Project ID and active tab are sufficient; inputs are immutable in this view.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id, tab]);
   return (
     <div className="grid gap-5">
       <div className="flex flex-wrap justify-between gap-3">
-        <h2 className="text-2xl font-bold">{project.inputs.projectReference} - {project.inputs.client}</h2>
-        <button className="secondary-button" onClick={edit}>Edit Quote</button>
+        <div><h2 className="text-2xl font-bold">{project.inputs.projectReference} - {project.inputs.client}</h2><div className="mt-1 text-sm text-slate-500">{project.inputs.location} / {project.calculations.serviceSummary} / {project.inputs.quoteCurrency}</div></div>
+        <div className="flex flex-wrap gap-2"><Select label="" value={project.status} options={["Draft", "Quoted", "Won", "Lost", "Completed", "Closed"]} disabled={!canEdit} onChange={(value) => updateStatus(value as ProjectStatus)} /><button className="secondary-button" onClick={edit} disabled={!canEdit}>Edit Quote</button></div>
       </div>
       <DetailTabs tab={tab} setTab={setTab} input={project.inputs} />
-      {tab === "Overview" && <Overview calculations={project.calculations} rates={defaultRates} />}
-      {tab === "Proposal" && <LineTable lines={project.calculations.proposalLines} />}
-      {tab === "Budget" && <LineTable lines={project.calculations.budgetLines} />}
-      {tab === "P&L" && <PLActualsPanel project={project} actuals={actuals} setActuals={setActuals} summary={summary} saveActuals={saveActuals} />}
-      {tab === "Notes" && <div className="app-card p-5"><textarea className="w-full" rows={4} value={note} onChange={(e) => setNote(e.target.value)} /><button className="primary-button mt-3" onClick={addNote}>Add Note</button>{project.notes?.map((n) => <div className="mt-3 rounded border p-3" key={n.id}><b>{n.author}</b> {n.text}</div>)}</div>}
-      {tab === "Change Log" && <div className="app-card p-5">{project.changeLog?.map((l) => <div className="mb-2" key={l.id}><History size={14} className="mr-2 inline" />{formatDateTime(l.createdAt)} - {l.action}: {l.detail}</div>)}</div>}
-      {tab === "Revisions" && <div className="app-card p-5">{project.revisions?.map((r) => <div className="mb-2 rounded border p-3" key={r.id}>{r.label}: {money(r.proposalTotal)} / {money(r.budgetCost)}</div>)}</div>}
-      {tab === "Audit" && <AuditPanel calculations={project.calculations} />}
-      {["Grinding", "Screeding", "Repairs", "Time", "Assumptions", "Exports"].includes(tab) && <div className="app-card p-5">Open Edit Quote to update this section. This detail tab is retained in the project record for review.</div>}
+      {tab === "Summary" && <SavedProjectSummary project={project} />}
+      {tab === "Costing" && <SavedCosting project={project} />}
+      {tab === "Commercial Review" && <SavedCommercialReview project={project} />}
+      {tab === "Client Proposal" && <ClientProposal project={project} />}
+      {tab === "Actual P&L" && <PLActualsPanel project={project} actuals={actuals} setActuals={setActuals} summary={summary} saveActuals={saveActuals} />}
+      {tab === "Activity" && <ActivityPanel project={project} note={note} setNote={setNote} addNote={addNote} />}
     </div>
   );
 }
 
+function SavedProjectSummary({ project }: { project: ProjectRecord }) {
+  const calculations = project.calculations;
+  return <div className="grid gap-5">
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Proposal" value={money(calculations.proposalTotal)} /><Metric label="Budget" value={money(calculations.budgetCost)} /><Metric label="Markup" value={percent(calculations.budgetMarkup ?? 0)} /><Metric label="Project Days" value={String(calculations.siteDays)} /></div>
+    <div className="grid gap-4 lg:grid-cols-2">
+      <div className="app-card p-5"><h3 className="font-bold text-slate-950">Project</h3><div className="mt-3 grid gap-2 text-sm"><div><b>Reference:</b> {project.inputs.projectReference}</div><div><b>Client:</b> {project.inputs.client}</div><div><b>Location:</b> {project.inputs.location}</div><div><b>Services:</b> {calculations.serviceSummary}</div><div><b>Status:</b> {project.status} / {project.accountsStatus}</div><div><b>Calculation:</b> {project.calculationVersion ?? "Legacy snapshot"}</div></div></div>
+      <div className="app-card p-5"><h3 className="font-bold text-slate-950">Phase programme</h3><div className="mt-3 grid gap-2">{calculations.phaseRows?.map((row) => <div key={row.service} className="flex flex-wrap justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm"><b>{row.service}</b><span>Day {row.startDay} to {row.endDay}{row.concurrent ? " / concurrent" : ""}</span></div>)}{!calculations.phaseRows?.length && <div className="text-sm text-slate-500">No phase schedule was saved on this legacy quote.</div>}</div></div>
+    </div>
+  </div>;
+}
+
+function downloadProjectCsv(project: ProjectRecord) {
+  const blob = new Blob([projectCsv(project)], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${project.inputs.projectReference || "project"}-internal-costing.csv`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function SavedCosting({ project }: { project: ProjectRecord }) {
+  const calculations = project.calculations;
+  const categoryRows = plCategories.map((category) => ({ category, budget: calculations.budgetLines.filter((line) => linePLCategory(line) === category).reduce((sum, line) => sum + line.total, 0) })).filter((row) => row.budget);
+  return <div className="grid gap-5"><div className="app-card-strong"><div className="panel-heading flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-xl font-semibold">Budget Costing</h2><p className="text-sm text-slate-500">Read-only budget snapshot used when this quote was saved.</p></div><button className="secondary-button" onClick={() => downloadProjectCsv(project)}>Export internal CSV</button></div><div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-4">{categoryRows.map((row) => <Mini key={row.category} label={row.category} value={money(row.budget)} />)}</div></div><LineTable lines={calculations.budgetLines} /></div>;
+}
+
+function SavedCommercialReview({ project }: { project: ProjectRecord }) {
+  const calculations = project.calculations;
+  const rows = plCategories.map((category) => {
+    const proposal = calculations.proposalLines.filter((line) => linePLCategory(line) === category).reduce((sum, line) => sum + line.total, 0);
+    const budget = calculations.budgetLines.filter((line) => linePLCategory(line) === category).reduce((sum, line) => sum + line.total, 0);
+    const profit = proposal - budget;
+    return { category, proposal, budget, profit, markup: budget ? profit / budget * 100 : 0 };
+  }).filter((row) => row.proposal || row.budget);
+  return <div className="grid gap-5"><div className={`rounded-xl border p-4 ${calculations.budgetMarkup < 25 ? "border-amber-200 bg-amber-50 text-amber-950" : "border-emerald-200 bg-emerald-50 text-emerald-950"}`}><b>{calculations.budgetMarkup < 25 ? `Approved below threshold: ${percent(calculations.budgetMarkup)}` : `Commercial check passed: ${percent(calculations.budgetMarkup)} markup`}</b>{calculations.budgetMarkup < 25 && <div className="mt-2 text-sm">Reason: {project.inputs.markupOverrideReason || "No approval reason recorded"}<br />Approved by: {project.markupApprovedBy || "Not recorded"}</div>}</div><div className="table-shell"><table><thead><tr><th>Category</th><th>Budget</th><th>Proposal</th><th>Profit</th><th>Markup</th></tr></thead><tbody>{rows.map((row) => <tr key={row.category}><td className="font-bold">{row.category}</td><td>{money(row.budget)}</td><td>{money(row.proposal)}</td><td>{money(row.profit)}</td><td className={row.markup < 25 ? "font-bold text-red-700" : "font-bold text-emerald-700"}>{percent(row.markup)}</td></tr>)}</tbody></table></div></div>;
+}
+
+function proposalGroup(line: Line) {
+  const source = `${line.source} ${line.item}`.toLowerCase();
+  if (source.includes("grind")) return "Grinding";
+  if (source.includes("screed")) return "Screeding";
+  if (source.includes("repair") || source.includes("joint")) return "Repairs";
+  if (source.includes("project manager") || source.includes("whole-project management")) return "Project Management";
+  if (line.section === "Additional items") return "Additional Items";
+  if (["Travel", "Hotel", "Subsistence"].includes(line.section)) return "Travel & Accommodation";
+  return line.section;
+}
+
+function ClientProposal({ project }: { project: ProjectRecord }) {
+  const [showDetail, setShowDetail] = useState(false);
+  const active = project.calculations.proposalLines.filter((line) => line.total);
+  const groups = Array.from(active.reduce((map, line) => map.set(proposalGroup(line), (map.get(proposalGroup(line)) ?? 0) + line.total), new Map<string, number>()).entries());
+  return <div className="grid gap-5"><div className="app-card-strong"><div className="panel-heading flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-xl font-semibold">Client Proposal</h2><p className="text-sm text-slate-500">Client-facing service summary. Budget costs and internal margins are excluded.</p></div><button className="secondary-button" onClick={() => window.print()}>Print / Save PDF</button></div><div className="p-5"><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">{groups.map(([group, total]) => <div className="rounded-xl border border-slate-200 bg-white p-4" key={group}><div className="text-sm font-bold text-slate-700">{group}</div><div className="mt-2 text-xl font-bold text-slate-950">{money(total)}</div></div>)}</div><div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-5"><div><div className="text-sm font-bold uppercase text-slate-500">Proposal Total</div><div className="mt-1 text-3xl font-bold text-slate-950">{money(project.calculations.proposalTotal)}</div></div><button className="secondary-button" onClick={() => setShowDetail((value) => !value)}>{showDetail ? "Hide detail appendix" : "Show detail appendix"}</button></div></div></div>{showDetail && <div className="table-shell"><table><thead><tr><th>Service</th><th>Description</th><th>Quantity</th><th>Unit</th><th>Total</th></tr></thead><tbody>{active.map((line, index) => <tr key={`${line.item}-${index}`}><td>{proposalGroup(line)}</td><td className="font-semibold">{line.item}</td><td>{line.quantity}</td><td>{line.unit}</td><td className="font-bold">{money(line.total)}</td></tr>)}</tbody></table></div>}</div>;
+}
+
+function ActivityPanel({ project, note, setNote, addNote }: { project: ProjectRecord; note: string; setNote: (value: string) => void; addNote: () => void }) {
+  return <div className="grid gap-5 lg:grid-cols-2"><div className="app-card p-5"><h3 className="font-bold">Notes</h3><textarea className="input mt-3 min-h-28 w-full" value={note} onChange={(event) => setNote(event.target.value)} /><button className="primary-button mt-3" onClick={addNote}>Add Note</button>{project.notes?.map((item) => <div className="mt-3 rounded-lg border border-slate-200 p-3 text-sm" key={item.id}><b>{item.author}</b><div className="mt-1">{item.text}</div></div>)}</div><div className="grid gap-5"><div className="app-card p-5"><h3 className="font-bold">Revisions</h3>{project.revisions?.map((revision) => <div className="mt-3 rounded-lg border border-slate-200 p-3 text-sm" key={revision.id}><b>{revision.label}</b><div>{money(revision.proposalTotal)} proposal / {money(revision.budgetCost)} budget</div></div>)}</div><div className="app-card p-5"><h3 className="font-bold">Change Log</h3>{project.changeLog?.map((entry) => <div className="mt-3 text-sm" key={entry.id}><History size={14} className="mr-2 inline" />{formatDateTime(entry.createdAt)} - <b>{entry.action}</b>: {entry.detail}</div>)}</div></div></div>;
+}
+
 function PLActualsPanel({ project, actuals, setActuals, summary, saveActuals }: { project: ProjectRecord; actuals: ReturnType<typeof defaultActuals>; setActuals: (a: ReturnType<typeof defaultActuals>) => void; summary: ReturnType<typeof calculatePL>; saveActuals: () => void }) {
+  const auth = useAuth();
+  const canEditActuals = hasPermission(auth.role, "pl.update");
   const calculatedWorkingDays = calculateWorkingDays(actuals.startDate, actuals.endDate, actuals.saturdayWorked, actuals.sundayWorked);
   const calculatedSiteDays = calculateActualSiteDays(actuals);
   const inputSiteDays = actuals.daysTakenToComplete || calculatedSiteDays;
@@ -1823,19 +2049,21 @@ function PLActualsPanel({ project, actuals, setActuals, summary, saveActuals }: 
   const setDatePatch = (next: Partial<typeof actuals>) => {
     const merged = { ...actuals, ...next };
     const siteDays = calculateActualSiteDays(merged);
-    setActuals({ ...merged, daysTakenToComplete: merged.daysTakenToComplete === actuals.daysTakenToComplete ? siteDays : merged.daysTakenToComplete });
+    const previousCalculatedDays = calculateActualSiteDays(actuals);
+    const wasUsingCalculatedDays = !actuals.daysTakenToComplete || actuals.daysTakenToComplete === previousCalculatedDays;
+    setActuals({ ...merged, daysTakenToComplete: wasUsingCalculatedDays ? siteDays : actuals.daysTakenToComplete });
   };
   const actualRows: Array<{ key?: keyof typeof actuals; label: string; actual: number; budget: number; variance: number; readonly?: boolean; helper?: string; onChange?: (value: number) => void }> = summary.rows.map((row) => {
     if (row.item === "Survey Days") return { label: row.item, actual: row.actual, budget: row.budget, variance: row.variance, helper: `${actuals.surveyDays || actuals.labourInternalDays} days x ${money(actuals.surveyDayRate || actuals.labourInternalRate)}`, onChange: undefined };
     if (row.item === "Survey Travel Days") return { label: row.item, actual: row.actual, budget: row.budget, variance: row.variance, helper: `${actuals.surveyTravelDays} days x ${money(actuals.surveyTravelRate)}`, onChange: undefined };
-    if (row.item === "Bonus") return { label: row.item, actual: row.actual, budget: row.budget, variance: row.variance, readonly: true, helper: "Auto-calculated at 1% of actual price." };
+    if (row.item === "BDM Bonus") return { label: row.item, actual: row.actual, budget: row.budget, variance: row.variance, readonly: true, helper: project.inputs.bdmBonusRequired ? "Auto-calculated at 1% of actual price because the quote opted in." : "Not selected on this quote." };
     const key = plRowActualKey(row.item);
     return { key, label: row.item, actual: row.actual, budget: row.budget, variance: row.variance, onChange: key ? (value) => patch({ [key]: value } as Partial<typeof actuals>) : undefined };
   });
   return (
     <div className="grid gap-5">
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.25fr)_420px]">
-        <div className="app-card-strong">
+        <div className={`app-card-strong ${canEditActuals ? "" : "pointer-events-none opacity-70"}`}>
           <div className="panel-heading">
             <h2 className="text-xl font-semibold">P&L Actuals</h2>
             <p className="text-sm text-slate-500">Accounts enter actual costs here. Budget values are read-only and come from the saved project budget.</p>
@@ -1878,7 +2106,7 @@ function PLActualsPanel({ project, actuals, setActuals, summary, saveActuals }: 
                 </tbody>
               </table>
             </div>
-            <button className="primary-button justify-self-start" onClick={saveActuals}><Save size={16} /> Save P&L Actuals</button>
+            <button className="primary-button justify-self-start" onClick={saveActuals} disabled={!canEditActuals}><Save size={16} /> Save P&L Actuals</button>
           </div>
         </div>
         <div className="grid content-start gap-4">
@@ -1888,9 +2116,11 @@ function PLActualsPanel({ project, actuals, setActuals, summary, saveActuals }: 
               <Mini label="Actual Cost" value={money(summary.actualCost)} />
               <Mini label="Actual Profit" value={money(summary.actualProfit)} />
               <Mini label="Actual Margin" value={percent(summary.actualMargin)} />
+              <Mini label="Actual Markup" value={percent(summary.actualMarkup)} />
               <Mini label="Budget Cost" value={money(project.calculations.budgetCost)} />
               <Mini label="Budget Profit" value={money(summary.budgetProfit)} />
               <Mini label="Budget Margin" value={percent(summary.budgetMargin)} />
+              <Mini label="Budget Markup" value={percent(summary.budgetMarkup)} />
             </div>
           </div>
           <div className="app-card-strong">
@@ -1950,7 +2180,7 @@ function SearchView({ projects, open, edit }: { projects: ProjectRecord[]; open:
 }
 
 function ProjectTable({ projects, open, edit }: { projects: ProjectRecord[]; open: (project: ProjectRecord) => void; edit?: (project: ProjectRecord) => void }) {
-  return <div className="table-shell border-0"><table><thead><tr><th>Project</th><th>Services</th><th>Status</th><th>Proposal</th><th>Budget</th><th>Margin</th><th>Actions</th></tr></thead><tbody>{projects.map((p) => <tr key={p.id}><td><b>{p.inputs.projectReference || "Draft"}</b><div className="text-xs text-slate-500">{p.inputs.client} - {p.inputs.location}</div></td><td>{p.calculations.serviceSummary}</td><td>{p.status} / {p.accountsStatus}</td><td>{money(p.calculations.proposalTotal)}</td><td>{money(p.calculations.budgetCost)}</td><td>{percent(p.calculations.budgetMargin)}</td><td><button className="secondary-button mr-2" onClick={() => open(p)}>Open</button>{edit && <button className="secondary-button" onClick={() => edit(p)}>Edit</button>}</td></tr>)}</tbody></table></div>;
+  return <div className="table-shell border-0"><table><thead><tr><th>Project</th><th>Services</th><th>Status</th><th>Proposal</th><th>Budget</th><th>Markup</th><th>Actions</th></tr></thead><tbody>{projects.map((p) => <tr key={p.id}><td><b>{p.inputs.projectReference || "Draft"}</b><div className="text-xs text-slate-500">{p.inputs.client} - {p.inputs.location}</div></td><td>{p.calculations.serviceSummary}</td><td>{p.status} / {p.accountsStatus}</td><td>{money(p.calculations.proposalTotal, p.inputs.quoteCurrency)}</td><td>{money(p.calculations.budgetCost, p.inputs.quoteCurrency)}</td><td>{percent(p.calculations.budgetMarkup ?? (p.calculations.budgetCost ? p.calculations.budgetProfit / p.calculations.budgetCost * 100 : 0))}</td><td><button className="secondary-button mr-2" onClick={() => open(p)}>Open</button>{edit && <button className="secondary-button" onClick={() => edit(p)}>Edit</button>}</td></tr>)}</tbody></table></div>;
 }
 
 function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, initialAdminTab, save }: { rates: AdminRates; setRates: (rates: AdminRates) => void; repairCatalog: RepairCatalog; setRepairCatalog: (catalog: RepairCatalog) => void; initialAdminTab: "Rates" | "Repair Types" | "Repair Materials"; save: () => void }) {
@@ -2066,6 +2296,22 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, init
               ]}
             />
             <RateSection
+              title="Project Management"
+              description="Whole-project management used once across grinding, screeding and repairs. It is not duplicated by service."
+              badges={["Shared", "Project"]}
+              rates={rates}
+              onRateChange={updateRate}
+              onMarginChange={updateMarginRate}
+              onItemMarginChange={updateItemMargin}
+              fields={[
+                { key: "projectManagerDayRate", label: "Project Manager Day Rate", suffix: "/ day" }
+              ]}
+            />
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="max-w-sm"><NumberInput label="Optional BDM Bonus %" value={rates.bdmBonusRate * 100} onChange={(value) => updateRate("bdmBonusRate", value / 100)} /></div>
+              <p className="mt-2 text-sm text-slate-500">Applied to budget cost only when the quote explicitly selects the BDM bonus option.</p>
+            </div>
+            <RateSection
               title="Travel, Hotel & Subsistence"
               description="Shared movement, accommodation and daily allowance rates for workers and surveyors. Distance rates are in kilometres."
               badges={["Shared", "Travel"]}
@@ -2150,68 +2396,6 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, init
                 { key: "repairFuelPerKm", label: "Repair Fuel / km", suffix: "/ km" }
               ]}
             />
-            <details className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-              <summary className="cursor-pointer list-none">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-lg font-bold text-slate-950">Legacy / Future Project Rates</h3>
-                    <p className="mt-1 text-sm text-slate-500">Kept available for future PM summary and project extras, but hidden from the main rates screen.</p>
-                  </div>
-                  <span className="rounded-full bg-slate-200 px-3 py-1 text-xs font-bold uppercase text-slate-700">Collapsed</span>
-                </div>
-              </summary>
-              <div className="mt-4">
-                <RateSection
-                  title="Legacy / Future Use"
-                  description="These rates are not part of the current repair labour workflow."
-                  badges={["Future"]}
-                  rates={rates}
-                  onRateChange={updateRate}
-                  onMarginChange={updateMarginRate}
-                  onItemMarginChange={updateItemMargin}
-                  compact
-                  fields={[
-                    { key: "defaultMargin", label: "Old Standard Labour Margin", margin: true, helper: "Legacy fallback only. Active labour rows now each have their own margin." },
-                    { key: "labourerDayRate", label: "Old Labourer Day Rate", suffix: "/ day" },
-                    { key: "labourerTravelDayRate", label: "Old Labourer Travel Day Rate", suffix: "/ day" },
-                    { key: "travelDayRate", label: "Old Travel Day Rate", suffix: "/ day" },
-                    { key: "weekendDayRate", label: "Old Weekend Day Rate", suffix: "/ day" },
-                    { key: "rentalCar", label: "Future Rental Car", suffix: "/ day" },
-                    { key: "rentalVan", label: "Future Rental Van", suffix: "/ day" },
-                    { key: "equipmentRental", label: "Future Equipment Rental", suffix: "/ day" },
-                    { key: "equipmentShipping", label: "Future Equipment Shipping", suffix: "/ item" },
-                    { key: "repairInHouseLabourDayRate", label: "Old Repair Labour Rate", suffix: "/ man day" },
-                    { key: "repairWeekendDayRate", label: "Old Repair Weekend Extra", suffix: "/ man day" },
-                    { key: "repairNightShiftAllowance", label: "Old Repair Night Shift Extra", suffix: "/ man night" },
-                    { key: "repairTravelDayRate", label: "Old Repair Travel Rate", suffix: "/ man day" },
-                    { key: "repairHotel", label: "Old Repair Hotel", suffix: "/ room night" },
-                    { key: "repairSubsistence", label: "Old Repair Subsistence", suffix: "/ man night" },
-                    { key: "repairTechnicianDayRate", label: "Repair Technician Day Rate", suffix: "/ day" },
-                    { key: "repairPmDayRate", label: "Repair PM Day Rate", suffix: "/ day" },
-                    { key: "repairFloorSawWeekly", label: "Floor Saw Weekly", suffix: "/ week" },
-                    { key: "repairDryVacWeekly", label: "Dry Vac Weekly", suffix: "/ week" },
-                    { key: "repairWetVacWeekly", label: "Wet Vac Weekly", suffix: "/ week" },
-                    { key: "repairBreakerWeekly", label: "Breaker Weekly", suffix: "/ week" },
-                    { key: "repairHandGrinderWeekly", label: "Hand Grinder Weekly", suffix: "/ week" },
-                    { key: "repairPowerLeadsWeekly", label: "Power Leads Weekly", suffix: "/ week" },
-                    { key: "repairPaddleMixerWeekly", label: "Paddle Mixer Weekly", suffix: "/ week" },
-                    { key: "repairGeneratorWeekly", label: "Generator Weekly", suffix: "/ week" },
-                    { key: "repairTransformersWeekly", label: "Transformers Weekly", suffix: "/ week" },
-                    { key: "repairLpgGasWeekly", label: "LPG Gas Weekly", suffix: "/ week" },
-                    { key: "repairMiscConsumablesWeekly", label: "Misc Consumables Weekly", suffix: "/ week" },
-                    { key: "repairBackingCordRate", label: "Backing Cord Rate", suffix: "/ m" },
-                    { key: "repairDiamondToolingWeekly", label: "Diamond Tooling Weekly", suffix: "/ week" },
-                    { key: "repairWasteSkip", label: "Waste Skip", suffix: "/ item" },
-                    { key: "screedDiamondGrinderElectricDayRate", label: "Old Screed Electric Grinder", suffix: "/ grinder day" },
-                    { key: "ukSupervisorDayRate", label: "Old UK Supervisor Daily Rate", suffix: "/ day" },
-                    { key: "ukSupervisorFlight", label: "Old UK Supervisor Flight", suffix: "/ return" },
-                    { key: "ukSupervisorSubsistenceDayRate", label: "Old UK Supervisor Subsistence", suffix: "/ day" },
-                    { key: "ukSupervisorHotelNightRate", label: "Old UK Supervisor Hotel", suffix: "/ night" },
-                    { key: "ukSupervisorCarHireDayRate", label: "Old UK Supervisor Car Hire", suffix: "/ day" }
-                  ]}
-                />
-              </div>
-            </details>
           </div>
         )}
         {adminTab === "Repair Types" && (
@@ -2438,11 +2622,11 @@ function Text({ label, value, onChange }: { label: string; value: string; onChan
 }
 
 function NumberInput({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
-  return <div className="grid min-w-0 gap-1"><label>{label}</label><input type="number" step="any" value={Number.isFinite(value) ? value : 0} onChange={(e) => onChange(Number(e.target.value))} /></div>;
+  return <div className="grid min-w-0 gap-1"><label>{label}</label><input type="number" min="0" step="any" value={Number.isFinite(value) ? value : 0} onChange={(e) => onChange(Math.max(0, Number(e.target.value)))} /></div>;
 }
 
-function Select({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (v: string) => void }) {
-  return <div className="grid min-w-0 gap-1"><label>{label}</label><select value={value} onChange={(e) => onChange(e.target.value)}>{options.map((o) => <option key={o}>{o}</option>)}</select></div>;
+function Select({ label, value, options, onChange, disabled = false }: { label: string; value: string; options: string[]; onChange: (v: string) => void; disabled?: boolean }) {
+  return <div className="grid min-w-0 gap-1"><label>{label}</label><select value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)}>{options.map((o) => <option key={o}>{o}</option>)}</select></div>;
 }
 
 function DateInput({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {

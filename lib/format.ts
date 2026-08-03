@@ -1,7 +1,15 @@
-export const currency = new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR" });
+let activeCurrency = "EUR";
 
-export function money(value: number) {
-  return currency.format(Number.isFinite(value) ? value : 0);
+export function setMoneyCurrency(currency: string) {
+  activeCurrency = currency || "EUR";
+}
+
+export function money(value: number, currency = activeCurrency) {
+  return new Intl.NumberFormat("en-GB", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 2
+  }).format(Number.isFinite(value) ? value : 0);
 }
 
 export function percent(value: number) {

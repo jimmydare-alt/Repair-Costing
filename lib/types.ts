@@ -1,13 +1,33 @@
 export type View = "Dashboard" | "New Project" | "Project Detail" | "Project Search" | "Admin Rates" | "Company Admin" | "Account";
 export type ProjectStatus = "Draft" | "Quoted" | "Won" | "Lost" | "Completed" | "Closed";
 export type AccountsStatus = "Not Required" | "Awaiting Accounts" | "Actuals Saved";
-export type DetailTab = "Overview" | "Grinding" | "Screeding" | "Repairs" | "Proposal" | "Budget" | "P&L" | "Time" | "Assumptions" | "Revisions" | "Notes" | "Change Log" | "Exports" | "Audit";
+export type DetailTab = "Summary" | "Costing" | "Commercial Review" | "Client Proposal" | "Actual P&L" | "Activity" | "Overview" | "Grinding" | "Screeding" | "Repairs" | "Proposal" | "Budget" | "P&L" | "Time" | "Assumptions" | "Revisions" | "Notes" | "Change Log" | "Exports" | "Audit";
 export type PriceType = "day" | "lump sum";
 export type LabourMode = "subcontract" | "in_house" | "both";
 export type TravelMode = "None" | "Drive" | "Fly";
 export type AirportTransport = "N/A" | "Drive" | "Uber";
 export type Section = "Labour" | "Travel" | "Hotel" | "Subsistence" | "Equipment" | "Materials" | "Subcontract" | "Repairs" | "Haulage" | "Reports" | "Additional items";
 export type PLCategory = "Labour" | "Subcontract" | "Materials" | "Equipment" | "Travel" | "Hotel/Subsistence" | "Haulage";
+export type ProjectServiceKey = "Grinding" | "Screeding" | "Repairs";
+
+export type PhaseSchedule = {
+  order: ProjectServiceKey[];
+  dayOverrides: Partial<Record<ProjectServiceKey, number>>;
+  startsWithPrevious: Partial<Record<ProjectServiceKey, boolean>>;
+  projectDaysOverride: number;
+};
+
+export type ProjectManagementScope = {
+  enabled: boolean;
+  days: number;
+  visits: number;
+  travelDays: number;
+  travelMode: TravelMode;
+  oneWayKm: number;
+  vehicles: number;
+  returnFlights: number;
+  hotelNights: number;
+};
 
 export type AdditionalItem = {
   name: string;
@@ -81,9 +101,11 @@ export type ScreedTeam = {
   screed: boolean;
   grind: boolean;
   mobilisation: number;
+  mobilisationMargin: number;
   priceType: PriceType;
   daysProgrammed: number;
   rate: number;
+  margin: number;
 };
 
 export type ScreedScope = {
@@ -245,6 +267,7 @@ export type RepairSubcontractor = {
 export type RepairsScope = {
   enabled: boolean;
   description: string;
+  daysPerWeek: number;
   labourMode: RepairLabourMode;
   quantityLmOrM2: number;
   labourMen: number;
@@ -289,6 +312,7 @@ export type ProjectInput = {
   includeScreeding: boolean;
   includeRepairs: boolean;
   travelMode: TravelMode;
+  projectTravelPeople: number;
   distanceKmOneWay: number;
   driveTimeDaysOneWay: number;
   vehicles: number;
@@ -299,6 +323,10 @@ export type ProjectInput = {
   exchangeRateToCompanyCurrency: number;
   exchangeRateToGroupCurrency: number;
   exchangeRateLockedAt?: string;
+  phaseSchedule: PhaseSchedule;
+  projectManagement: ProjectManagementScope;
+  bdmBonusRequired: boolean;
+  markupOverrideReason: string;
   grinding: GrindingScope;
   screeding: ScreedScope;
   repairs: RepairsScope;
@@ -330,6 +358,8 @@ export type AdminRates = {
   rentalVan: number;
   equipmentRental: number;
   engineeringReport: number;
+  projectManagerDayRate: number;
+  bdmBonusRate: number;
   subcontractMargin: number;
   defaultMargin: number;
   travelMargin: number;
@@ -419,6 +449,7 @@ export type ProjectCalculations = {
   screedDays: number;
   repairDays: number;
   siteDays: number;
+  phaseRows: Array<{ service: ProjectServiceKey; calculatedDays: number; inputDays: number; startDay: number; endDay: number; concurrent: boolean }>;
   proposalLines: Line[];
   budgetLines: Line[];
   repairMaterialCalcs: MaterialCalc[];
@@ -428,6 +459,13 @@ export type ProjectCalculations = {
   budgetCost: number;
   budgetProfit: number;
   budgetMargin: number;
+  budgetMarkup: number;
+  bdmBonusBudget: number;
+  bdmBonusRate: number;
+  proposalCompanyCurrency: number;
+  budgetCompanyCurrency: number;
+  proposalGroupCurrency: number;
+  budgetGroupCurrency: number;
   dailyRate: number;
   mobilisationRate: number;
   standbyRate: number;
@@ -468,8 +506,10 @@ export type PLSummary = {
   actualCost: number;
   actualProfit: number;
   actualMargin: number;
+  actualMarkup: number;
   budgetProfit: number;
   budgetMargin: number;
+  budgetMarkup: number;
   programmeStatus: string;
 };
 
@@ -483,6 +523,11 @@ export type QuoteRevision = {
   discountPercentage: number;
   inputs: ProjectInput;
   calculations: ProjectCalculations;
+  rates?: AdminRates;
+  repairCatalog?: RepairCatalog;
+  calculationVersion?: string;
+  markupApprovedBy?: string;
+  markupApprovedAt?: string;
 };
 
 export type ProjectNote = {
@@ -525,6 +570,11 @@ export type ProjectRecord = {
   accountsStatus: AccountsStatus;
   inputs: ProjectInput;
   calculations: ProjectCalculations;
+  rateSnapshot?: AdminRates;
+  repairCatalogSnapshot?: RepairCatalog;
+  calculationVersion?: string;
+  markupApprovedBy?: string;
+  markupApprovedAt?: string;
   actuals?: PLActuals;
   revisions?: QuoteRevision[];
   notes?: ProjectNote[];

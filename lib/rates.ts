@@ -9,9 +9,11 @@ const screedTeam = (): ScreedTeam => ({
   screed: false,
   grind: false,
   mobilisation: 0,
+  mobilisationMargin: 0.3,
   priceType: "day",
   daysProgrammed: 0,
-  rate: 0
+  rate: 0,
+  margin: 0.3
 });
 
 export const defaultRateMargins: Partial<Record<keyof AdminRates, number>> = {
@@ -37,6 +39,7 @@ export const defaultRateMargins: Partial<Record<keyof AdminRates, number>> = {
   rentalVan: 0.2,
   equipmentRental: 0.3,
   engineeringReport: 0,
+  projectManagerDayRate: 0.2,
   grindingSmallGeneratorDayRate: 0.3,
   grindingGrinderDayRate: 0.3,
   grindingPlanerDayRate: 0.3,
@@ -111,6 +114,8 @@ export const defaultRates: AdminRates = {
   rentalVan: 120,
   equipmentRental: 200,
   engineeringReport: 600,
+  projectManagerDayRate: 575,
+  bdmBonusRate: 0.01,
   subcontractMargin: 0.3,
   defaultMargin: 0.2,
   travelMargin: 0.2,
@@ -178,6 +183,7 @@ export const emptyInput: ProjectInput = {
   includeScreeding: false,
   includeRepairs: false,
   travelMode: "None",
+  projectTravelPeople: 1,
   distanceKmOneWay: 0,
   driveTimeDaysOneWay: 1,
   vehicles: 1,
@@ -188,6 +194,25 @@ export const emptyInput: ProjectInput = {
   exchangeRateToCompanyCurrency: 1,
   exchangeRateToGroupCurrency: 1,
   exchangeRateLockedAt: undefined,
+  phaseSchedule: {
+    order: ["Grinding", "Screeding", "Repairs"],
+    dayOverrides: {},
+    startsWithPrevious: {},
+    projectDaysOverride: 0
+  },
+  projectManagement: {
+    enabled: false,
+    days: 0,
+    visits: 1,
+    travelDays: 0,
+    travelMode: "None",
+    oneWayKm: 0,
+    vehicles: 1,
+    returnFlights: 0,
+    hotelNights: 0
+  },
+  bdmBonusRequired: false,
+  markupOverrideReason: "",
   grinding: {
     enabled: false,
     estimatedDays: 0,
@@ -306,6 +331,7 @@ export const emptyInput: ProjectInput = {
   repairs: {
     enabled: false,
     description: "",
+    daysPerWeek: 5,
     labourMode: "subcontract",
     quantityLmOrM2: 0,
     labourMen: 0,

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { calculateActualSiteDays, calculatePL, calculateProject, calculateRepairLineMaterials, calculateRepairMaterial, calculateWorkingDays, defaultActuals, grindingDays, repairDays, screedDays, searchRowTone } from "@/lib/calculations";
+import { calculateActualSiteDays, calculatePhaseSchedule, calculatePL, calculateProject, calculateProjectRepairMaterials, calculateRepairLineMaterials, calculateRepairMaterial, calculateWorkingDays, defaultActuals, grindingDays, repairDays, screedDays, searchRowTone, weekendDaysForProgramme } from "@/lib/calculations";
 import { createRepairLine, defaultRepairCatalog } from "@/lib/repairCatalog";
 import { defaultRates, emptyInput, validationInput } from "@/lib/rates";
-import type { RepairCatalog } from "@/lib/types";
+import type { ProjectServiceKey, RepairCatalog } from "@/lib/types";
 
 describe("FACE GmbH v2 contracting calculations", () => {
   it("calculates a detailed mixed validation project", () => {
@@ -11,9 +11,9 @@ describe("FACE GmbH v2 contracting calculations", () => {
     expect(result.grindingDays).toBe(5);
     expect(result.screedDays).toBe(4);
     expect(result.repairDays).toBe(3);
-    expect(result.proposalTotal).toBe(84199.99);
-    expect(result.budgetCost).toBe(74752.75);
-    expect(result.discountAmount).toBe(4431.58);
+    expect(result.proposalTotal).toBe(83192.99);
+    expect(result.budgetCost).toBe(73552.75);
+    expect(result.discountAmount).toBe(4378.58);
     expect(result.proposalLines.some((line) => line.item.includes("Team 2 price on site"))).toBe(true);
   });
 
@@ -187,7 +187,7 @@ describe("FACE GmbH v2 contracting calculations", () => {
       }
     };
     const result = calculateProject(input, defaultRates, catalog);
-    const row = result.proposalLines.find((line) => line.item === "Type Test - Test Repair Material");
+    const row = result.proposalLines.find((line) => line.item === "Test Repair Material");
     expect(defaultRates.materialMargin).toBe(0.3);
     expect(row?.cost).toBe(200);
     expect(row?.margin).toBe(60);
@@ -245,7 +245,7 @@ describe("FACE GmbH v2 contracting calculations", () => {
   it("keeps P&L to the required accounts rows", () => {
     const result = calculateProject(validationInput, defaultRates);
     const summary = calculatePL(result, defaultActuals(result));
-    expect(summary.rows.map((row) => row.item)).toEqual(["Labour Internal", "Survey Days", "Survey Travel Days", "Bonus", "Labour Subcontract", "Equipment Rental", "Haulage", "Materials", "Engineering Report", "Travel", "Hotel", "Subsistence", "Other"]);
+    expect(summary.rows.map((row) => row.item)).toEqual(["Labour Internal", "Survey Days", "Survey Travel Days", "BDM Bonus", "Labour Subcontract", "Equipment Rental", "Haulage", "Materials", "Engineering Report", "Travel", "Hotel", "Subsistence", "Other"]);
   });
 
   it("uses the additional item P&L category instead of assuming equipment", () => {
@@ -283,22 +283,69 @@ describe("FACE GmbH v2 contracting calculations", () => {
   it("calculates P&L summary", () => {
     const calculations = calculateProject(validationInput, defaultRates);
     const summary = calculatePL(calculations, { ...defaultActuals(calculations), daysTakenToComplete: 5, labourInternal: 10000, labourSubcontract: 25000, equipmentRental: 4000, haulage: 500, materials: 5000, engineeringReport: 600, travel: 2000, hotel: 1500, subsistence: 500, other: 1000 });
-    expect(summary.actualCost).toBe(50942);
+    expect(summary.actualCost).toBe(50100);
     expect(summary.programmeStatus).toBe("PROJECT COMPLETED ON TIME");
     expect(summary.actualMargin).toBeGreaterThan(30);
   });
 
-  it("flags saved P&L rows below 25 percent margin", () => {
+  it("flags saved P&L rows below 25 percent markup", () => {
     const calculations = calculateProject(validationInput, defaultRates);
     const actuals = { ...defaultActuals(calculations), actualPrice: 100000, other: 74000 };
     expect(searchRowTone({ accountsStatus: "Actuals Saved", actuals, calculations })).toBe("green");
-    expect(searchRowTone({ accountsStatus: "Actuals Saved", actuals: { ...actuals, other: 75001 }, calculations })).toBe("red");
+    expect(searchRowTone({ accountsStatus: "Actuals Saved", actuals: { ...actuals, other: 80001 }, calculations })).toBe("red");
   });
 
-  it("auto-calculates P&L bonus as 1 percent of actual price", () => {
-    const calculations = calculateProject(validationInput, defaultRates);
-    const summary = calculatePL(calculations, { ...defaultActuals(calculations), actualPrice: 100000 });
-    expect(summary.rows.find((row) => row.item === "Bonus")?.actual).toBe(1000);
+  it("only calculates the 1 percent BDM bonus when the quote opts in", () => {
+    const withoutBonus = calculateProject(validationInput, defaultRates);
+    expect(calculatePL(withoutBonus, { ...defaultActuals(withoutBonus), actualPrice: 100000 }).rows.find((row) => row.item === "BDM Bonus")?.actual).toBe(0);
+    const withBonus = calculateProject({ ...validationInput, bdmBonusRequired: true }, defaultRates);
+    const summary = calculatePL(withBonus, { ...defaultActuals(withBonus), actualPrice: 100000 });
+    expect(withBonus.bdmBonusBudget).toBe(Math.round(withBonus.proposalTotal) / 100);
+    expect(summary.rows.find((row) => row.item === "BDM Bonus")?.actual).toBe(1000);
+  });
+
+  it("builds sequential and concurrent service phases without double-counting project days", () => {
+    const input = {
+      ...validationInput,
+      phaseSchedule: {
+        ...validationInput.phaseSchedule,
+        order: ["Grinding", "Screeding", "Repairs"] as ProjectServiceKey[],
+        startsWithPrevious: { Screeding: true, Repairs: false }
+      }
+    };
+    const schedule = calculatePhaseSchedule(input, defaultRepairCatalog);
+    expect(schedule.rows.map((row) => [row.service, row.startDay, row.endDay])).toEqual([["Grinding", 1, 5], ["Screeding", 1, 4], ["Repairs", 6, 8]]);
+    expect(schedule.projectDays).toBe(8);
+  });
+
+  it("combines repair material demand before rounding to purchase units", () => {
+    const catalog: RepairCatalog = {
+      materials: [{ id: "aggregate", name: "Aggregate Material", category: "Other", unitType: "each", unitSize: 1, costPerUnit: 90, calcMethod: "each", measuredUnitType: "each", coveragePerUnit: 3, wasteFactor: 1, sourceNote: "Test", active: true, notes: "" }],
+      types: [{ code: "Type Aggregate", name: "Aggregate", measurementBasis: "each", defaultWidthMm: 0, defaultDepthMm: 0, defaultThicknessMm: 0, defaultOutputPerDay: 10, description: "", materialRules: [{ materialId: "aggregate", role: "required", defaultSelected: true }], active: true }]
+    };
+    const repairLine = { id: "one", repairTypeCode: "Type Aggregate", description: "", lengthM: 0, widthMm: 0, depthMm: 0, areaM2: 0, thicknessMm: 0, eachQty: 1, holeDiameterMm: 0, holeDepthMm: 0, manualMaterialQty: 0, outputPerDay: 10, materialSelections: [] };
+    expect(calculateRepairLineMaterials(repairLine, catalog)[0].quantity).toBe(1);
+    expect(calculateProjectRepairMaterials([repairLine, { ...repairLine, id: "two" }], catalog)[0].quantity).toBe(1);
+  });
+
+  it("counts weekend days across the full programme", () => {
+    expect(weekendDaysForProgramme(6, 5, 1)).toBe(1);
+    expect(weekendDaysForProgramme(12, 5, 1)).toBe(2);
+    expect(weekendDaysForProgramme(14, 5, 2)).toBe(4);
+  });
+
+  it("converts company-currency rates into quote currency and reports both totals", () => {
+    const result = calculateProject({ ...emptyInput, additionalItems: [{ name: "Quote item", rate: 100, unit: "item", quantity: 1, margin: 0.3, plCategory: "Equipment" }], exchangeRateToCompanyCurrency: 2, exchangeRateToGroupCurrency: 3 }, defaultRates);
+    expect(result.proposalTotal).toBe(130);
+    expect(result.proposalCompanyCurrency).toBe(260);
+    expect(result.proposalGroupCurrency).toBe(390);
+  });
+
+  it("prices project management once as a whole-project cost", () => {
+    const result = calculateProject({ ...emptyInput, projectManagement: { ...emptyInput.projectManagement, enabled: true, days: 2, visits: 2, travelMode: "Drive", oneWayKm: 100, vehicles: 1, hotelNights: 2 } }, defaultRates);
+    expect(result.proposalLines.filter((line) => line.item === "Project manager")).toHaveLength(1);
+    expect(result.budgetLines.find((line) => line.item === "Project manager")?.total).toBe(defaultRates.projectManagerDayRate * 2);
+    expect(result.budgetLines.find((line) => line.item === "Project manager mileage")?.quantity).toBe(400);
   });
 
   it("calculates site days from dates minus travel days and supports programme status", () => {

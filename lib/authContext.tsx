@@ -67,6 +67,12 @@ async function loadCompanies(client: SupabaseClient, userId: string) {
   return { companies, role, modules: defaultModulesForRole(role) };
 }
 
+async function loadRoleForCompany(client: SupabaseClient, userId: string, companyId: string, fallback: MembershipRole) {
+  if (fallback === "super_admin") return fallback;
+  const { data } = await client.from("company_memberships").select("role,status").eq("user_id", userId).eq("company_id", companyId).eq("status", "active").maybeSingle();
+  return (data?.role ?? "viewer") as MembershipRole;
+}
+
 async function loadCompanyModules(client: SupabaseClient, companyId: string, role: MembershipRole): Promise<AppModuleKey[]> {
   if (companyId.startsWith("local-")) return defaultModulesForRole(role);
   const { data } = await client
@@ -94,7 +100,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [client] = useState(() => createBrowserSupabaseClient());
   const [loading, setLoading] = useState(configured);
   const [session, setSession] = useState<Session | null>(null);
-  const [companies, setCompanies] = useState<Company[]>(defaultCompanies);
+  const [companies, setCompanies] = useState<Company[]>(configured ? [] : defaultCompanies);
   const [activeCompanyId, setActiveCompanyId] = useState(defaultCompanies[1].id);
   const [role, setRole] = useState<MembershipRole>("super_admin");
   const [enabledModules, setEnabledModules] = useState<AppModuleKey[]>(defaultModulesForRole("super_admin"));
@@ -102,11 +108,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function refreshCompanies() {
     if (!client || !session?.user) return;
     const loaded = await loadCompanies(client, session.user.id);
-    setCompanies(loaded.companies.length ? loaded.companies : defaultCompanies);
-    setRole(loaded.role);
+    setCompanies(loaded.companies);
     const nextActive = loaded.companies.some((company) => company.id === activeCompanyId) ? activeCompanyId : loaded.companies[0]?.id ?? defaultCompanies[1].id;
+    const nextRole = await loadRoleForCompany(client, session.user.id, nextActive, loaded.role);
     setActiveCompanyId(nextActive);
-    setEnabledModules(await loadCompanyModules(client, nextActive, loaded.role));
+    setRole(nextRole);
+    setEnabledModules(await loadCompanyModules(client, nextActive, nextRole));
   }
 
   useEffect(() => {
@@ -121,12 +128,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (data.session?.user) {
         const loaded = await loadCompanies(client, data.session.user.id);
         if (!live) return;
-        setCompanies(loaded.companies.length ? loaded.companies : defaultCompanies);
-        setRole(loaded.role);
+        setCompanies(loaded.companies);
         const cookieCompany = typeof document !== "undefined" ? document.cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)?.[1] : undefined;
         const requestedCompany = cookieCompany ? decodeURIComponent(cookieCompany) : "";
         const nextActive = loaded.companies.some((company) => company.id === requestedCompany) ? requestedCompany : loaded.companies[0]?.id ?? defaultCompanies[1].id;
-        setEnabledModules(await loadCompanyModules(client, nextActive, loaded.role));
+        const nextRole = await loadRoleForCompany(client, data.session.user.id, nextActive, loaded.role);
+        setRole(nextRole);
+        setEnabledModules(await loadCompanyModules(client, nextActive, nextRole));
         setActiveCompanyId(nextActive);
       }
       setLoading(false);
@@ -174,9 +182,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     switchCompany: (companyId: string) => {
       setActiveCompanyId(companyId);
       if (typeof document !== "undefined") document.cookie = `active_company_id=${companyId}; path=/; SameSite=Lax`;
-      if (client) void loadCompanyModules(client, companyId, role).then(setEnabledModules);
+      if (client && session?.user) void loadRoleForCompany(client, session.user.id, companyId, role).then(async (nextRole) => {
+        setRole(nextRole);
+        setEnabledModules(await loadCompanyModules(client, companyId, nextRole));
+      });
     },
     refreshCompanies
+  // refreshCompanies closes over the same state represented in this dependency list.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [activeCompany, activeCompanyId, client, companies, configured, enabledModules, loading, nav, role, session]);
 
   useEffect(() => {

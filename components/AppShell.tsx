@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
-import { BarChart3, Building2, Calculator, FileText, LayoutDashboard, Plus, Search, Settings, Shield, Wrench } from "lucide-react";
+import { Building2, Calculator, LayoutDashboard, Plus, Search, Settings, Shield, Wrench } from "lucide-react";
 import { useAuth } from "@/lib/authContext";
 import type { AppModuleKey } from "@/lib/company";
 import type { View } from "@/lib/types";
@@ -30,9 +30,6 @@ export const shellNav: NavItem[] = [
   { view: "New Project", href: "/grinding", moduleKey: "calculations", group: "Quote Builder", icon: <Wrench /> },
   { view: "New Project", href: "/screeding", moduleKey: "calculations", group: "Quote Builder", icon: <Calculator /> },
   { view: "New Project", href: "/repairs", moduleKey: "calculations", group: "Quote Builder", icon: <Wrench /> },
-  { view: "Project Detail", href: "/proposal", moduleKey: "reports", group: "Commercial", icon: <FileText /> },
-  { view: "Project Detail", href: "/budget", moduleKey: "reports", group: "Commercial", icon: <BarChart3 /> },
-  { view: "Project Detail", href: "/pl", moduleKey: "reports", group: "Commercial", icon: <BarChart3 /> },
   { view: "Admin Rates", href: "/admin-rates", moduleKey: "admin_rates", group: "Admin", icon: <Settings /> },
   { view: "Admin Rates", href: "/admin-rates/repair-types", moduleKey: "repair_database", group: "Admin", icon: <Shield /> },
   { view: "Admin Rates", href: "/admin-rates/repair-materials", moduleKey: "repair_database", group: "Admin", icon: <Shield /> }
@@ -43,9 +40,6 @@ function navLabel(item: NavItem) {
   if (item.href === "/grinding") return "Grinding";
   if (item.href === "/screeding") return "Screeding";
   if (item.href === "/repairs") return "Repairs";
-  if (item.href === "/proposal") return "Proposal";
-  if (item.href === "/budget") return "Budget";
-  if (item.href === "/pl") return "P&L";
   if (item.href.includes("repair-types")) return "Repair Types";
   if (item.href.includes("repair-materials")) return "Repair Materials";
   return item.view;
@@ -54,6 +48,8 @@ function navLabel(item: NavItem) {
 export function ProductShell({ view, pathname, selectedContext, activeServices = { grinding: false, screeding: false, repairs: false }, onNewProject, children }: { view: View; pathname: string; selectedContext?: string; activeServices?: ActiveServices; onNewProject?: () => void; children: ReactNode }) {
   const auth = useAuth();
   const [open, setOpen] = useState(false);
+  const configuredLogo = auth.activeCompany.branding.logoPath;
+  const logo = configuredLogo?.startsWith("/") ? configuredLogo : auth.activeCompany.name.toLowerCase().includes("face") ? "/face-logo.png" : "/cogri-group-logo.png";
   const close = () => setOpen(false);
   const visible = shellNav.filter((item) => {
     if (item.moduleKey === "company_admin") return auth.role === "super_admin";
@@ -68,7 +64,7 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
     <main className={`app-shell ${open ? "nav-open" : ""}`}>
       <aside className="app-sidebar">
         <Link href="/" className="app-brand" onClick={close}>
-          <Image src="/cogri-group-logo.png" alt="CoGri Group" width={56} height={46} priority />
+          <Image src={logo} alt={auth.activeCompany.name} width={84} height={46} priority />
           <span><b>Repair Costing</b><small>CONTRACTING WORKSPACE</small></span>
         </Link>
         <div className="app-nav-scroll">

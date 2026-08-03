@@ -3,7 +3,7 @@
 import { calculateProject } from "./calculations";
 import { defaultRates, emptyInput } from "./rates";
 import { createRepairLine, defaultRepairCatalog } from "./repairCatalog";
-import { createBrowserSupabaseClient } from "./supabaseClient";
+import { createBrowserSupabaseClient, isSupabaseConfigured } from "./supabaseClient";
 import type { AdminRates, ChangeLogEntry, PLActuals, ProjectInput, ProjectNote, ProjectRecord, ProjectStatus, QuoteRevision, RepairCatalog } from "./types";
 
 const PROJECTS_KEY = "face-gmbh-contracting-projects-v2";
@@ -55,6 +55,10 @@ async function supabaseContext() {
   return { ...session, companyId };
 }
 
+function requireCloudContext(operation: string): never {
+  throw new Error(`${operation} requires an authenticated company cloud session. No browser fallback was used.`);
+}
+
 function readJson<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
   try {
@@ -73,9 +77,11 @@ export async function loadRates(): Promise<AdminRates> {
   const supabase = await supabaseContext();
   if (supabase) {
     const { data, error } = await supabase.client.from("admin_rates").select("rates").eq("company_id", supabase.companyId).maybeSingle();
-    if (error) console.warn("Supabase rates load failed, falling back to local rates.", error.message);
+    if (error) throw new Error(`Could not load admin rates: ${error.message}`);
     if (data?.rates) return normaliseRates(data.rates as Partial<AdminRates>);
+    return normaliseRates({});
   }
+  if (isSupabaseConfigured()) requireCloudContext("Loading admin rates");
   const saved = readJson<Partial<AdminRates>>(RATES_KEY, {});
   return normaliseRates(saved);
 }
@@ -128,6 +134,7 @@ export async function saveRates(rates: AdminRates) {
     if (error) throw new Error(`Could not save admin rates: ${error.message}`);
     return;
   }
+  if (isSupabaseConfigured()) requireCloudContext("Saving admin rates");
   writeJson(RATES_KEY, saved);
 }
 
@@ -180,9 +187,11 @@ export async function loadRepairCatalog(): Promise<RepairCatalog> {
   const supabase = await supabaseContext();
   if (supabase) {
     const { data, error } = await supabase.client.from("repair_catalogs").select("repair_types,repair_materials").eq("company_id", supabase.companyId).maybeSingle();
-    if (error) console.warn("Supabase repair catalogue load failed, falling back to local catalogue.", error.message);
+    if (error) throw new Error(`Could not load repair catalogue: ${error.message}`);
     if (data) return mergeCatalog({ types: data.repair_types as RepairCatalog["types"], materials: data.repair_materials as RepairCatalog["materials"] });
+    return defaultRepairCatalog;
   }
+  if (isSupabaseConfigured()) requireCloudContext("Loading repair catalogue");
   return mergeCatalog(readJson<Partial<RepairCatalog>>(REPAIR_CATALOG_KEY, {}));
 }
 
@@ -199,6 +208,7 @@ export async function saveRepairCatalog(catalog: RepairCatalog) {
     if (error) throw new Error(`Could not save repair catalogue: ${error.message}`);
     return;
   }
+  if (isSupabaseConfigured()) requireCloudContext("Saving repair catalogue");
   writeJson(REPAIR_CATALOG_KEY, catalog);
 }
 
@@ -214,12 +224,13 @@ export async function saveRatesWithVersion(rates: AdminRates) {
   await saveRates(rates);
   const supabase = await supabaseContext();
   if (supabase) {
-    await supabase.client.from("rate_versions").insert({
+    const { error } = await supabase.client.from("rate_versions").insert({
       company_id: supabase.companyId,
       source: "admin_rates",
       rates,
       created_by: supabase.session.user.id
     });
+    if (error) throw new Error(`Rates saved, but the rate version could not be recorded: ${error.message}`);
   }
 }
 
@@ -227,8 +238,9 @@ function log(existing: ChangeLogEntry[] | undefined, actor: string, action: stri
   return [{ id: uid(), createdAt: now(), actor, action, detail }, ...(existing ?? [])].slice(0, 200);
 }
 
-function makeRevision(input: ProjectInput, calculations: ProjectRecord["calculations"]): QuoteRevision {
-  return { id: uid(), label: input.revision || "Revision", createdAt: now(), proposalTotal: calculations.proposalTotal, budgetCost: calculations.budgetCost, budgetMargin: calculations.budgetMargin, discountPercentage: input.discountPercentage, inputs: input, calculations };
+function makeRevision(input: ProjectInput, calculations: ProjectRecord["calculations"], rates: AdminRates, repairCatalog: RepairCatalog, actor: string): QuoteRevision {
+  const approved = calculations.budgetCost > 0 && calculations.budgetProfit / calculations.budgetCost < 0.25 && Boolean(input.markupOverrideReason.trim());
+  return { id: uid(), label: input.revision || "Revision", createdAt: now(), proposalTotal: calculations.proposalTotal, budgetCost: calculations.budgetCost, budgetMargin: calculations.budgetMargin, discountPercentage: input.discountPercentage, inputs: input, calculations, rates, repairCatalog, calculationVersion: "3.0", markupApprovedBy: approved ? actor : undefined, markupApprovedAt: approved ? now() : undefined };
 }
 
 function normaliseRepairSubcontractors(input?: Partial<ProjectInput>) {
@@ -312,9 +324,9 @@ function normaliseActuals(actuals: PLActuals | undefined, calculations: ProjectR
     surveyTravelDays: asNumber(actuals.surveyTravelDays, 0),
     surveyTravelRate: asNumber(actuals.surveyTravelRate, 0),
     bonus: asNumber(actuals.bonus, 0),
-    labourInternal: asNumber(actuals.labourInternal, 0),
+    labourInternal: asNumber(actuals.labourInternal, 0) + asNumber(actuals.repairs, 0),
     labourSubcontract: asNumber(actuals.labourSubcontract, 0),
-    repairs: asNumber(actuals.repairs, 0),
+    repairs: 0,
     equipmentRental: asNumber(actuals.equipmentRental, 0),
     haulage: asNumber(actuals.haulage, 0),
     materials: asNumber(actuals.materials, 0),
@@ -340,6 +352,17 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
     quoteCurrency: input?.quoteCurrency ?? emptyInput.quoteCurrency,
     exchangeRateToCompanyCurrency: asNumber(input?.exchangeRateToCompanyCurrency, 1),
     exchangeRateToGroupCurrency: asNumber(input?.exchangeRateToGroupCurrency, 1),
+    projectTravelPeople: asNumber(input?.projectTravelPeople, emptyInput.projectTravelPeople),
+    phaseSchedule: {
+      ...emptyInput.phaseSchedule,
+      ...(input?.phaseSchedule ?? {}),
+      order: input?.phaseSchedule?.order?.length ? input.phaseSchedule.order : emptyInput.phaseSchedule.order,
+      dayOverrides: input?.phaseSchedule?.dayOverrides ?? {},
+      startsWithPrevious: input?.phaseSchedule?.startsWithPrevious ?? {}
+    },
+    projectManagement: { ...emptyInput.projectManagement, ...(input?.projectManagement ?? {}) },
+    bdmBonusRequired: Boolean(input?.bdmBonusRequired),
+    markupOverrideReason: input?.markupOverrideReason ?? "",
     grinding: {
       ...emptyInput.grinding,
       ...savedGrinding,
@@ -362,11 +385,12 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
       surveyorDays: Number(savedScreeding.surveyorDays ?? screedDays),
       surveyorVehicles: Number(savedScreeding.surveyorVehicles ?? emptyInput.screeding.surveyorVehicles),
       surveyorSubcontractors: normaliseSubcontractors(savedScreeding.surveyorSubcontractors, "Screed surveyor subcontractor"),
-      teams: savedScreeding.teams?.length ? savedScreeding.teams : emptyInput.screeding.teams
+      teams: (savedScreeding.teams?.length ? savedScreeding.teams : emptyInput.screeding.teams).map((team) => ({ ...team, margin: asNumber(team.margin, 0.3), mobilisationMargin: asNumber(team.mobilisationMargin, 0.3) }))
     },
     repairs: {
       ...emptyInput.repairs,
       ...(input?.repairs ?? {}),
+      daysPerWeek: asNumber(input?.repairs?.daysPerWeek, emptyInput.repairs.daysPerWeek),
       repairSubcontractors: normaliseRepairSubcontractors(input),
       materialInputs: input?.repairs?.materialInputs?.length ? input.repairs.materialInputs : emptyInput.repairs.materialInputs,
       repairLines: Array.isArray(input?.repairs?.repairLines) ? input.repairs.repairLines : []
@@ -389,6 +413,7 @@ export async function loadProjects(): Promise<ProjectRecord[]> {
     }
     return (data ?? []).map((row) => rowToProject(row as Record<string, unknown>, actualsByProject.get(String(row.id))));
   }
+  if (isSupabaseConfigured()) requireCloudContext("Loading projects");
   return readJson<ProjectRecord[]>(PROJECTS_KEY, []).map((project) => ({ ...project, companyId: project.companyId ?? "local-face-gmbh", inputs: normaliseInput(project.inputs), actuals: normaliseActuals(project.actuals, project.calculations) }));
 }
 
@@ -410,7 +435,12 @@ export async function saveProject(input: ProjectInput, rates: AdminRates, existi
     inputs,
     calculations,
     actuals: existing?.actuals,
-    revisions: [...(existing?.revisions ?? []), makeRevision(inputs, calculations)],
+    rateSnapshot: rates,
+    repairCatalogSnapshot: repairCatalog,
+    calculationVersion: "3.0",
+    markupApprovedBy: calculations.budgetCost > 0 && calculations.budgetProfit / calculations.budgetCost < 0.25 && inputs.markupOverrideReason.trim() ? savedActor : undefined,
+    markupApprovedAt: calculations.budgetCost > 0 && calculations.budgetProfit / calculations.budgetCost < 0.25 && inputs.markupOverrideReason.trim() ? now() : undefined,
+    revisions: [...(existing?.revisions ?? []), makeRevision(inputs, calculations, rates, repairCatalog, savedActor)],
     notes: existing?.notes ?? [],
     changeLog: log(existing?.changeLog, savedActor, existing ? `${status} edited` : `${status} created`, `${inputs.projectReference || "Draft"} ${calculations.serviceSummary} ${calculations.proposalTotal}`)
   };
@@ -420,6 +450,7 @@ export async function saveProject(input: ProjectInput, rates: AdminRates, existi
     if (error) throw new Error(`Could not save project: ${error.message}`);
     return record;
   }
+  if (isSupabaseConfigured()) requireCloudContext("Saving a project");
   writeJson(PROJECTS_KEY, existing ? projects.map((project) => project.id === record.id ? record : project) : [record, ...projects]);
   return record;
 }
@@ -440,6 +471,7 @@ export async function updateProjectWorkflow(projectId: string, status: ProjectSt
     if (error) throw new Error(`Could not update project workflow: ${error.message}`);
     return;
   }
+  if (isSupabaseConfigured()) requireCloudContext("Updating project workflow");
   writeJson(PROJECTS_KEY, updated);
 }
 
@@ -479,6 +511,7 @@ export async function saveActuals(projectId: string, actuals: PLActuals, actor =
     if (projectError) throw new Error(`Could not update project after P&L save: ${projectError.message}`);
     return saved;
   }
+  if (isSupabaseConfigured()) requireCloudContext("Saving P&L actuals");
   writeJson(PROJECTS_KEY, updated);
   return saved;
 }
@@ -499,6 +532,7 @@ export async function addProjectNote(projectId: string, note: Omit<ProjectNote, 
     if (error) throw new Error(`Could not save note: ${error.message}`);
     return saved;
   }
+  if (isSupabaseConfigured()) requireCloudContext("Saving a project note");
   writeJson(PROJECTS_KEY, updated);
   return saved;
 }
@@ -506,6 +540,8 @@ export async function addProjectNote(projectId: string, note: Omit<ProjectNote, 
 function rowToProject(row: Record<string, unknown>, actuals?: PLActuals): ProjectRecord {
   const inputs = normaliseInput(row.inputs as Partial<ProjectInput>);
   const calculations = row.calculations as ProjectRecord["calculations"];
+  const revisions = Array.isArray(row.revisions) ? row.revisions as QuoteRevision[] : [];
+  const latestRevision = revisions[revisions.length - 1];
   return {
     id: String(row.id),
     companyId: row.company_id ? String(row.company_id) : undefined,
@@ -517,7 +553,12 @@ function rowToProject(row: Record<string, unknown>, actuals?: PLActuals): Projec
     inputs,
     calculations,
     actuals: normaliseActuals(actuals ?? row.actuals as PLActuals | undefined, calculations),
-    revisions: Array.isArray(row.revisions) ? row.revisions as QuoteRevision[] : [],
+    rateSnapshot: latestRevision?.rates,
+    repairCatalogSnapshot: latestRevision?.repairCatalog,
+    calculationVersion: latestRevision?.calculationVersion,
+    markupApprovedBy: latestRevision?.markupApprovedBy,
+    markupApprovedAt: latestRevision?.markupApprovedAt,
+    revisions,
     notes: Array.isArray(row.notes) ? row.notes as ProjectNote[] : [],
     changeLog: Array.isArray(row.change_log) ? row.change_log as ChangeLogEntry[] : []
   };
