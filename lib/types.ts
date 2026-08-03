@@ -1,0 +1,530 @@
+export type View = "Dashboard" | "New Project" | "Project Detail" | "Project Search" | "Admin Rates" | "Company Admin" | "Account";
+export type ProjectStatus = "Draft" | "Quoted" | "Won" | "Lost" | "Completed" | "Closed";
+export type AccountsStatus = "Not Required" | "Awaiting Accounts" | "Actuals Saved";
+export type DetailTab = "Overview" | "Grinding" | "Screeding" | "Repairs" | "Proposal" | "Budget" | "P&L" | "Time" | "Assumptions" | "Revisions" | "Notes" | "Change Log" | "Exports" | "Audit";
+export type PriceType = "day" | "lump sum";
+export type LabourMode = "subcontract" | "in_house" | "both";
+export type TravelMode = "Drive" | "Fly";
+export type AirportTransport = "N/A" | "Drive" | "Uber";
+export type Section = "Labour" | "Travel" | "Hotel" | "Subsistence" | "Equipment" | "Materials" | "Subcontract" | "Repairs" | "Haulage" | "Reports" | "Additional items";
+export type PLCategory = "Labour" | "Subcontract" | "Materials" | "Equipment" | "Travel" | "Hotel/Subsistence" | "Haulage";
+
+export type AdditionalItem = {
+  name: string;
+  rate: number;
+  unit: string;
+  quantity: number;
+  margin: number;
+  plCategory?: PLCategory;
+};
+
+export type GrindingScope = {
+  enabled: boolean;
+  estimatedDays: number;
+  weekendDaysPerWeek: number;
+  nightShiftRequired: boolean;
+  nightShifts: number;
+  productionLabourMode: LabourMode;
+  productionMen: number;
+  productionLabourDays: number;
+  productionWeekendDays: number;
+  productionNightShifts: number;
+  productionHotelRequired: boolean;
+  productionHotelNights: number;
+  productionTravelDays: number;
+  productionOneWayKm: number;
+  productionVehicles: number;
+  productionSubcontractors: RepairSubcontractor[];
+  surveyorLabourMode: LabourMode;
+  surveyorCount: number;
+  surveyorDays: number;
+  surveyorWeekendDays: number;
+  surveyorNightShifts: number;
+  surveyorHotelRequired: boolean;
+  surveyorHotelNights: number;
+  surveyorTravelDays: number;
+  surveyorOneWayKm: number;
+  surveyorVehicles: number;
+  surveyorSubcontractors: RepairSubcontractor[];
+  weeks: number;
+  daysPerWeek: number;
+  surveyorsOnSite: number;
+  grindersOnSite: number;
+  labourerRequired: boolean;
+  hotelRequired: boolean;
+  vanRentalRequired: boolean;
+  engineeringReport: boolean;
+  subcontractMobilisation: number;
+  subcontractRate: number;
+  subcontractPriceType: PriceType;
+  generatorRequired: boolean;
+  largeGeneratorRequired: boolean;
+  largeGeneratorRate: number;
+  largeGeneratorDelivery: number;
+  largeGeneratorCollection: number;
+  propaneGrinders: number;
+  propanePerDay: number;
+  electricGrinders: number;
+  gasPlaners: number;
+  dustVacuums: number;
+  extensionCordsRequired: boolean;
+  grindingSegmentsRequired: boolean;
+  consumablesRequired: boolean;
+  equipmentShipping: number;
+};
+
+export type ScreedTeam = {
+  enabled: boolean;
+  contractorName: string;
+  scabble: boolean;
+  prep: boolean;
+  screed: boolean;
+  grind: boolean;
+  mobilisation: number;
+  priceType: PriceType;
+  daysProgrammed: number;
+  rate: number;
+};
+
+export type ScreedScope = {
+  enabled: boolean;
+  areaM2: number;
+  pourDays: number;
+  screwDays: number;
+  primerDays: number;
+  totalDaysOnSite: number;
+  daysPerWeek: number;
+  weekendDaysPerWeek: number;
+  nightShiftRequired: boolean;
+  nightShifts: number;
+  productionLabourMode: LabourMode;
+  productionMen: number;
+  productionLabourDays: number;
+  productionWeekendDays: number;
+  productionNightShifts: number;
+  productionHotelRequired: boolean;
+  productionHotelNights: number;
+  productionTravelDays: number;
+  productionOneWayKm: number;
+  productionVehicles: number;
+  surveyorLabourMode: LabourMode;
+  surveyors: number;
+  surveyorDays: number;
+  surveyorWeekendDays: number;
+  surveyorNightShifts: number;
+  surveyorHotelRequired: boolean;
+  surveyorHotelNights: number;
+  surveyorTravelDays: number;
+  surveyorOneWayKm: number;
+  surveyorVehicles: number;
+  surveyorSubcontractors: RepairSubcontractor[];
+  hotelRequired: boolean;
+  vanRentalRequired: boolean;
+  ukSupervisorRequired: boolean;
+  engineeringReport: boolean;
+  screedMaterialBags: number;
+  screedMaterialRate: number;
+  screedMaterialMargin: number;
+  primerUnits: number;
+  primerRate: number;
+  primerMargin: number;
+  sandBags: number;
+  sandRate: number;
+  sandMargin: number;
+  materialShipping: number;
+  teams: ScreedTeam[];
+  generatorDays: number;
+  largeGeneratorRequired: boolean;
+  largeGeneratorRate: number;
+  largeGeneratorDelivery: number;
+  largeGeneratorCollection: number;
+  propaneGrinders: number;
+  electricGrinders: number;
+  gasPlaners: number;
+  dustVacuums: number;
+  extensionCordSets: number;
+  grindingSegmentsRequired: boolean;
+  consumablesRequired: boolean;
+  equipmentShipping: number;
+};
+
+export type RepairMaterialInput = {
+  product: string;
+  lengthM: number;
+  widthMm: number;
+  depthMm: number;
+  areaM2: number;
+  thicknessMm: number;
+  coverageM2: number;
+};
+
+export type RepairMeasurementBasis = "linear" | "area" | "each" | "manual";
+export type RepairMaterialRole = "required" | "optional";
+export type RepairCalcMethod = "volume_lwd" | "area_thickness" | "linear" | "each" | "manual";
+export type RepairMaterialCategory = "Sealant" | "Mortar" | "Primer" | "Resin" | "Backing" | "Concrete" | "Screed" | "Tooling" | "Other";
+export type RepairUnitType = "kg" | "litres" | "ml" | "m" | "m2" | "m3" | "each";
+
+export type RepairMaterial = {
+  id: string;
+  name: string;
+  category: RepairMaterialCategory;
+  unitType: RepairUnitType;
+  unitSize: number;
+  costPerUnit: number;
+  calcMethod: RepairCalcMethod;
+  measuredUnitType: RepairUnitType;
+  coveragePerUnit: number;
+  wasteFactor: number;
+  densityKgPerL?: number;
+  sourceNote: string;
+  active: boolean;
+  notes: string;
+};
+
+export type RepairTypeMaterialRule = {
+  materialId: string;
+  role: RepairMaterialRole;
+  defaultSelected: boolean;
+};
+
+export type RepairType = {
+  code: string;
+  name: string;
+  measurementBasis: RepairMeasurementBasis;
+  defaultWidthMm: number;
+  defaultDepthMm: number;
+  defaultThicknessMm: number;
+  defaultOutputPerDay: number;
+  description: string;
+  materialRules: RepairTypeMaterialRule[];
+  active: boolean;
+};
+
+export type RepairCatalog = {
+  materials: RepairMaterial[];
+  types: RepairType[];
+};
+
+export type RepairLineMaterialSelection = {
+  materialId: string;
+  selected: boolean;
+};
+
+export type RepairLineItem = {
+  id: string;
+  repairTypeCode: string;
+  description: string;
+  lengthM: number;
+  widthMm: number;
+  depthMm: number;
+  areaM2: number;
+  thicknessMm: number;
+  eachQty: number;
+  holeDiameterMm: number;
+  holeDepthMm: number;
+  manualMaterialQty: number;
+  outputPerDay: number;
+  materialSelections: RepairLineMaterialSelection[];
+};
+
+export type RepairLabourMode = LabourMode;
+
+export type RepairSubcontractor = {
+  name: string;
+  priceType: PriceType;
+  rate: number;
+  days: number;
+  margin: number;
+  mobilisationCost: number;
+  mobilisations: number;
+  mobilisationMargin: number;
+};
+
+export type RepairsScope = {
+  enabled: boolean;
+  description: string;
+  labourMode: RepairLabourMode;
+  quantityLmOrM2: number;
+  labourMen: number;
+  labourDays: number;
+  weekendRequired: boolean;
+  weekendMen: number;
+  weekendDays: number;
+  nightShiftRequired: boolean;
+  nightShiftHours: number;
+  hotelRequired: boolean;
+  subsistenceRequired: boolean;
+  travelMen: number;
+  travelDays: number;
+  hotelNights: number;
+  subsistenceDays: number;
+  fuelKm: number;
+  mobilisationOneWayKm: number;
+  mobilisationTravelTimeHoursOneWay: number;
+  mobilisationVehicles: number;
+  mobilisationTrips: number;
+  equipmentWeeks: number;
+  pmVisits: number;
+  pmHotelNights: number;
+  pmSubsistenceDays: number;
+  pmFuelKm: number;
+  repairSubcontractors: RepairSubcontractor[];
+  subcontractors: AdditionalItem[];
+  hireItems: AdditionalItem[];
+  haulageItems: AdditionalItem[];
+  materialInputs: RepairMaterialInput[];
+  repairLines: RepairLineItem[];
+};
+
+export type ProjectInput = {
+  projectReference: string;
+  client: string;
+  location: string;
+  revision: string;
+  costedBy: string;
+  projectType: string;
+  includeGrinding: boolean;
+  includeScreeding: boolean;
+  includeRepairs: boolean;
+  travelMode: TravelMode;
+  distanceKmOneWay: number;
+  driveTimeDaysOneWay: number;
+  vehicles: number;
+  airportTransport: AirportTransport;
+  additionalFlights: number;
+  discountPercentage: number;
+  quoteCurrency: "EUR" | "GBP" | "PLN" | "USD";
+  exchangeRateToCompanyCurrency: number;
+  exchangeRateToGroupCurrency: number;
+  exchangeRateLockedAt?: string;
+  grinding: GrindingScope;
+  screeding: ScreedScope;
+  repairs: RepairsScope;
+  additionalItems: AdditionalItem[];
+};
+
+export type AdminRates = {
+  productionLabourDayRate: number;
+  productionLabourTravelDayRate: number;
+  productionWeekendDayRate: number;
+  productionNightShiftAllowance: number;
+  surveyorDayRate: number;
+  surveyorTravelDayRate: number;
+  labourerDayRate: number;
+  weekendDayRate: number;
+  travelDayRate: number;
+  labourerTravelDayRate: number;
+  mileagePerKm: number;
+  returnFlight: number;
+  airportUberReturn: number;
+  airportParkingPerDay: number;
+  hotel: number;
+  hotelMargin: number;
+  subsistence: number;
+  subsistenceMargin: number;
+  equipmentShipping: number;
+  companyCar: number;
+  rentalCar: number;
+  rentalVan: number;
+  equipmentRental: number;
+  engineeringReport: number;
+  subcontractMargin: number;
+  defaultMargin: number;
+  travelMargin: number;
+  flightMargin: number;
+  equipmentMargin: number;
+  materialMargin: number;
+  grindingSmallGeneratorDayRate: number;
+  grindingGrinderDayRate: number;
+  grindingPlanerDayRate: number;
+  grindingPropaneGrinderDayRate: number;
+  grindingPropaneFuelDayRate: number;
+  grindingElectricGrinderDayRate: number;
+  grindingConcretePlanerGasDayRate: number;
+  grindingDustVacuumDayRate: number;
+  grindingExtensionCordsDayRate: number;
+  grindingSegmentsDayRate: number;
+  grindingConsumablesDayRate: number;
+  screedSmallGeneratorDayRate: number;
+  screedDiamondGrinderPropaneDayRate: number;
+  screedDiamondGrinderElectricDayRate: number;
+  screedGasPlanerDayRate: number;
+  screedDustVacuumDayRate: number;
+  screedExtensionCordSetDayRate: number;
+  screedGrindingSegmentsDayRate: number;
+  screedConsumablesDayRate: number;
+  ukSupervisorDayRate: number;
+  ukSupervisorFlight: number;
+  ukSupervisorSubsistenceDayRate: number;
+  ukSupervisorHotelNightRate: number;
+  ukSupervisorCarHireDayRate: number;
+  repairInHouseLabourDayRate: number;
+  repairTechnicianDayRate: number;
+  repairWeekendDayRate: number;
+  repairNightShiftAllowance: number;
+  repairTravelDayRate: number;
+  repairHotel: number;
+  repairSubsistence: number;
+  repairFuelPerKm: number;
+  repairPmDayRate: number;
+  repairFloorSawWeekly: number;
+  repairDryVacWeekly: number;
+  repairWetVacWeekly: number;
+  repairBreakerWeekly: number;
+  repairHandGrinderWeekly: number;
+  repairPowerLeadsWeekly: number;
+  repairPaddleMixerWeekly: number;
+  repairGeneratorWeekly: number;
+  repairTransformersWeekly: number;
+  repairLpgGasWeekly: number;
+  repairMiscConsumablesWeekly: number;
+  repairBackingCordRate: number;
+  repairDiamondToolingWeekly: number;
+  repairWasteSkip: number;
+  rateMargins?: Partial<Record<string, number>>;
+};
+
+export type Line = {
+  section: Section;
+  item: string;
+  rate: number;
+  unit: string;
+  quantity: number;
+  cost: number;
+  margin: number;
+  total: number;
+  discount: number;
+  originalTotal: number;
+  source: string;
+  plCategory: PLCategory;
+};
+
+export type MaterialCalc = {
+  product: string;
+  quantity: number;
+  unit: string;
+  rate: number;
+  cost: number;
+  formula: string;
+};
+
+export type ProjectCalculations = {
+  projectReference: string;
+  client: string;
+  location: string;
+  serviceSummary: string;
+  grindingDays: number;
+  screedDays: number;
+  repairDays: number;
+  siteDays: number;
+  proposalLines: Line[];
+  budgetLines: Line[];
+  repairMaterialCalcs: MaterialCalc[];
+  originalProposalTotal: number;
+  discountAmount: number;
+  proposalTotal: number;
+  budgetCost: number;
+  budgetProfit: number;
+  budgetMargin: number;
+  dailyRate: number;
+  mobilisationRate: number;
+  standbyRate: number;
+};
+
+export type PLActuals = {
+  actualPrice: number;
+  datesRequired: string;
+  startDate: string;
+  endDate: string;
+  saturdayWorked: boolean;
+  sundayWorked: boolean;
+  travelDays: number;
+  daysTakenToComplete: number;
+  labourInternalDays: number;
+  labourInternalRate: number;
+  surveyDays: number;
+  surveyDayRate: number;
+  surveyTravelDays: number;
+  surveyTravelRate: number;
+  bonus: number;
+  labourInternal: number;
+  labourSubcontract: number;
+  repairs: number;
+  equipmentRental: number;
+  haulage: number;
+  materials: number;
+  engineeringReport: number;
+  travel: number;
+  hotel: number;
+  subsistence: number;
+  other: number;
+  completedAt?: string;
+};
+
+export type PLSummary = {
+  rows: Array<{ section: string; item: string; actual: number; budget: number; variance: number }>;
+  actualCost: number;
+  actualProfit: number;
+  actualMargin: number;
+  budgetProfit: number;
+  budgetMargin: number;
+  programmeStatus: string;
+};
+
+export type QuoteRevision = {
+  id: string;
+  label: string;
+  createdAt: string;
+  proposalTotal: number;
+  budgetCost: number;
+  budgetMargin: number;
+  discountPercentage: number;
+  inputs: ProjectInput;
+  calculations: ProjectCalculations;
+};
+
+export type ProjectNote = {
+  id: string;
+  createdAt: string;
+  author: string;
+  category: "Pricing" | "Client" | "Accounts" | "Handover" | "General";
+  text: string;
+};
+
+export type ChangeLogEntry = {
+  id: string;
+  createdAt: string;
+  actor: string;
+  action: string;
+  detail: string;
+};
+
+export type ProjectTimeEntry = {
+  id: string;
+  projectId: string;
+  date: string;
+  person: string;
+  role: "Technician" | "Supervisor" | "Project Manager" | "Admin" | "Other";
+  workType: "Grinding" | "Screeding" | "Repairs" | "Travel" | "Standby" | "Admin";
+  hours: number;
+  rate: number;
+  approved: boolean;
+  notes: string;
+  createdAt: string;
+};
+
+export type ProjectRecord = {
+  id: string;
+  companyId?: string;
+  createdAt: string;
+  createdBy?: string;
+  updatedBy?: string;
+  status: ProjectStatus;
+  accountsStatus: AccountsStatus;
+  inputs: ProjectInput;
+  calculations: ProjectCalculations;
+  actuals?: PLActuals;
+  revisions?: QuoteRevision[];
+  notes?: ProjectNote[];
+  changeLog?: ChangeLogEntry[];
+};

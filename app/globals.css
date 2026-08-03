@@ -1,0 +1,115 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --face-navy: #07182f;
+  --face-blue: #0067a6;
+  --face-cyan: #20a7d8;
+  --face-line: #d9e1ea;
+  --company-primary: #0067a6;
+  --company-primary-hover: #00588f;
+  --company-accent: #20a7d8;
+  --company-dark: #07182f;
+  --company-soft: #e9eef5;
+  --company-on-primary: #ffffff;
+}
+
+body {
+  background: #e9eef5;
+  color: #10233f;
+  font-feature-settings: "tnum";
+}
+
+* {
+  box-sizing: border-box;
+}
+
+input:not([type="checkbox"]):not([type="radio"]),
+select,
+textarea {
+  @apply min-h-11 w-full min-w-0 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition placeholder:text-slate-400 hover:border-slate-300 focus:border-sky-600 focus:ring-4 focus:ring-sky-600/10;
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+  @apply h-4 w-4 shrink-0 cursor-pointer rounded border-slate-300 accent-sky-700;
+}
+
+input.toggle-native {
+  @apply absolute h-px w-px overflow-hidden border-0 p-0 opacity-0;
+}
+
+label {
+  @apply block text-[11px] font-bold uppercase leading-snug text-slate-500;
+  letter-spacing: 0;
+}
+
+table {
+  @apply w-full border-separate border-spacing-0 text-sm;
+}
+
+th {
+  @apply bg-slate-900 px-4 py-3 text-left text-[11px] font-bold uppercase text-white;
+}
+
+td {
+  @apply border-b border-slate-200 px-4 py-3 align-top;
+}
+
+.app-shell {
+  background: #e9eef5;
+}
+
+.app-card {
+  @apply min-w-0 rounded-xl border border-slate-200 bg-white shadow-[0_18px_45px_rgba(7,24,47,0.08)];
+}
+
+.app-card-strong {
+  @apply min-w-0 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_22px_60px_rgba(7,24,47,0.11)];
+}
+
+.panel-heading {
+  @apply border-b border-slate-200 bg-slate-50 px-5 py-4;
+}
+
+.table-shell {
+  @apply overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm;
+}
+
+.form-section {
+  @apply min-w-0 rounded-xl border border-slate-200 bg-white shadow-sm;
+}
+
+.form-grid {
+  @apply grid gap-4 p-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4;
+}
+
+.primary-button {
+  @apply inline-flex min-w-0 items-center justify-center gap-2 whitespace-normal rounded-md px-4 py-2 text-sm font-bold leading-snug shadow-sm disabled:cursor-not-allowed disabled:opacity-50;
+  background: var(--company-primary);
+  color: var(--company-on-primary);
+}
+
+.primary-button:hover {
+  background: var(--company-primary-hover);
+}
+
+.secondary-button {
+  @apply inline-flex min-w-0 items-center justify-center gap-2 whitespace-normal rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold leading-snug text-slate-900 shadow-sm hover:border-slate-400 hover:bg-slate-50 disabled:opacity-40;
+}
+
+.nav-button {
+  @apply rounded-md px-3 py-2 text-sm font-bold leading-snug;
+}
+
+.nav-active {
+  @apply shadow-lg shadow-sky-950/20;
+  background: var(--company-primary);
+  color: var(--company-on-primary);
+}
+
+.nav-idle {
+  @apply bg-white text-slate-900 hover:bg-slate-100;
+}
