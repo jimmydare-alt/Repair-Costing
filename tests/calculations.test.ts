@@ -24,8 +24,16 @@ describe("FACE GmbH v2 contracting calculations", () => {
     expect(screedDays({ ...emptyInput, includeScreeding: false })).toBe(0);
   });
 
+  it("starts a blank project with no services or costs", () => {
+    const result = calculateProject(emptyInput, defaultRates);
+    expect(result.serviceSummary).toBe("Draft");
+    expect(result.proposalTotal).toBe(0);
+    expect(result.budgetCost).toBe(0);
+    expect(result.proposalLines.filter((line) => line.total > 0)).toHaveLength(0);
+  });
+
   it("uses 30 percent subcontract margin by default", () => {
-    const result = calculateProject({ ...emptyInput, grinding: { ...emptyInput.grinding, productionLabourMode: "subcontract", subcontractRate: 1000, estimatedDays: 2 } }, defaultRates);
+    const result = calculateProject({ ...emptyInput, includeGrinding: true, grinding: { ...emptyInput.grinding, enabled: true, productionLabourMode: "subcontract", subcontractRate: 1000, estimatedDays: 2 } }, defaultRates);
     const row = result.proposalLines.find((line) => line.item === "Grinding subcontractor");
     expect(row?.cost).toBe(2000);
     expect(row?.margin).toBe(600);
@@ -34,11 +42,13 @@ describe("FACE GmbH v2 contracting calculations", () => {
   it("does not add hidden project travel when subcontract grinding has no travel input", () => {
     const result = calculateProject({
       ...emptyInput,
+      includeGrinding: true,
       includeScreeding: false,
       includeRepairs: false,
       distanceKmOneWay: 0,
       grinding: {
         ...emptyInput.grinding,
+        enabled: true,
         estimatedDays: 2,
         productionLabourMode: "subcontract",
         productionSubcontractors: [{ name: "Grinding sub", priceType: "day", rate: 1000, days: 2, margin: 0.3, mobilisationCost: 0, mobilisations: 0, mobilisationMargin: 0.3 }],
@@ -47,6 +57,116 @@ describe("FACE GmbH v2 contracting calculations", () => {
       }
     }, defaultRates);
     expect(result.proposalLines.filter((line) => line.section === "Travel" && line.total > 0)).toHaveLength(0);
+    expect(result.proposalTotal).toBe(3250);
+  });
+
+  it("ignores grinding in-house labour, tools and travel when production and surveyor are subcontract only", () => {
+    const result = calculateProject({
+      ...emptyInput,
+      includeGrinding: true,
+      travelMode: "None",
+      distanceKmOneWay: 999,
+      grinding: {
+        ...emptyInput.grinding,
+        enabled: true,
+        estimatedDays: 3,
+        productionLabourMode: "subcontract",
+        productionMen: 10,
+        productionLabourDays: 8,
+        productionWeekendDays: 2,
+        productionHotelRequired: true,
+        productionHotelNights: 20,
+        productionTravelDays: 4,
+        productionOneWayKm: 500,
+        generatorRequired: true,
+        gasPlaners: 4,
+        dustVacuums: 6,
+        grindingSegmentsRequired: true,
+        consumablesRequired: true,
+        equipmentShipping: 800,
+        productionSubcontractors: [{ name: "Grinding sub", priceType: "day", rate: 1000, days: 3, margin: 0.3, mobilisationCost: 0, mobilisations: 0, mobilisationMargin: 0.3 }],
+        surveyorLabourMode: "subcontract",
+        surveyorCount: 3,
+        surveyorDays: 9,
+        surveyorHotelRequired: true,
+        surveyorHotelNights: 20,
+        surveyorTravelDays: 5,
+        surveyorOneWayKm: 500,
+        engineeringReport: true,
+        surveyorSubcontractors: [{ name: "Survey sub", priceType: "lump sum", rate: 500, days: 0, margin: 0.3, mobilisationCost: 0, mobilisations: 0, mobilisationMargin: 0.3 }]
+      }
+    }, defaultRates);
+    const positive = result.proposalLines.filter((line) => line.total > 0);
+    expect(positive.every((line) => line.section === "Subcontract")).toBe(true);
+    expect(result.proposalTotal).toBe(4550);
+  });
+
+  it("ignores screeding in-house labour, tools and travel when production and surveyor are subcontract only", () => {
+    const result = calculateProject({
+      ...emptyInput,
+      includeScreeding: true,
+      travelMode: "None",
+      screeding: {
+        ...emptyInput.screeding,
+        enabled: true,
+        totalDaysOnSite: 4,
+        productionLabourMode: "subcontract",
+        productionMen: 8,
+        productionLabourDays: 9,
+        productionHotelRequired: true,
+        productionHotelNights: 12,
+        productionTravelDays: 4,
+        productionOneWayKm: 600,
+        teams: [{ ...emptyInput.screeding.teams[0], enabled: true, contractorName: "Screed sub", rate: 2000, daysProgrammed: 4 }],
+        surveyorLabourMode: "subcontract",
+        surveyors: 3,
+        surveyorDays: 9,
+        surveyorHotelRequired: true,
+        surveyorHotelNights: 12,
+        surveyorTravelDays: 4,
+        surveyorOneWayKm: 600,
+        engineeringReport: true,
+        surveyorSubcontractors: [{ name: "Survey sub", priceType: "lump sum", rate: 500, days: 0, margin: 0.3, mobilisationCost: 0, mobilisations: 0, mobilisationMargin: 0.3 }],
+        generatorDays: 4,
+        propaneGrinders: 4,
+        gasPlaners: 2,
+        dustVacuums: 4,
+        extensionCordSets: 5,
+        grindingSegmentsRequired: true,
+        consumablesRequired: true,
+        equipmentShipping: 700
+      }
+    }, defaultRates);
+    const positive = result.proposalLines.filter((line) => line.total > 0);
+    expect(positive.every((line) => line.section === "Subcontract")).toBe(true);
+    expect(result.proposalTotal).toBe(11050);
+  });
+
+  it("ignores repair in-house labour, hotel and travel when repair labour is subcontract only", () => {
+    const result = calculateProject({
+      ...emptyInput,
+      includeRepairs: true,
+      travelMode: "None",
+      repairs: {
+        ...emptyInput.repairs,
+        enabled: true,
+        labourMode: "subcontract",
+        labourMen: 6,
+        labourDays: 5,
+        weekendRequired: true,
+        weekendDays: 2,
+        nightShiftRequired: true,
+        nightShiftHours: 5,
+        hotelRequired: true,
+        hotelNights: 12,
+        travelDays: 4,
+        mobilisationOneWayKm: 700,
+        repairSubcontractors: [{ name: "Repair sub", priceType: "lump sum", rate: 2000, days: 0, margin: 0.3, mobilisationCost: 500, mobilisations: 1, mobilisationMargin: 0.3 }],
+        haulageItems: []
+      }
+    }, defaultRates);
+    const positive = result.proposalLines.filter((line) => line.total > 0);
+    expect(positive.every((line) => line.section === "Subcontract")).toBe(true);
     expect(result.proposalTotal).toBe(3250);
   });
 

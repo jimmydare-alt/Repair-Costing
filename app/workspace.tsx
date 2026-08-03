@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Calculator, FileSpreadsheet, History, Save, Search, Settings } from "lucide-react";
 import { calculateActualSiteDays, calculatePL, calculateProject, calculateRepairLineMaterials, calculateWorkingDays, defaultActuals } from "@/lib/calculations";
 import { money, percent, formatDateTime } from "@/lib/format";
-import { defaultRates, emptyInput, validationInput } from "@/lib/rates";
+import { defaultRates, emptyInput } from "@/lib/rates";
 import { createRepairLine, defaultRepairCatalog, repairTypeByCode } from "@/lib/repairCatalog";
 import { addProjectNote, loadProjects, loadRates, loadRepairCatalog, saveActuals, saveProject, saveRates, saveRepairCatalog, setStorageContext, updateProjectWorkflow } from "@/lib/storage";
 import { useAuth } from "@/lib/authContext";
@@ -25,6 +25,26 @@ const materialCategories: RepairMaterialCategory[] = ["Sealant", "Mortar", "Prim
 const materialUnitTypes: RepairUnitType[] = ["kg", "litres", "ml", "m", "m2", "m3", "each"];
 const plCategories: PLCategory[] = ["Labour", "Subcontract", "Materials", "Equipment", "Travel", "Hotel/Subsistence", "Haulage"];
 type RepairReadiness = { blockers: string[]; warnings: string[] };
+
+function cloneInput(input: ProjectInput): ProjectInput {
+  return JSON.parse(JSON.stringify(input)) as ProjectInput;
+}
+
+function serviceFlags(input: ProjectInput) {
+  return {
+    grinding: Boolean(input.includeGrinding && input.grinding.enabled),
+    screeding: Boolean(input.includeScreeding && input.screeding.enabled),
+    repairs: Boolean(input.includeRepairs && input.repairs.enabled)
+  };
+}
+
+function tabIsAllowed(tab: DetailTab, input: ProjectInput) {
+  const services = serviceFlags(input);
+  if (tab === "Grinding") return services.grinding;
+  if (tab === "Screeding") return services.screeding;
+  if (tab === "Repairs") return services.repairs;
+  return true;
+}
 
 function additionalItemsCost(items: AdditionalItem[]) {
   return items.reduce((sum, item) => sum + (item.rate * item.quantity), 0);
@@ -64,6 +84,7 @@ function repairReadiness(input: ProjectInput, repairCatalog: RepairCatalog): Rep
   const usesSubcontract = labourMode === "subcontract" || labourMode === "both";
   const usesInHouse = labourMode === "in_house" || labourMode === "both";
   if (!labourMode) blockers.push("Select a repair labour type before quoting.");
+  if (!input.repairs.repairLines.length) blockers.push("Add at least one repair type.");
   if (usesSubcontract && !input.repairs.repairSubcontractors.some((item) => item.rate > 0 && (item.priceType === "lump sum" || item.days > 0))) blockers.push("Add at least one repair subcontractor as a lump sum or day rate before quoting.");
   if (usesInHouse && input.repairs.labourMen <= 0) blockers.push("Add the number of in-house repair men before quoting.");
   input.repairs.repairLines.forEach((repairLine, index) => {
@@ -167,20 +188,20 @@ export default function Workspace() {
   const routeAdminTab: "Rates" | "Repair Types" | "Repair Materials" = pathname.includes("repair-types") ? "Repair Types" : pathname.includes("repair-materials") ? "Repair Materials" : "Rates";
   const [view, setView] = useState<View>(routeView);
   const [detailTab, setDetailTab] = useState<DetailTab>(routeTab);
-  const [input, setInput] = useState<ProjectInput>(validationInput);
+  const [input, setInput] = useState<ProjectInput>(() => cloneInput(emptyInput));
   const [rates, setRatesState] = useState<AdminRates>(defaultRates);
   const [repairCatalog, setRepairCatalog] = useState<RepairCatalog>(defaultRepairCatalog);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [editingId, setEditingId] = useState("");
   const [note, setNote] = useState("");
-  const [actuals, setActuals] = useState(defaultActuals(calculateProject(validationInput, defaultRates, defaultRepairCatalog)));
+  const [actuals, setActuals] = useState(defaultActuals(calculateProject(emptyInput, defaultRates, defaultRepairCatalog)));
   const calculations = useMemo(() => calculateProject(input, rates, repairCatalog), [input, rates, repairCatalog]);
   const selected = projects.find((project) => project.id === selectedId);
   const selectedCalcs = selected?.calculations ?? calculations;
   const pl = calculatePL(selectedCalcs, selected?.actuals ?? actuals);
   const routeModule = routeModuleKey(pathname);
-  const moduleBlocked = routeModule && !auth.enabledModules.includes(routeModule);
+  const moduleBlocked = routeModule && (routeModule === "company_admin" ? auth.role !== "super_admin" : !auth.enabledModules.includes(routeModule));
 
   useEffect(() => {
     setView(routeView);
@@ -202,7 +223,7 @@ export default function Workspace() {
         setActuals(loadedProjects[0].actuals ?? defaultActuals(loadedProjects[0].calculations));
       } else {
         setSelectedId("");
-        setActuals(defaultActuals(calculateProject(validationInput, loadedRates, loadedRepairCatalog)));
+        setActuals(defaultActuals(calculateProject(emptyInput, loadedRates, loadedRepairCatalog)));
       }
     });
   }, [auth.activeCompany.id, auth.session?.user.email, auth.session?.user.id]);
@@ -213,6 +234,16 @@ export default function Workspace() {
 
   async function refresh() {
     setProjects(await loadProjects());
+  }
+
+  function startNewProject() {
+    const blank = cloneInput(emptyInput);
+    setInput(blank);
+    setSelectedId("");
+    setEditingId("");
+    setActuals(defaultActuals(calculateProject(blank, rates, repairCatalog)));
+    setView("New Project");
+    setDetailTab("Overview");
   }
 
   async function saveCurrentProject(status: ProjectStatus = "Quoted") {
@@ -240,9 +271,10 @@ export default function Workspace() {
   }
 
   const selectedContext = selected ? `${selected.inputs.projectReference || "Draft"} - ${selected.inputs.client || "No client"} - ${selected.calculations.serviceSummary}` : "No project selected";
+  const shellServices = view === "Project Detail" && selected ? serviceFlags(selected.inputs) : serviceFlags(input);
 
   return (
-    <ProductShell view={view} pathname={pathname} selectedContext={selectedContext}>
+    <ProductShell view={view} pathname={pathname} selectedContext={selectedContext} activeServices={shellServices} onNewProject={startNewProject}>
       <section className="workspace-page">
         {moduleBlocked && <ModuleBlocked moduleKey={routeModule} />}
         {!moduleBlocked && <>
@@ -586,6 +618,12 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
     { key: "Review", label: "Review", enabled: true }
   ] satisfies Array<{ key: BuilderStep; label: string; enabled: boolean }>;
   const steps = allSteps.filter((step) => step.enabled);
+  useEffect(() => {
+    const routedStep = detailTab === "Grinding" || detailTab === "Screeding" || detailTab === "Repairs" ? detailTab : builderStep;
+    const nextStep = steps.some((step) => step.key === routedStep) ? routedStep : "Services";
+    if (builderStep !== nextStep) setBuilderStep(nextStep);
+    if (!tabIsAllowed(detailTab, input)) setDetailTab("Overview");
+  }, [detailTab, input.includeGrinding, input.includeScreeding, input.includeRepairs, input.grinding.enabled, input.screeding.enabled, input.repairs.enabled]);
   const activeIndex = Math.max(0, steps.findIndex((step) => step.key === builderStep));
   const setStep = (step: typeof builderStep) => {
     setBuilderStep(step);
@@ -595,7 +633,10 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
   const nextStep = () => setStep(steps[Math.min(activeIndex + 1, steps.length - 1)].key);
   const previousStep = () => setStep(steps[Math.max(activeIndex - 1, 0)].key);
   const readiness = repairReadiness(input, repairCatalog);
-  const canQuote = readiness.blockers.length === 0;
+  const grindingChecks = grindingReadiness(input);
+  const screedChecks = screedReadiness(input);
+  const quoteBlockers = [...grindingChecks.blockers, ...screedChecks.blockers, ...readiness.blockers];
+  const canQuote = quoteBlockers.length === 0;
 
   return (
     <div className="grid gap-5">
@@ -619,6 +660,12 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
           <div className="font-bold uppercase">{readiness.blockers.length ? "Repair quote is draft only" : "Repair quote needs review"}</div>
           <div className="mt-1">{readiness.blockers.length ? `${readiness.blockers.length} item${readiness.blockers.length === 1 ? "" : "s"} must be fixed before Save Quote is available.` : "There are repair assumptions to check before issuing."}</div>
           <button className="secondary-button mt-3" onClick={() => setStep("Repairs")}>Open Repairs</button>
+        </div>
+      )}
+      {quoteBlockers.length > 0 && !input.includeRepairs && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+          <div className="font-bold uppercase">Quote is draft only</div>
+          <div className="mt-1">{quoteBlockers.length} item{quoteBlockers.length === 1 ? "" : "s"} must be fixed before Save Quote is available.</div>
         </div>
       )}
       <div className="app-card-strong">
@@ -716,6 +763,7 @@ function ProjectBasics({ input, setInput }: { input: ProjectInput; setInput: (in
 }
 
 function TravelStep({ input, setInput }: { input: ProjectInput; setInput: (input: ProjectInput) => void }) {
+  const hasTravel = input.travelMode !== "None";
   return (
     <div>
       <div className="mb-5">
@@ -723,12 +771,13 @@ function TravelStep({ input, setInput }: { input: ProjectInput; setInput: (input
         <p className="mt-1 text-sm text-slate-600">Optional project-wide FACE travel. Leave blank when travel is already included in the service labour or subcontract price. Distances are kilometres.</p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        <Select label="Travel Mode" value={input.travelMode} options={["Drive", "Fly"]} onChange={(v) => setInput({ ...input, travelMode: v as ProjectInput["travelMode"] })} />
-        <NumberInput label="Distance One-Way km" value={input.distanceKmOneWay} onChange={(v) => setInput({ ...input, distanceKmOneWay: v })} />
-        <NumberInput label="Drive Time One-Way Days" value={input.driveTimeDaysOneWay} onChange={(v) => setInput({ ...input, driveTimeDaysOneWay: v })} />
-        <NumberInput label="Vehicles" value={input.vehicles} onChange={(v) => setInput({ ...input, vehicles: v })} />
-        <Select label="Airport Transport" value={input.airportTransport} options={["N/A", "Drive", "Uber"]} onChange={(v) => setInput({ ...input, airportTransport: v as ProjectInput["airportTransport"] })} />
-        <NumberInput label="Additional Flights" value={input.additionalFlights} onChange={(v) => setInput({ ...input, additionalFlights: v })} />
+        <Select label="Project-Wide Travel" value={input.travelMode} options={["None", "Drive", "Fly"]} onChange={(v) => setInput({ ...input, travelMode: v as ProjectInput["travelMode"] })} />
+        {!hasTravel && <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm font-bold text-sky-950 sm:col-span-2">No project-wide FACE travel will be added. Service-specific in-house travel still prices inside each selected labour section.</div>}
+        {hasTravel && input.travelMode === "Drive" && <NumberInput label="Distance One-Way km" value={input.distanceKmOneWay} onChange={(v) => setInput({ ...input, distanceKmOneWay: v })} />}
+        {hasTravel && input.travelMode === "Drive" && <NumberInput label="Drive Time One-Way Days" value={input.driveTimeDaysOneWay} onChange={(v) => setInput({ ...input, driveTimeDaysOneWay: v })} />}
+        {hasTravel && input.travelMode === "Drive" && <NumberInput label="Vehicles" value={input.vehicles} onChange={(v) => setInput({ ...input, vehicles: v })} />}
+        {hasTravel && <Select label="Airport Transport" value={input.airportTransport} options={["N/A", "Drive", "Uber"]} onChange={(v) => setInput({ ...input, airportTransport: v as ProjectInput["airportTransport"] })} />}
+        {hasTravel && <NumberInput label="Additional Flights" value={input.additionalFlights} onChange={(v) => setInput({ ...input, additionalFlights: v })} />}
         <NumberInput label="Discount %" value={input.discountPercentage} onChange={(v) => setInput({ ...input, discountPercentage: v })} />
       </div>
     </div>
@@ -810,8 +859,9 @@ function SummaryRow({ label, value, strong = false }: { label: string; value: st
   return <div className="min-w-0 rounded-lg border border-slate-100 bg-white px-3 py-3"><span className="block text-xs font-bold uppercase text-slate-500">{label}</span><b className={`mt-1 block break-words ${strong ? "text-xl text-sky-800" : "text-base text-slate-950"}`}>{value}</b></div>;
 }
 
-function DetailTabs({ tab, setTab }: { tab: DetailTab; setTab: (tab: DetailTab) => void }) {
-  return <div className="flex flex-wrap gap-2 rounded-xl bg-white p-2 shadow-sm">{detailTabs.map((item) => <button key={item} onClick={() => setTab(item)} className={`rounded-md px-3 py-2 text-sm font-bold ${tab === item ? "bg-sky-700 text-white" : "bg-slate-100 text-slate-800"}`}>{item}</button>)}</div>;
+function DetailTabs({ tab, setTab, input }: { tab: DetailTab; setTab: (tab: DetailTab) => void; input: ProjectInput }) {
+  const visibleTabs = detailTabs.filter((item) => tabIsAllowed(item, input));
+  return <div className="flex flex-wrap gap-2 rounded-xl bg-white p-2 shadow-sm">{visibleTabs.map((item) => <button key={item} onClick={() => setTab(item)} className={`rounded-md px-3 py-2 text-sm font-bold ${tab === item ? "bg-sky-700 text-white" : "bg-slate-100 text-slate-800"}`}>{item}</button>)}</div>;
 }
 
 function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates }) {
@@ -1662,13 +1712,16 @@ function AdditionalItems({ title, items, onChange }: { title: string; items: Add
 
 function ProjectDetail({ project, tab, setTab, actuals, setActuals, saveActuals, note, setNote, addNote, edit }: { project: ProjectRecord; tab: DetailTab; setTab: (tab: DetailTab) => void; actuals: ReturnType<typeof defaultActuals>; setActuals: (a: ReturnType<typeof defaultActuals>) => void; saveActuals: () => void; note: string; setNote: (v: string) => void; addNote: () => void; edit: () => void }) {
   const summary = calculatePL(project.calculations, actuals);
+  useEffect(() => {
+    if (!tabIsAllowed(tab, project.inputs)) setTab("Overview");
+  }, [project.id, tab]);
   return (
     <div className="grid gap-5">
       <div className="flex flex-wrap justify-between gap-3">
         <h2 className="text-2xl font-bold">{project.inputs.projectReference} - {project.inputs.client}</h2>
         <button className="secondary-button" onClick={edit}>Edit Quote</button>
       </div>
-      <DetailTabs tab={tab} setTab={setTab} />
+      <DetailTabs tab={tab} setTab={setTab} input={project.inputs} />
       {tab === "Overview" && <Overview calculations={project.calculations} rates={defaultRates} />}
       {tab === "Proposal" && <LineTable lines={project.calculations.proposalLines} />}
       {tab === "Budget" && <LineTable lines={project.calculations.budgetLines} />}

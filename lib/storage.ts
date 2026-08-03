@@ -369,7 +369,7 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
       ...(input?.repairs ?? {}),
       repairSubcontractors: normaliseRepairSubcontractors(input),
       materialInputs: input?.repairs?.materialInputs?.length ? input.repairs.materialInputs : emptyInput.repairs.materialInputs,
-      repairLines: input?.repairs?.repairLines?.length ? input.repairs.repairLines : [createRepairLine("Type 1")]
+      repairLines: Array.isArray(input?.repairs?.repairLines) ? input.repairs.repairLines : []
     },
     additionalItems: normaliseAdditionalItems(input?.additionalItems)
   };

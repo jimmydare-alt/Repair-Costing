@@ -8,6 +8,12 @@ import { useAuth } from "@/lib/authContext";
 import type { AppModuleKey } from "@/lib/company";
 import type { View } from "@/lib/types";
 
+type ActiveServices = {
+  grinding: boolean;
+  screeding: boolean;
+  repairs: boolean;
+};
+
 type NavItem = {
   view: View;
   href: string;
@@ -45,11 +51,18 @@ function navLabel(item: NavItem) {
   return item.view;
 }
 
-export function ProductShell({ view, pathname, selectedContext, children }: { view: View; pathname: string; selectedContext?: string; children: ReactNode }) {
+export function ProductShell({ view, pathname, selectedContext, activeServices = { grinding: false, screeding: false, repairs: false }, onNewProject, children }: { view: View; pathname: string; selectedContext?: string; activeServices?: ActiveServices; onNewProject?: () => void; children: ReactNode }) {
   const auth = useAuth();
   const [open, setOpen] = useState(false);
   const close = () => setOpen(false);
-  const visible = shellNav.filter((item) => auth.enabledModules.includes(item.moduleKey));
+  const visible = shellNav.filter((item) => {
+    if (item.moduleKey === "company_admin") return auth.role === "super_admin";
+    if (!auth.enabledModules.includes(item.moduleKey)) return false;
+    if (item.href === "/grinding") return activeServices.grinding;
+    if (item.href === "/screeding") return activeServices.screeding;
+    if (item.href === "/repairs") return activeServices.repairs;
+    return true;
+  });
   const groups: Array<NavItem["group"]> = ["Workspace", "Quote Builder", "Commercial", "Admin"];
   return (
     <main className={`app-shell ${open ? "nav-open" : ""}`}>
@@ -64,7 +77,7 @@ export function ProductShell({ view, pathname, selectedContext, children }: { vi
             if (!items.length) return null;
             return <div key={group} className="app-nav-group"><p className="app-nav-label">{group}</p><nav className="app-nav">{items.map((item, index) => {
               const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
-              return <Link key={`${item.href}-${index}`} href={item.href} className={active ? "active" : ""} onClick={close}>{item.icon}<span>{navLabel(item)}</span>{group === "Quote Builder" && <small>{String(index + 1).padStart(2, "0")}</small>}</Link>;
+              return <Link key={`${item.href}-${index}`} href={item.href} className={active ? "active" : ""} onClick={() => { if (item.href === "/new-project") onNewProject?.(); close(); }}>{item.icon}<span>{navLabel(item)}</span>{group === "Quote Builder" && <small>{String(index + 1).padStart(2, "0")}</small>}</Link>;
             })}</nav></div>;
           })}
         </div>
@@ -77,7 +90,7 @@ export function ProductShell({ view, pathname, selectedContext, children }: { vi
           <div className="command-context"><span>{auth.activeCompany.name} / {auth.activeCompany.defaultCurrency}</span><b>{view}</b>{selectedContext && <small>{selectedContext}</small>}</div>
           <div className="command-actions">
             {auth.companies.length > 1 && <select value={auth.activeCompany.id} onChange={(event) => auth.switchCompany(event.target.value)} className="command-select">{auth.companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select>}
-            <Link href="/new-project" className="command-new"><Plus size={16} />New Project</Link>
+            <Link href="/new-project" className="command-new" onClick={onNewProject}><Plus size={16} />New Project</Link>
             {auth.session && <button className="command-chip" onClick={() => void auth.signOut()}><span className="system-dot" />Sign out</button>}
           </div>
         </header>
@@ -86,4 +99,3 @@ export function ProductShell({ view, pathname, selectedContext, children }: { vi
     </main>
   );
 }
-

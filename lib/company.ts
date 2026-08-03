@@ -84,7 +84,10 @@ export function hasPermission(role: MembershipRole, permission: Permission) {
 }
 
 export function enabledNavigation(moduleKeys: AppModuleKey[], role: MembershipRole) {
-  return defaultModules.filter((module) => moduleKeys.includes(module.key) && hasPermission(role, module.permission));
+  return defaultModules.filter((module) => {
+    if (module.key === "company_admin") return role === "super_admin";
+    return moduleKeys.includes(module.key) && hasPermission(role, module.permission);
+  });
 }
 
 export function normaliseCurrency(value: string, fallback: CurrencyCode = "EUR"): CurrencyCode {
@@ -134,4 +137,3 @@ export const defaultCompanies: Company[] = [
     }
   }
 ];
-

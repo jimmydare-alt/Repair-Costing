@@ -176,6 +176,7 @@ export function calculateRepairLineMaterials(repairLine: RepairLineItem, repairC
 }
 
 function travelLines(input: ProjectInput, rates: AdminRates, people: number, siteDays: number) {
+  if (input.travelMode === "None") return [];
   const drive = input.travelMode === "Drive";
   const hasDriveTravel = drive && num(input.distanceKmOneWay) > 0;
   const hasFlyTravel = !drive;
@@ -369,7 +370,7 @@ export function calculateProject(input: ProjectInput, rates: AdminRates, repairC
   const rDays = repairDays(input, repairCatalog);
   const siteDays = Math.max(gDays, sDays, rDays);
   const people = Math.max(1, input.grinding.surveyorCount || input.screeding.surveyors || input.repairs.labourMen || 1);
-  const catalogueMaterialCalcs = input.includeRepairs ? input.repairs.repairLines.flatMap((repairLine) => calculateRepairLineMaterials(repairLine, repairCatalog)) : [];
+  const catalogueMaterialCalcs = input.includeRepairs && input.repairs.enabled ? input.repairs.repairLines.flatMap((repairLine) => calculateRepairLineMaterials(repairLine, repairCatalog)) : [];
   const repairMaterialCalcs = catalogueMaterialCalcs;
   const serviceLines = [
     ...grindingLines(input, rates),
@@ -389,7 +390,7 @@ export function calculateProject(input: ProjectInput, rates: AdminRates, repairC
   const budgetCost = money(budgetLines.reduce((sum, row) => sum + row.total, 0));
   const budgetProfit = money(proposalTotal - budgetCost);
   const budgetMargin = proposalTotal ? pct(budgetProfit / proposalTotal) : 0;
-  const services = [input.includeGrinding && "Grinding", input.includeScreeding && "Screeding", input.includeRepairs && "Repairs"].filter(Boolean).join(" + ") || "Draft";
+  const services = [input.includeGrinding && input.grinding.enabled && "Grinding", input.includeScreeding && input.screeding.enabled && "Screeding", input.includeRepairs && input.repairs.enabled && "Repairs"].filter(Boolean).join(" + ") || "Draft";
   const dailyRate = money(proposalLines.filter((row) => !["Travel", "Subcontract", "Haulage", "Reports", "Additional items"].includes(row.section)).reduce((sum, row) => sum + row.total, 0) / Math.max(1, siteDays));
   const mobilisationRate = money(proposalLines.filter((row) => ["Travel", "Subcontract", "Haulage", "Reports"].includes(row.section)).reduce((sum, row) => sum + row.total, 0));
   return {

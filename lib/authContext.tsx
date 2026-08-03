@@ -77,7 +77,9 @@ async function loadCompanyModules(client: SupabaseClient, companyId: string, rol
   const modules = (data ?? [])
     .map((row: any) => row.app_modules?.module_key)
     .filter((key: unknown): key is AppModuleKey => typeof key === "string");
-  return modules.length ? modules : defaultModulesForRole(role);
+  const enabled = modules.length ? modules : defaultModulesForRole(role);
+  if (role === "super_admin" && !enabled.includes("company_admin")) return [...enabled, "company_admin"];
+  return enabled;
 }
 
 function defaultModulesForRole(role: MembershipRole): AppModuleKey[] {
