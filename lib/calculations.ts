@@ -118,10 +118,10 @@ export function calculateRepairMaterial(input: RepairMaterialInput): MaterialCal
   return { product: input.product, quantity: money(quantity), unit: "units", rate, cost: money(quantity * rate), formula };
 }
 
-function calculateCatalogueMaterial(repairLine: RepairLineItem, material: RepairMaterial): MaterialCalc {
+function calculateCatalogueMaterial(repairLine: RepairLineItem, material: RepairMaterial, selection?: RepairLineItem["materialSelections"][number]): MaterialCalc {
   const length = num(repairLine.lengthM);
-  const width = num(repairLine.widthMm);
-  const depth = num(repairLine.depthMm);
+  const width = num(selection?.widthMm) || num(repairLine.widthMm);
+  const depth = num(selection?.depthMm) || num(repairLine.depthMm);
   const area = num(repairLine.areaM2);
   const thickness = num(repairLine.thicknessMm);
   const each = num(repairLine.eachQty);
@@ -166,12 +166,13 @@ function calculateCatalogueMaterial(repairLine: RepairLineItem, material: Repair
 
 export function calculateRepairLineMaterials(repairLine: RepairLineItem, repairCatalog: RepairCatalog = defaultRepairCatalog): MaterialCalc[] {
   const type = repairTypeByCode(repairLine.repairTypeCode, repairCatalog);
+  const selections = new Map(repairLine.materialSelections.map((selection) => [selection.materialId, selection]));
   const selected = new Set(repairLine.materialSelections.filter((selection) => selection.selected).map((selection) => selection.materialId));
   return type.materialRules
     .filter((rule) => rule.role === "required" || selected.has(rule.materialId))
     .map((rule) => materialById(rule.materialId, repairCatalog))
     .filter((material): material is RepairMaterial => Boolean(material))
-    .map((material) => calculateCatalogueMaterial(repairLine, material))
+    .map((material) => calculateCatalogueMaterial(repairLine, material, selections.get(material.id)))
     .filter((calc) => calc.quantity > 0 || calc.cost > 0);
 }
 
@@ -504,5 +505,5 @@ export function calculatePL(calculations: ProjectCalculations, actuals: PLActual
 
 export function searchRowTone(record: { accountsStatus: string; actuals?: PLActuals; calculations: ProjectCalculations }) {
   if (record.accountsStatus !== "Actuals Saved" || !record.actuals) return "yellow";
-  return calculatePL(record.calculations, record.actuals).actualMargin >= 30 ? "green" : "red";
+  return calculatePL(record.calculations, record.actuals).actualMargin >= 25 ? "green" : "red";
 }

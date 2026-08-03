@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { calculateActualSiteDays, calculatePL, calculateProject, calculateRepairLineMaterials, calculateRepairMaterial, calculateWorkingDays, defaultActuals, grindingDays, repairDays, screedDays } from "@/lib/calculations";
+import { calculateActualSiteDays, calculatePL, calculateProject, calculateRepairLineMaterials, calculateRepairMaterial, calculateWorkingDays, defaultActuals, grindingDays, repairDays, screedDays, searchRowTone } from "@/lib/calculations";
 import { createRepairLine, defaultRepairCatalog } from "@/lib/repairCatalog";
 import { defaultRates, emptyInput, validationInput } from "@/lib/rates";
 import type { RepairCatalog } from "@/lib/types";
@@ -202,6 +202,18 @@ describe("FACE GmbH v2 contracting calculations", () => {
     expect(rapidMender?.cost).toBe(1714.75);
   });
 
+  it("uses sealant-specific width and depth when selected on a repair line", () => {
+    const standard = { ...createRepairLine("Type 3", defaultRepairCatalog), lengthM: 60, widthMm: 50, depthMm: 50 };
+    const withSealantOverride = {
+      ...standard,
+      materialSelections: standard.materialSelections.map((selection) => selection.materialId === "rapid-seal-600" ? { ...selection, widthMm: 8, depthMm: 12 } : selection)
+    };
+    const standardSealant = calculateRepairLineMaterials(standard, defaultRepairCatalog).find((material) => material.product.includes("Rapid Seal"));
+    const overrideSealant = calculateRepairLineMaterials(withSealantOverride, defaultRepairCatalog).find((material) => material.product.includes("Rapid Seal"));
+    expect(standardSealant?.quantity).toBe(300);
+    expect(overrideSealant?.quantity).toBe(12);
+  });
+
   it("prices area based repair mortar from area and thickness", () => {
     const line = { ...createRepairLine("Type 4a", defaultRepairCatalog), areaM2: 8, thicknessMm: 15 };
     const arrisMortar = calculateRepairLineMaterials(line, defaultRepairCatalog).find((material) => material.product.includes("Arris Repair Mortar"));
@@ -274,6 +286,13 @@ describe("FACE GmbH v2 contracting calculations", () => {
     expect(summary.actualCost).toBe(50942);
     expect(summary.programmeStatus).toBe("PROJECT COMPLETED ON TIME");
     expect(summary.actualMargin).toBeGreaterThan(30);
+  });
+
+  it("flags saved P&L rows below 25 percent margin", () => {
+    const calculations = calculateProject(validationInput, defaultRates);
+    const actuals = { ...defaultActuals(calculations), actualPrice: 100000, other: 74000 };
+    expect(searchRowTone({ accountsStatus: "Actuals Saved", actuals, calculations })).toBe("green");
+    expect(searchRowTone({ accountsStatus: "Actuals Saved", actuals: { ...actuals, other: 75001 }, calculations })).toBe("red");
   });
 
   it("auto-calculates P&L bonus as 1 percent of actual price", () => {

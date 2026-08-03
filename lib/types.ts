@@ -208,6 +208,8 @@ export type RepairCatalog = {
 export type RepairLineMaterialSelection = {
   materialId: string;
   selected: boolean;
+  widthMm?: number;
+  depthMm?: number;
 };
 
 export type RepairLineItem = {

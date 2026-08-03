@@ -65,6 +65,17 @@ function adminRateMargin(rates: AdminRates, key: keyof AdminRates, fallback: num
   return Number(rates.rateMargins?.[String(key)] ?? fallback);
 }
 
+function linePLCategory(line: Line): PLCategory {
+  if (line.plCategory) return line.plCategory;
+  if (line.section === "Subcontract") return "Subcontract";
+  if (line.section === "Materials") return "Materials";
+  if (line.section === "Equipment" || line.section === "Additional items") return "Equipment";
+  if (line.section === "Travel") return "Travel";
+  if (line.section === "Hotel" || line.section === "Subsistence") return "Hotel/Subsistence";
+  if (line.section === "Haulage") return "Haulage";
+  return "Labour";
+}
+
 function repairLineQuantity(repairLine: RepairLineItem, repairCatalog: RepairCatalog) {
   const type = repairTypeByCode(repairLine.repairTypeCode, repairCatalog);
   return type.measurementBasis === "area" ? repairLine.areaM2 : type.measurementBasis === "each" ? repairLine.eachQty : type.measurementBasis === "manual" ? repairLine.manualMaterialQty : repairLine.lengthM;
@@ -809,6 +820,19 @@ function ReviewStep({ calculations, input, setInput }: { calculations: ReturnTyp
     acc[line.section] = (acc[line.section] ?? 0) + line.total;
     return acc;
   }, {});
+  const categoryRows = plCategories.map((category) => {
+    const proposal = calculations.proposalLines.filter((line) => linePLCategory(line) === category).reduce((sum, line) => sum + line.total, 0);
+    const budget = calculations.budgetLines.filter((line) => linePLCategory(line) === category).reduce((sum, line) => sum + line.total, 0);
+    const profit = proposal - budget;
+    const margin = proposal ? (profit / proposal) * 100 : 0;
+    return { category, proposal, budget, profit, margin };
+  }).filter((row) => row.proposal || row.budget);
+  const marginWarnings = [
+    calculations.proposalTotal && calculations.budgetMargin < 25 ? `Overall margin is ${percent(calculations.budgetMargin)}, below the 25% review threshold.` : "",
+    ...categoryRows
+      .filter((row) => row.proposal > 0 && row.margin < 25)
+      .map((row) => `${row.category} margin is ${percent(row.margin)}, below 25%.`)
+  ].filter(Boolean);
   return (
     <div className="grid gap-5">
       <div>
@@ -821,6 +845,10 @@ function ReviewStep({ calculations, input, setInput }: { calculations: ReturnTyp
         <Metric label="Margin" value={percent(calculations.budgetMargin)} />
         <Metric label="Site Days" value={String(calculations.siteDays)} />
       </div>
+      <div className={`rounded-xl border p-4 text-sm ${marginWarnings.length ? "border-amber-200 bg-amber-50 text-amber-950" : "border-emerald-200 bg-emerald-50 text-emerald-950"}`}>
+        <div className="mb-2 font-bold uppercase">{marginWarnings.length ? "Margin checks to review" : "Margin checks passed"}</div>
+        {marginWarnings.length ? <div className="grid gap-1">{marginWarnings.map((warning) => <div key={warning}>{warning}</div>)}</div> : <div>All active proposal and P&L category margins are at or above 25%.</div>}
+      </div>
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="app-card p-4">
           <h4 className="mb-3 font-bold">Proposal by Section</h4>
@@ -832,12 +860,33 @@ function ReviewStep({ calculations, input, setInput }: { calculations: ReturnTyp
           <div className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-600">Discount is applied across proposal lines. Budget cost is not discounted.</div>
         </div>
       </div>
+      <div className="app-card p-4">
+        <h4 className="mb-3 font-bold">Budget / Proposal by P&L Category</h4>
+        <div className="table-shell border-0">
+          <table>
+            <thead><tr><th>P&L Category</th><th>Budget</th><th>Proposal</th><th>Profit</th><th>Margin</th></tr></thead>
+            <tbody>
+              {categoryRows.map((row) => (
+                <tr key={row.category}>
+                  <td className="font-semibold">{row.category}</td>
+                  <td>{money(row.budget)}</td>
+                  <td>{money(row.proposal)}</td>
+                  <td className={row.profit < 0 ? "font-bold text-red-700" : row.profit === 0 ? "font-bold text-amber-700" : "font-bold text-emerald-700"}>{money(row.profit)}</td>
+                  <td className={row.proposal && row.margin < 25 ? "font-bold text-red-700" : "font-bold text-emerald-700"}>{percent(row.margin)}</td>
+                </tr>
+              ))}
+              {!categoryRows.length && <tr><td colSpan={5} className="text-slate-500">No active quote lines yet.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
       <LineTable lines={calculations.proposalLines} />
     </div>
   );
 }
 
 function QuoteSummary({ calculations }: { calculations: ReturnType<typeof calculateProject> }) {
+  const lowMargin = calculations.proposalTotal > 0 && calculations.budgetMargin < 25;
   return (
     <div className="app-card-strong">
       <div className="panel-heading">
@@ -846,7 +895,7 @@ function QuoteSummary({ calculations }: { calculations: ReturnType<typeof calcul
       <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
         <SummaryRow label="Proposal" value={money(calculations.proposalTotal)} strong />
         <SummaryRow label="Budget" value={money(calculations.budgetCost)} />
-        <SummaryRow label="Margin" value={percent(calculations.budgetMargin)} />
+        <SummaryRow label={lowMargin ? "Margin - Review" : "Margin"} value={percent(calculations.budgetMargin)} alert={lowMargin} />
         <SummaryRow label="Site Days" value={String(calculations.siteDays)} />
         <SummaryRow label="Daily Rate" value={money(calculations.dailyRate)} />
         <SummaryRow label="Mobilisation" value={money(calculations.mobilisationRate)} />
@@ -855,8 +904,8 @@ function QuoteSummary({ calculations }: { calculations: ReturnType<typeof calcul
   );
 }
 
-function SummaryRow({ label, value, strong = false }: { label: string; value: string; strong?: boolean }) {
-  return <div className="min-w-0 rounded-lg border border-slate-100 bg-white px-3 py-3"><span className="block text-xs font-bold uppercase text-slate-500">{label}</span><b className={`mt-1 block break-words ${strong ? "text-xl text-sky-800" : "text-base text-slate-950"}`}>{value}</b></div>;
+function SummaryRow({ label, value, strong = false, alert = false }: { label: string; value: string; strong?: boolean; alert?: boolean }) {
+  return <div className={`min-w-0 rounded-lg border px-3 py-3 ${alert ? "border-amber-200 bg-amber-50" : "border-slate-100 bg-white"}`}><span className={`block text-xs font-bold uppercase ${alert ? "text-amber-700" : "text-slate-500"}`}>{label}</span><b className={`mt-1 block break-words ${strong ? "text-xl text-sky-800" : alert ? "text-base text-amber-950" : "text-base text-slate-950"}`}>{value}</b></div>;
 }
 
 function DetailTabs({ tab, setTab, input }: { tab: DetailTab; setTab: (tab: DetailTab) => void; input: ProjectInput }) {
@@ -1324,6 +1373,15 @@ function RepairsForm({ input, setInput, repairCatalog, rates }: { input: Project
     return type.materialRules.filter((rule) => rule.role === "required" || selected.has(rule.materialId)).map((rule) => rule.materialId);
   };
   const selectedMaterials = (repairLine: RepairLineItem) => selectedMaterialIds(repairLine).map((id) => repairCatalog.materials.find((material) => material.id === id)).filter((material): material is RepairMaterial => Boolean(material));
+  const materialUsesOwnDimensions = (material: RepairMaterial) => material.category === "Sealant" && material.calcMethod === "volume_lwd";
+  const materialSelection = (repairLine: RepairLineItem, materialId: string) => repairLine.materialSelections.find((selection) => selection.materialId === materialId);
+  const patchMaterialSelection = (lineIndex: number, repairLine: RepairLineItem, materialId: string, next: Partial<RepairLineItem["materialSelections"][number]>) => {
+    const exists = repairLine.materialSelections.some((selection) => selection.materialId === materialId);
+    const materialSelections = exists
+      ? repairLine.materialSelections.map((selection) => selection.materialId === materialId ? { ...selection, ...next } : selection)
+      : [...repairLine.materialSelections, { materialId, selected: true, widthMm: repairLine.widthMm, depthMm: repairLine.depthMm, ...next }];
+    updateRepairLine(lineIndex, { materialSelections });
+  };
   const addOptionalMaterial = (lineIndex: number, repairLine: RepairLineItem, materialId: string) => {
     if (!materialId) return;
     toggleMaterial(lineIndex, materialId, true);
@@ -1363,7 +1421,9 @@ function RepairsForm({ input, setInput, repairCatalog, rates }: { input: Project
   const toggleMaterial = (lineIndex: number, materialId: string, selected: boolean) => {
     const line = r.repairLines[lineIndex];
     const existing = line.materialSelections.some((item) => item.materialId === materialId);
-    const materialSelections = existing ? line.materialSelections.map((item) => item.materialId === materialId ? { ...item, selected } : item) : [...line.materialSelections, { materialId, selected }];
+    const materialSelections = existing
+      ? line.materialSelections.map((item) => item.materialId === materialId ? { ...item, selected, widthMm: item.widthMm ?? line.widthMm, depthMm: item.depthMm ?? line.depthMm } : item)
+      : [...line.materialSelections, { materialId, selected, widthMm: line.widthMm, depthMm: line.depthMm }];
     updateRepairLine(lineIndex, { materialSelections });
   };
   return (
@@ -1409,6 +1469,7 @@ function RepairsForm({ input, setInput, repairCatalog, rates }: { input: Project
             const optionalAvailable = optional.filter((rule) => !optionalSelected.some((selected) => selected.materialId === rule.materialId));
             const pendingOptionalValue = pendingOptional[repairLine.id] || optionalAvailable[0]?.materialId || "";
             const materialCalcs = calculateRepairLineMaterials(repairLine, repairCatalog);
+            const sealantMaterials = selectedMaterials(repairLine).filter(materialUsesOwnDimensions);
             const days = Math.ceil(repairLineDays(repairLine, repairCatalog));
             const materials = materialCost(repairLine);
             const estimatedLineValue = materials * (1 + rates.materialMargin);
@@ -1475,6 +1536,25 @@ function RepairsForm({ input, setInput, repairCatalog, rates }: { input: Project
                     </div>
                   </div>
                 </div>
+                {sealantMaterials.length > 0 && (
+                  <div className="mt-4 rounded-lg border border-sky-100 bg-sky-50 p-3">
+                    <div className="mb-2 text-xs font-bold uppercase text-sky-700">Sealant-Specific Dimensions</div>
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      {sealantMaterials.map((material) => {
+                        const selection = materialSelection(repairLine, material.id);
+                        return (
+                          <div className="rounded-lg bg-white p-3 ring-1 ring-sky-100" key={material.id}>
+                            <div className="mb-2 truncate text-sm font-bold text-slate-950">{material.name}</div>
+                            <div className="grid gap-3 sm:grid-cols-2">
+                              <NumberInput label="Sealant Width mm" value={selection?.widthMm ?? repairLine.widthMm} onChange={(v) => patchMaterialSelection(index, repairLine, material.id, { widthMm: v })} />
+                              <NumberInput label="Sealant Depth mm" value={selection?.depthMm ?? repairLine.depthMm} onChange={(v) => patchMaterialSelection(index, repairLine, material.id, { depthMm: v })} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 {repairMode === "Advanced" && <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
                   <div className="mb-2 text-xs font-bold uppercase text-slate-500">Material Take-Off Preview</div>
                   {materialCalcs.length ? (

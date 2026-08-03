@@ -80,6 +80,6 @@ export function createRepairLine(repairTypeCode = "Type 1", catalog: RepairCatal
     holeDepthMm: type.measurementBasis === "each" ? type.defaultDepthMm : 0,
     manualMaterialQty: 0,
     outputPerDay: type.defaultOutputPerDay,
-    materialSelections: type.materialRules.map((rule) => ({ materialId: rule.materialId, selected: rule.defaultSelected }))
+    materialSelections: type.materialRules.map((rule) => ({ materialId: rule.materialId, selected: rule.defaultSelected, widthMm: type.defaultWidthMm, depthMm: type.defaultDepthMm }))
   };
 }
