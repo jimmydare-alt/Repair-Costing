@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
@@ -13,16 +12,10 @@ import { addProjectNote, loadProjects, loadRates, loadRepairCatalog, saveActuals
 import { useAuth } from "@/lib/authContext";
 import { hasPermission } from "@/lib/company";
 import { createBrowserSupabaseClient } from "@/lib/supabaseClient";
+import { ProductShell } from "@/components/AppShell";
 import type { AppModuleKey, CurrencyCode, MembershipRole } from "@/lib/company";
 import type { AdditionalItem, AdminRates, DetailTab, LabourMode, Line, PLCategory, PriceType, ProjectInput, ProjectRecord, ProjectStatus, RepairCatalog, RepairLabourMode, RepairLineItem, RepairMaterial, RepairMaterialCategory, RepairSubcontractor, RepairType, RepairUnitType, ScreedTeam, View } from "@/lib/types";
 
-const nav: Array<{ view: View; href: string; moduleKey: AppModuleKey }> = [
-  { view: "Dashboard", href: "/", moduleKey: "dashboard" },
-  { view: "New Project", href: "/new-project", moduleKey: "calculations" },
-  { view: "Project Search", href: "/project-search", moduleKey: "projects" },
-  { view: "Admin Rates", href: "/admin-rates", moduleKey: "admin_rates" },
-  { view: "Company Admin", href: "/company-admin", moduleKey: "company_admin" }
-];
 const detailTabs: DetailTab[] = ["Overview", "Grinding", "Screeding", "Repairs", "Proposal", "Budget", "P&L", "Time", "Assumptions", "Revisions", "Notes", "Change Log", "Exports", "Audit"];
 type BuilderStep = "Services" | "Project" | "Grinding" | "Screeding" | "Repairs" | "Extras" | "Travel" | "Review";
 type RepairPage = "Details" | "Labour" | "Review";
@@ -246,10 +239,11 @@ export default function Workspace() {
     setView("New Project");
   }
 
+  const selectedContext = selected ? `${selected.inputs.projectReference || "Draft"} - ${selected.inputs.client || "No client"} - ${selected.calculations.serviceSummary}` : "No project selected";
+
   return (
-    <main className="app-shell min-h-screen">
-      <Header view={view} setView={setView} />
-      <section className="mx-auto max-w-[1500px] px-4 py-6 sm:px-5">
+    <ProductShell view={view} pathname={pathname} selectedContext={selectedContext}>
+      <section className="workspace-page">
         {moduleBlocked && <ModuleBlocked moduleKey={routeModule} />}
         {!moduleBlocked && <>
         <WorkspaceBanner view={view} selected={selected} projects={projects} />
@@ -274,37 +268,7 @@ export default function Workspace() {
         )}
         </>}
       </section>
-    </main>
-  );
-}
-
-function Header({ view, setView }: { view: View; setView: (view: View) => void }) {
-  const auth = useAuth();
-  const visibleNav = nav.filter((item) => auth.enabledModules.includes(item.moduleKey));
-  return (
-    <header className="border-b-4 border-sky-500 bg-slate-950 text-white shadow-[0_18px_55px_rgba(7,24,47,0.24)]">
-      <div className="mx-auto flex max-w-[1500px] flex-col gap-4 px-4 py-4 sm:px-5 xl:flex-row xl:items-center xl:justify-between">
-        <div className="flex min-w-0 items-center gap-4">
-          <div className="flex h-16 w-48 shrink-0 items-center justify-center rounded-lg bg-white px-4 shadow-lg sm:h-20 sm:w-56">
-            <Image src="/face-logo.png" alt="FACE Consultants GmbH" width={210} height={70} className="h-auto max-h-14 object-contain sm:max-h-16" priority />
-          </div>
-          <div className="min-w-0">
-            <div className="text-xs font-bold uppercase text-sky-300">Contracting Costing Sheet</div>
-            <h1 className="mt-1 text-2xl font-semibold sm:text-3xl">FACE GmbH</h1>
-            <div className="mt-1 inline-flex rounded px-2 py-1 text-[10px] font-bold uppercase text-white" style={{ background: "var(--company-primary)" }}>{auth.activeCompany.name} - {auth.activeCompany.defaultCurrency}</div>
-          </div>
-        </div>
-        <nav className="grid w-full grid-cols-2 gap-1 rounded-xl bg-white p-1.5 shadow-lg sm:grid-cols-4 xl:max-w-xl">
-          {visibleNav.map((item) => <Link key={item.view} href={item.href} onClick={() => setView(item.view)} className={`nav-button text-center ${view === item.view ? "nav-active" : "nav-idle"}`}>{item.view}</Link>)}
-        </nav>
-        <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] xl:w-80">
-          {auth.companies.length > 1 ? <select value={auth.activeCompany.id} onChange={(event) => auth.switchCompany(event.target.value)} className="min-h-10 rounded-md border-0 bg-white px-3 py-2 text-sm font-bold text-slate-950">
-            {auth.companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
-          </select> : <div className="rounded-md bg-white px-3 py-2 text-sm font-bold text-slate-950">{auth.activeCompany.name}</div>}
-          {auth.session ? <button className="secondary-button w-full xl:w-auto" onClick={() => void auth.signOut()}>Sign Out</button> : <button className="secondary-button w-full xl:w-auto" onClick={() => setView("Account")}>Account</button>}
-        </div>
-      </div>
-    </header>
+    </ProductShell>
   );
 }
 
