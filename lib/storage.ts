@@ -3,6 +3,7 @@
 import { calculateProject } from "./calculations";
 import { defaultRates, emptyInput } from "./rates";
 import { createRepairLine, defaultRepairCatalog } from "./repairCatalog";
+import { allowedStatusTransitions, normaliseProjectStatus } from "./workflow";
 import { createBrowserSupabaseClient, isSupabaseConfigured } from "./supabaseClient";
 import type { AdminRates, ChangeLogEntry, PLActuals, ProjectInput, ProjectNote, ProjectRecord, ProjectStatus, QuoteRevision, RepairCatalog } from "./types";
 
@@ -56,7 +57,7 @@ async function supabaseContext() {
 }
 
 function requireCloudContext(operation: string): never {
-  throw new Error(`${operation} requires an authenticated company cloud session. No browser fallback was used.`);
+  throw new Error(`${operation} could not start because your secure company session is not ready. Sign out, sign in again and retry. Nothing was saved locally.`);
 }
 
 function readJson<T>(key: string, fallback: T): T {
@@ -158,25 +159,12 @@ function mergeCatalog(saved: Partial<RepairCatalog>): RepairCatalog {
   };
   const savedMaterials = (saved.materials ?? []).map((material) => normaliseMaterial(material as Partial<RepairCatalog["materials"][number]> & Record<string, unknown>));
   const savedTypes = saved.types ?? [];
-  const materials = [
-    ...savedMaterials,
-    ...defaultRepairCatalog.materials.filter((material) => !savedMaterials.some((savedMaterial) => savedMaterial.id === material.id))
-  ];
-  const mergedSavedTypes = savedTypes.map((savedType) => {
-    const defaultType = defaultRepairCatalog.types.find((type) => type.code === savedType.code);
-    if (!defaultType) return savedType;
-    return {
-      ...savedType,
-      materialRules: [
-        ...savedType.materialRules,
-        ...defaultType.materialRules.filter((rule) => !savedType.materialRules.some((savedRule) => savedRule.materialId === rule.materialId))
-      ]
-    };
-  });
-  const types = [
-    ...mergedSavedTypes,
-    ...defaultRepairCatalog.types.filter((type) => !savedTypes.some((savedType) => savedType.code === type.code))
-  ];
+  const materials = savedMaterials.length ? savedMaterials.map((material) => ({ ...material, active: material.active && material.costPerUnit > 0 && material.unitSize > 0 && material.coveragePerUnit > 0 })) : defaultRepairCatalog.materials;
+  const materialMap = new Map(materials.map((material) => [material.id, material]));
+  const types = savedTypes.length ? savedTypes.map((type) => {
+    const usableRules = type.materialRules.filter((rule) => materialMap.get(rule.materialId)?.active);
+    return { ...type, active: type.active && type.defaultOutputPerDay > 0 && usableRules.length > 0 };
+  }) : defaultRepairCatalog.types;
   return {
     materials: materials.length ? materials : defaultRepairCatalog.materials,
     types: types.length ? types : defaultRepairCatalog.types
@@ -234,13 +222,30 @@ export async function saveRatesWithVersion(rates: AdminRates) {
   }
 }
 
+export async function saveAdminData(rates: AdminRates, catalog: RepairCatalog) {
+  const supabase = await supabaseContext();
+  if (supabase) {
+    const { error } = await supabase.client.rpc("save_admin_bundle", {
+      target_company_id: supabase.companyId,
+      rates_value: rates,
+      repair_types_value: catalog.types,
+      repair_materials_value: catalog.materials
+    });
+    if (error) throw new Error(`Could not save admin data: ${error.message}`);
+    return;
+  }
+  if (isSupabaseConfigured()) requireCloudContext("Saving admin data");
+  await saveRatesWithVersion(rates);
+  await saveRepairCatalog(catalog);
+}
+
 function log(existing: ChangeLogEntry[] | undefined, actor: string, action: string, detail: string): ChangeLogEntry[] {
   return [{ id: uid(), createdAt: now(), actor, action, detail }, ...(existing ?? [])].slice(0, 200);
 }
 
 function makeRevision(input: ProjectInput, calculations: ProjectRecord["calculations"], rates: AdminRates, repairCatalog: RepairCatalog, actor: string): QuoteRevision {
   const approved = calculations.budgetCost > 0 && calculations.budgetProfit / calculations.budgetCost < 0.25 && Boolean(input.markupOverrideReason.trim());
-  return { id: uid(), label: input.revision || "Revision", createdAt: now(), proposalTotal: calculations.proposalTotal, budgetCost: calculations.budgetCost, budgetMargin: calculations.budgetMargin, discountPercentage: input.discountPercentage, inputs: input, calculations, rates, repairCatalog, calculationVersion: "3.0", markupApprovedBy: approved ? actor : undefined, markupApprovedAt: approved ? now() : undefined };
+  return { id: uid(), label: input.revision || "Revision", createdAt: now(), proposalTotal: calculations.proposalTotal, budgetCost: calculations.budgetCost, budgetMargin: calculations.budgetMargin, discountPercentage: input.discountPercentage, inputs: input, calculations, rates, repairCatalog, calculationVersion: "4.0", markupApprovedBy: approved ? actor : undefined, markupApprovedAt: approved ? now() : undefined };
 }
 
 function normaliseRepairSubcontractors(input?: Partial<ProjectInput>) {
@@ -345,7 +350,8 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
   const estimatedGrindingDays = Number(savedGrinding.estimatedDays ?? legacyGrindingDays ?? emptyInput.grinding.estimatedDays);
   const productionMen = Number(savedGrinding.productionMen ?? (savedGrinding.labourerRequired ? 1 : 0));
   const surveyorCount = Number(savedGrinding.surveyorCount ?? savedGrinding.surveyorsOnSite ?? emptyInput.grinding.surveyorCount);
-  const screedDays = Number(savedScreeding.totalDaysOnSite ?? 0) || (Array.isArray(savedScreeding.teams) ? savedScreeding.teams.reduce((sum, team) => sum + (team.enabled ? Number(team.daysProgrammed ?? 0) : 0), 0) : 0);
+  const activityDays = Number(savedScreeding.pourDays ?? 0) + Number(savedScreeding.screwDays ?? 0) + Number(savedScreeding.primerDays ?? 0);
+  const screedDays = Number(savedScreeding.totalDaysOnSite ?? 0) || activityDays;
   return {
     ...emptyInput,
     ...(input ?? {}),
@@ -353,6 +359,9 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
     exchangeRateToCompanyCurrency: asNumber(input?.exchangeRateToCompanyCurrency, 1),
     exchangeRateToGroupCurrency: asNumber(input?.exchangeRateToGroupCurrency, 1),
     projectTravelPeople: asNumber(input?.projectTravelPeople, emptyInput.projectTravelPeople),
+    projectTravelProductionPeople: asNumber(input?.projectTravelProductionPeople, input?.projectTravelPeople ?? emptyInput.projectTravelProductionPeople),
+    projectTravelSurveyorPeople: asNumber(input?.projectTravelSurveyorPeople, emptyInput.projectTravelSurveyorPeople),
+    projectTravelOtherPeople: asNumber(input?.projectTravelOtherPeople, emptyInput.projectTravelOtherPeople),
     phaseSchedule: {
       ...emptyInput.phaseSchedule,
       ...(input?.phaseSchedule ?? {}),
@@ -417,9 +426,10 @@ export async function loadProjects(): Promise<ProjectRecord[]> {
   return readJson<ProjectRecord[]>(PROJECTS_KEY, []).map((project) => ({ ...project, companyId: project.companyId ?? "local-face-gmbh", inputs: normaliseInput(project.inputs), actuals: normaliseActuals(project.actuals, project.calculations) }));
 }
 
-export async function saveProject(input: ProjectInput, rates: AdminRates, existingId?: string, actor = "System", repairCatalog: RepairCatalog = defaultRepairCatalog, status: ProjectStatus = "Quoted"): Promise<ProjectRecord> {
+export async function saveProject(input: ProjectInput, rates: AdminRates, existingId?: string, actor = "System", repairCatalog: RepairCatalog = defaultRepairCatalog, status: ProjectStatus = "Draft"): Promise<ProjectRecord> {
   const projects = await loadProjects();
   const existing = existingId ? projects.find((project) => project.id === existingId) : undefined;
+  if (existing && ["Lost", "Completed", "Closed"].includes(normaliseProjectStatus(existing.status))) throw new Error(`${normaliseProjectStatus(existing.status)} projects are locked and cannot be revised.`);
   const inputs = normaliseInput(input);
   const calculations = calculateProject(inputs, rates, repairCatalog);
   const savedActor = actorName(actor);
@@ -437,10 +447,12 @@ export async function saveProject(input: ProjectInput, rates: AdminRates, existi
     actuals: existing?.actuals,
     rateSnapshot: rates,
     repairCatalogSnapshot: repairCatalog,
-    calculationVersion: "3.0",
+    calculationVersion: "4.0",
     markupApprovedBy: calculations.budgetCost > 0 && calculations.budgetProfit / calculations.budgetCost < 0.25 && inputs.markupOverrideReason.trim() ? savedActor : undefined,
     markupApprovedAt: calculations.budgetCost > 0 && calculations.budgetProfit / calculations.budgetCost < 0.25 && inputs.markupOverrideReason.trim() ? now() : undefined,
-    revisions: [...(existing?.revisions ?? []), makeRevision(inputs, calculations, rates, repairCatalog, savedActor)],
+    revisions: normaliseProjectStatus(status) === "Approved Costing"
+      ? [...(existing?.revisions ?? []), makeRevision(inputs, calculations, rates, repairCatalog, savedActor)]
+      : existing?.revisions ?? [],
     notes: existing?.notes ?? [],
     changeLog: log(existing?.changeLog, savedActor, existing ? `${status} edited` : `${status} created`, `${inputs.projectReference || "Draft"} ${calculations.serviceSummary} ${calculations.proposalTotal}`)
   };
@@ -457,7 +469,12 @@ export async function saveProject(input: ProjectInput, rates: AdminRates, existi
 
 export async function updateProjectWorkflow(projectId: string, status: ProjectStatus, accountsStatus?: ProjectRecord["accountsStatus"], actor = "System") {
   const projects = await loadProjects();
-  const updated = projects.map((project) => project.id === projectId ? { ...project, status, accountsStatus: accountsStatus ?? project.accountsStatus, changeLog: log(project.changeLog, actorName(actor), "Workflow changed", `${project.status} to ${status}`) } : project);
+  const current = projects.find((project) => project.id === projectId);
+  if (!current) throw new Error("The selected project no longer exists.");
+  const nextStatus = normaliseProjectStatus(status);
+  if (!allowedStatusTransitions(current.status).includes(nextStatus)) throw new Error(`A project cannot move directly from ${normaliseProjectStatus(current.status)} to ${nextStatus}.`);
+  const nextAccountsStatus = accountsStatus ?? (nextStatus === "Completed" ? "Awaiting Accounts" : current.accountsStatus);
+  const updated = projects.map((project) => project.id === projectId ? { ...project, status: nextStatus, accountsStatus: nextAccountsStatus, changeLog: log(project.changeLog, actorName(actor), "Workflow changed", `${normaliseProjectStatus(project.status)} to ${nextStatus}`) } : project);
   const target = updated.find((project) => project.id === projectId);
   const supabase = await supabaseContext();
   if (supabase && target) {
@@ -475,45 +492,57 @@ export async function updateProjectWorkflow(projectId: string, status: ProjectSt
   writeJson(PROJECTS_KEY, updated);
 }
 
-export async function saveActuals(projectId: string, actuals: PLActuals, actor = "System") {
+export async function saveActuals(projectId: string, actuals: PLActuals, actor = "System", finalise = false) {
   const projects = await loadProjects();
-  const saved = { ...actuals, completedAt: now() };
-  const updated = projects.map((project) => project.id === projectId ? { ...project, actuals: saved, accountsStatus: "Actuals Saved" as const, changeLog: log(project.changeLog, actorName(actor), "P&L actuals saved", `${saved.actualPrice}`) } : project);
+  const saved = { ...actuals, completedAt: finalise ? now() : actuals.completedAt };
+  const updated = projects.map((project) => project.id === projectId ? { ...project, actuals: saved, accountsStatus: finalise ? "Actuals Saved" as const : project.accountsStatus, changeLog: log(project.changeLog, actorName(actor), finalise ? "P&L actuals finalised" : "P&L draft saved", `${saved.actualPrice}`) } : project);
   const target = updated.find((project) => project.id === projectId);
   const supabase = await supabaseContext();
   if (supabase && target) {
-    const { error: actualError } = await supabase.client.from("pl_actuals").upsert({
-      project_id: projectId,
-      company_id: supabase.companyId,
-      actual_price: saved.actualPrice,
-      actuals: saved,
-      programme: {
+    const programme = {
         startDate: saved.startDate,
         endDate: saved.endDate,
         saturdayWorked: saved.saturdayWorked,
         sundayWorked: saved.sundayWorked,
         travelDays: saved.travelDays,
         daysTakenToComplete: saved.daysTakenToComplete
-      },
-      status: "Actuals Saved",
-      saved_by: supabase.session.user.id,
-      saved_at: now(),
-      updated_at: now()
-    }, { onConflict: "project_id" });
+    };
+    const { error: actualError } = await supabase.client.rpc("save_pl_actuals_transaction", {
+      target_project_id: projectId,
+      actual_price_value: saved.actualPrice,
+      actuals_value: saved,
+      programme_value: programme,
+      change_log_value: target.changeLog ?? [],
+      finalise_value: finalise
+    });
     if (actualError) throw new Error(`Could not save P&L actuals: ${actualError.message}`);
-    const { error: projectError } = await supabase.client.from("projects").update({
-      actuals: saved,
-      accounts_status: "Actuals Saved",
-      change_log: target.changeLog ?? [],
-      updated_by: supabase.session.user.id,
-      updated_at: now()
-    }).eq("id", projectId).eq("company_id", supabase.companyId);
-    if (projectError) throw new Error(`Could not update project after P&L save: ${projectError.message}`);
     return saved;
   }
   if (isSupabaseConfigured()) requireCloudContext("Saving P&L actuals");
   writeJson(PROJECTS_KEY, updated);
   return saved;
+}
+
+export async function recordProjectHandover(projectId: string, actor = "System", issued = false) {
+  const projects = await loadProjects();
+  const current = projects.find((project) => project.id === projectId);
+  if (!current) throw new Error("The selected project no longer exists.");
+  const currentStatus = normaliseProjectStatus(current.status);
+  if (issued && !["Won", "Handover Issued"].includes(currentStatus)) throw new Error("Mark the project as Won before issuing the project manager handover.");
+  if (!issued && !["Approved Costing", "Won", "Handover Issued"].includes(currentStatus)) throw new Error("Approve the costing before saving a project manager handover.");
+  const issuedAt = now();
+  const action = issued ? "PM handover issued" : "PM handover generated";
+  const nextStatus = issued ? "Handover Issued" : currentStatus;
+  const changeLog = log(current.changeLog, actorName(actor), action, `${current.inputs.projectReference} revision ${current.inputs.revision || current.revisions?.length || 1}`);
+  const supabase = await supabaseContext();
+  if (supabase) {
+    const { error } = await supabase.client.from("projects").update({ status: nextStatus, change_log: changeLog, updated_by: supabase.session.user.id, updated_at: issuedAt }).eq("id", projectId).eq("company_id", supabase.companyId);
+    if (error) throw new Error(`Could not record the handover: ${error.message}`);
+    return issuedAt;
+  }
+  if (isSupabaseConfigured()) requireCloudContext("Recording a project handover");
+  writeJson(PROJECTS_KEY, projects.map((project) => project.id === projectId ? { ...project, status: nextStatus, changeLog } : project));
+  return issuedAt;
 }
 
 export async function addProjectNote(projectId: string, note: Omit<ProjectNote, "id" | "createdAt">) {
@@ -548,7 +577,7 @@ function rowToProject(row: Record<string, unknown>, actuals?: PLActuals): Projec
     createdAt: String(row.created_at ?? now()),
     createdBy: row.created_by ? String(row.created_by) : undefined,
     updatedBy: row.updated_by ? String(row.updated_by) : undefined,
-    status: (row.status as ProjectStatus) ?? "Draft",
+    status: normaliseProjectStatus(row.status),
     accountsStatus: (row.accounts_status as ProjectRecord["accountsStatus"]) ?? "Not Required",
     inputs,
     calculations,

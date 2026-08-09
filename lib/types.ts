@@ -1,7 +1,7 @@
 export type View = "Dashboard" | "New Project" | "Project Detail" | "Project Search" | "Admin Rates" | "Company Admin" | "Account";
-export type ProjectStatus = "Draft" | "Quoted" | "Won" | "Lost" | "Completed" | "Closed";
+export type ProjectStatus = "Draft" | "Ready for Review" | "Approved Costing" | "Won" | "Lost" | "Handover Issued" | "Completed" | "Closed" | "Quoted";
 export type AccountsStatus = "Not Required" | "Awaiting Accounts" | "Actuals Saved";
-export type DetailTab = "Summary" | "Costing" | "Commercial Review" | "Client Proposal" | "Actual P&L" | "Activity" | "Overview" | "Grinding" | "Screeding" | "Repairs" | "Proposal" | "Budget" | "P&L" | "Time" | "Assumptions" | "Revisions" | "Notes" | "Change Log" | "Exports" | "Audit";
+export type DetailTab = "Summary" | "Costing" | "Commercial Review" | "PM Handover" | "Actual P&L" | "Activity" | "Overview" | "Grinding" | "Screeding" | "Repairs" | "Proposal" | "Budget" | "P&L" | "Time" | "Assumptions" | "Revisions" | "Notes" | "Change Log" | "Exports" | "Audit";
 export type PriceType = "day" | "lump sum";
 export type LabourMode = "subcontract" | "in_house" | "both";
 export type TravelMode = "None" | "Drive" | "Fly";
@@ -15,6 +15,7 @@ export type PhaseSchedule = {
   dayOverrides: Partial<Record<ProjectServiceKey, number>>;
   startsWithPrevious: Partial<Record<ProjectServiceKey, boolean>>;
   projectDaysOverride: number;
+  projectDaysOverrideReason: string;
 };
 
 export type ProjectManagementScope = {
@@ -115,6 +116,7 @@ export type ScreedScope = {
   screwDays: number;
   primerDays: number;
   totalDaysOnSite: number;
+  totalDaysOverrideReason: string;
   daysPerWeek: number;
   weekendDaysPerWeek: number;
   nightShiftRequired: boolean;
@@ -313,6 +315,9 @@ export type ProjectInput = {
   includeRepairs: boolean;
   travelMode: TravelMode;
   projectTravelPeople: number;
+  projectTravelProductionPeople: number;
+  projectTravelSurveyorPeople: number;
+  projectTravelOtherPeople: number;
   distanceKmOneWay: number;
   driveTimeDaysOneWay: number;
   vehicles: number;
@@ -340,6 +345,7 @@ export type AdminRates = {
   productionNightShiftAllowance: number;
   surveyorDayRate: number;
   surveyorTravelDayRate: number;
+  otherInternalTravelDayRate: number;
   labourerDayRate: number;
   weekendDayRate: number;
   travelDayRate: number;

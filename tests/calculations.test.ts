@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { calculateActualSiteDays, calculatePhaseSchedule, calculatePL, calculateProject, calculateProjectRepairMaterials, calculateRepairLineMaterials, calculateRepairMaterial, calculateWorkingDays, defaultActuals, grindingDays, repairDays, screedDays, searchRowTone, weekendDaysForProgramme } from "@/lib/calculations";
+import { calculateActualSiteDays, calculatePhaseSchedule, calculatePL, calculateProject, calculateProjectRepairMaterials, calculateRepairLineMaterials, calculateWorkingDays, defaultActuals, grindingDays, repairDays, screedDays, searchRowTone, weekendDaysForProgramme } from "@/lib/calculations";
 import { createRepairLine, defaultRepairCatalog } from "@/lib/repairCatalog";
 import { defaultRates, emptyInput, validationInput } from "@/lib/rates";
 import type { ProjectServiceKey, RepairCatalog } from "@/lib/types";
+import { buildHandoverSummary } from "@/lib/handover";
 
 describe("FACE GmbH v2 contracting calculations", () => {
   it("calculates a detailed mixed validation project", () => {
@@ -11,9 +12,9 @@ describe("FACE GmbH v2 contracting calculations", () => {
     expect(result.grindingDays).toBe(5);
     expect(result.screedDays).toBe(4);
     expect(result.repairDays).toBe(3);
-    expect(result.proposalTotal).toBe(83192.99);
-    expect(result.budgetCost).toBe(73552.75);
-    expect(result.discountAmount).toBe(4378.58);
+    expect(result.proposalTotal).toBe(82443.92);
+    expect(result.budgetCost).toBe(72572.75);
+    expect(result.discountAmount).toBe(4339.15);
     expect(result.proposalLines.some((line) => line.item.includes("Team 2 price on site"))).toBe(true);
   });
 
@@ -248,6 +249,32 @@ describe("FACE GmbH v2 contracting calculations", () => {
     expect(summary.rows.map((row) => row.item)).toEqual(["Labour Internal", "Survey Days", "Survey Travel Days", "BDM Bonus", "Labour Subcontract", "Equipment Rental", "Haulage", "Materials", "Engineering Report", "Travel", "Hotel", "Subsistence", "Other"]);
   });
 
+  it("reconciles every displayed P&L budget row to the saved project budget", () => {
+    const result = calculateProject({
+      ...emptyInput,
+      includeGrinding: true,
+      grinding: {
+        ...emptyInput.grinding,
+        enabled: true,
+        estimatedDays: 7,
+        daysPerWeek: 5,
+        productionLabourMode: "in_house",
+        productionMen: 2,
+        surveyorLabourMode: "in_house",
+        surveyorCount: 1,
+        surveyorWeekendDays: 1,
+        surveyorNightShifts: 2,
+        nightShiftRequired: true,
+        engineeringReport: true
+      },
+      additionalItems: [{ name: "Extra accommodation", rate: 125, unit: "night", quantity: 2, margin: 0.2, plCategory: "Hotel/Subsistence" }]
+    }, defaultRates);
+    const summary = calculatePL(result, defaultActuals(result));
+    expect(summary.rows.reduce((sum, row) => sum + row.budget, 0)).toBe(result.budgetCost);
+    expect(summary.rows.find((row) => row.item === "Survey Days")?.budget).toBeGreaterThan(defaultRates.surveyorDayRate * 7);
+    expect(summary.rows.find((row) => row.item === "Hotel")?.budget).toBe(250);
+  });
+
   it("uses the additional item P&L category instead of assuming equipment", () => {
     const result = calculateProject({
       ...emptyInput,
@@ -269,15 +296,6 @@ describe("FACE GmbH v2 contracting calculations", () => {
       screeding: { ...validationInput.screeding, ukSupervisorRequired: true }
     }, defaultRates);
     expect(result.proposalLines.some((line) => line.item.toLowerCase().includes("uk supervisor"))).toBe(false);
-  });
-
-  it("matches Material Calcs formulas for repairs", () => {
-    const rapidMender = calculateRepairMaterial({ product: "CoGri Rapid Mender", lengthM: 60, widthMm: 20, depthMm: 25, areaM2: 0, thicknessMm: 0, coverageM2: 0 });
-    const seal = calculateRepairMaterial({ product: "CoGri Rapid Seal 60/75 (600ml)", lengthM: 120, widthMm: 8, depthMm: 12, areaM2: 0, thicknessMm: 0, coverageM2: 0 });
-    expect(rapidMender.quantity).toBe(4.4);
-    expect(rapidMender.cost).toBe(397.1);
-    expect(seal.quantity).toBe(22);
-    expect(seal.cost).toBe(396);
   });
 
   it("calculates P&L summary", () => {
@@ -330,6 +348,7 @@ describe("FACE GmbH v2 contracting calculations", () => {
 
   it("counts weekend days across the full programme", () => {
     expect(weekendDaysForProgramme(6, 5, 1)).toBe(1);
+    expect(weekendDaysForProgramme(7, 5, 1)).toBe(1);
     expect(weekendDaysForProgramme(12, 5, 1)).toBe(2);
     expect(weekendDaysForProgramme(14, 5, 2)).toBe(4);
   });
@@ -365,5 +384,50 @@ describe("FACE GmbH v2 contracting calculations", () => {
     expect(reopened.actuals.travel).toBe(1234);
     expect(reopened.actuals.hotel).toBe(567);
     expect(reopened.calculations.proposalTotal).toBe(calculations.proposalTotal);
+  });
+
+  it("uses summed screeding activities unless total days are deliberately overridden", () => {
+    const base = { ...emptyInput, includeScreeding: true, screeding: { ...emptyInput.screeding, enabled: true, pourDays: 2, screwDays: 3, primerDays: 1 } };
+    expect(screedDays(base)).toBe(6);
+    expect(screedDays({ ...base, screeding: { ...base.screeding, totalDaysOnSite: 4, totalDaysOverrideReason: "Activities overlap" } })).toBe(4);
+  });
+
+  it("uses overridden in-house production days for grinding equipment", () => {
+    const result = calculateProject({ ...emptyInput, includeGrinding: true, grinding: { ...emptyInput.grinding, enabled: true, estimatedDays: 4, productionLabourMode: "in_house", productionMen: 2, productionLabourDays: 6, surveyorLabourMode: "in_house", surveyorCount: 1, surveyorDays: 4, generatorRequired: true, dustVacuums: 1 } }, defaultRates);
+    expect(result.budgetLines.find((line) => line.item === "Grinders")?.quantity).toBe(12);
+    expect(result.budgetLines.find((line) => line.item === "10000 watt generator")?.quantity).toBe(6);
+    expect(result.budgetLines.find((line) => line.item === "Vacuums")?.quantity).toBe(6);
+  });
+
+  it("prices project-wide travel by internal role and never invents subcontract travellers", () => {
+    const result = calculateProject({ ...emptyInput, travelMode: "Drive", projectTravelPeople: 0, projectTravelProductionPeople: 2, projectTravelSurveyorPeople: 1, projectTravelOtherPeople: 1, distanceKmOneWay: 100, driveTimeDaysOneWay: 1, vehicles: 1 }, defaultRates);
+    expect(result.budgetLines.find((line) => line.item === "Project production travel")?.quantity).toBe(4);
+    expect(result.budgetLines.find((line) => line.item === "Project surveyor travel")?.quantity).toBe(2);
+    expect(result.budgetLines.find((line) => line.item === "Project other internal travel")?.quantity).toBe(2);
+    expect(result.budgetLines.some((line) => line.item.toLowerCase().includes("subcontract") && line.section === "Travel")).toBe(false);
+  });
+
+  it("does not invent a vehicle when the entered vehicle count is zero", () => {
+    const result = calculateProject({ ...emptyInput, travelMode: "Drive", projectTravelPeople: 0, projectTravelProductionPeople: 1, distanceKmOneWay: 100, driveTimeDaysOneWay: 1, vehicles: 0 }, defaultRates);
+    expect(result.budgetLines.find((line) => line.item === "Project mileage (round trip)")?.quantity).toBe(0);
+    expect(result.budgetLines.find((line) => line.item === "Company car / vehicle")?.quantity).toBe(0);
+  });
+
+  it("starts new repair lines at zero and does not substitute a missing repair type", () => {
+    const line = createRepairLine("Type 1", defaultRepairCatalog);
+    expect(line.lengthM).toBe(0);
+    expect(line.areaM2).toBe(0);
+    expect(line.eachQty).toBe(0);
+    const missing = createRepairLine("Deleted Type", defaultRepairCatalog);
+    expect(missing.repairTypeCode).toBe("Deleted Type");
+    expect(calculateRepairLineMaterials(missing, defaultRepairCatalog)).toHaveLength(0);
+  });
+
+  it("builds an internal handover from budget values without sell values", () => {
+    const calculations = calculateProject(validationInput, defaultRates);
+    const summary = buildHandoverSummary({ id: "handover", createdAt: "2026-08-09", status: "Approved Costing", accountsStatus: "Not Required", inputs: validationInput, calculations });
+    expect(summary.materials.length).toBeGreaterThan(0);
+    expect(summary.subcontractors.length).toBeGreaterThan(0);
+    expect(summary.categories.reduce((sum, row) => sum + row.budget, 0)).toBeCloseTo(calculations.budgetCost, 2);
   });
 });

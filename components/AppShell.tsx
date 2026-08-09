@@ -18,7 +18,7 @@ type NavItem = {
   view: View;
   href: string;
   moduleKey: AppModuleKey;
-  group: "Workspace" | "Quote Builder" | "Commercial" | "Admin";
+  group: "Workspace" | "Costing Builder" | "Commercial" | "Admin";
   icon: ReactNode;
 };
 
@@ -26,10 +26,10 @@ export const shellNav: NavItem[] = [
   { view: "Dashboard", href: "/", moduleKey: "dashboard", group: "Workspace", icon: <LayoutDashboard /> },
   { view: "Project Search", href: "/project-search", moduleKey: "projects", group: "Workspace", icon: <Search /> },
   { view: "Company Admin", href: "/company-admin", moduleKey: "company_admin", group: "Workspace", icon: <Building2 /> },
-  { view: "New Project", href: "/new-project", moduleKey: "calculations", group: "Quote Builder", icon: <Plus /> },
-  { view: "New Project", href: "/grinding", moduleKey: "calculations", group: "Quote Builder", icon: <Wrench /> },
-  { view: "New Project", href: "/screeding", moduleKey: "calculations", group: "Quote Builder", icon: <Calculator /> },
-  { view: "New Project", href: "/repairs", moduleKey: "calculations", group: "Quote Builder", icon: <Wrench /> },
+  { view: "New Project", href: "/new-project", moduleKey: "calculations", group: "Costing Builder", icon: <Plus /> },
+  { view: "New Project", href: "/grinding", moduleKey: "calculations", group: "Costing Builder", icon: <Wrench /> },
+  { view: "New Project", href: "/screeding", moduleKey: "calculations", group: "Costing Builder", icon: <Calculator /> },
+  { view: "New Project", href: "/repairs", moduleKey: "calculations", group: "Costing Builder", icon: <Wrench /> },
   { view: "Admin Rates", href: "/admin-rates", moduleKey: "admin_rates", group: "Admin", icon: <Settings /> },
   { view: "Admin Rates", href: "/admin-rates/repair-types", moduleKey: "repair_database", group: "Admin", icon: <Shield /> },
   { view: "Admin Rates", href: "/admin-rates/repair-materials", moduleKey: "repair_database", group: "Admin", icon: <Shield /> }
@@ -45,7 +45,7 @@ function navLabel(item: NavItem) {
   return item.view;
 }
 
-export function ProductShell({ view, pathname, selectedContext, activeServices = { grinding: false, screeding: false, repairs: false }, onNewProject, children }: { view: View; pathname: string; selectedContext?: string; activeServices?: ActiveServices; onNewProject?: () => void; children: ReactNode }) {
+export function ProductShell({ view, pathname, selectedContext, activeServices = { grinding: false, screeding: false, repairs: false }, onNewProject, canNavigate = () => true, children }: { view: View; pathname: string; selectedContext?: string; activeServices?: ActiveServices; onNewProject?: () => void; canNavigate?: (href: string) => boolean; children: ReactNode }) {
   const auth = useAuth();
   const [open, setOpen] = useState(false);
   const configuredLogo = auth.activeCompany.branding.logoPath;
@@ -59,7 +59,7 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
     if (item.href === "/repairs") return activeServices.repairs;
     return true;
   });
-  const groups: Array<NavItem["group"]> = ["Workspace", "Quote Builder", "Commercial", "Admin"];
+  const groups: Array<NavItem["group"]> = ["Workspace", "Costing Builder", "Commercial", "Admin"];
   return (
     <main className={`app-shell ${open ? "nav-open" : ""}`}>
       <aside className="app-sidebar">
@@ -73,7 +73,7 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
             if (!items.length) return null;
             return <div key={group} className="app-nav-group"><p className="app-nav-label">{group}</p><nav className="app-nav">{items.map((item, index) => {
               const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
-              return <Link key={`${item.href}-${index}`} href={item.href} className={active ? "active" : ""} onClick={() => { if (item.href === "/new-project") onNewProject?.(); close(); }}>{item.icon}<span>{navLabel(item)}</span>{group === "Quote Builder" && <small>{String(index + 1).padStart(2, "0")}</small>}</Link>;
+              return <Link key={`${item.href}-${index}`} href={item.href} className={active ? "active" : ""} onClick={(event) => { if (!canNavigate(item.href)) { event.preventDefault(); return; } if (item.href === "/new-project") onNewProject?.(); close(); }}>{item.icon}<span>{navLabel(item)}</span>{group === "Costing Builder" && <small>{String(index + 1).padStart(2, "0")}</small>}</Link>;
             })}</nav></div>;
           })}
         </div>
@@ -86,7 +86,7 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
           <div className="command-context"><span>{auth.activeCompany.name} / {auth.activeCompany.defaultCurrency}</span><b>{view}</b>{selectedContext && <small>{selectedContext}</small>}</div>
           <div className="command-actions">
             {auth.companies.length > 1 && <select value={auth.activeCompany.id} onChange={(event) => auth.switchCompany(event.target.value)} className="command-select">{auth.companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select>}
-            <Link href="/new-project" className="command-new" onClick={onNewProject}><Plus size={16} />New Project</Link>
+            <Link href="/new-project" className="command-new" onClick={(event) => { if (!canNavigate("/new-project")) { event.preventDefault(); return; } onNewProject?.(); }}><Plus size={16} />New Project</Link>
             {auth.session && <button className="command-chip" onClick={() => void auth.signOut()}><span className="system-dot" />Sign out</button>}
           </div>
         </header>

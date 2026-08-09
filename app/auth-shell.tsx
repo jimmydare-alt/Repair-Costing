@@ -22,7 +22,7 @@ function LoginGate({ children }: { children: React.ReactNode }) {
           <Image src="/cogri-group-logo.png" alt="CoGri Group" width={150} height={122} priority />
           <p>REMEDIAL COSTING WORKSPACE</p>
           <h1>Price repairs, grinding and screeding in one secure workspace.</h1>
-          <span>Build project budgets, proposals and P&amp;L actuals with company-controlled rates, repair databases and live Supabase storage.</span>
+          <span>Build controlled project costings, delivery budgets and P&amp;L actuals with company rates, repair databases and live Supabase storage.</span>
         </section>
         <section className="auth-card">
           <div className="auth-tabs">

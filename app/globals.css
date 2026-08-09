@@ -88,6 +88,28 @@ input.toggle-native {
   opacity: 0;
 }
 
+@media print {
+  body { background: #fff; }
+  body * { visibility: hidden; }
+  .handover-print,
+  .handover-print * { visibility: visible; }
+  .app-sidebar,
+  .app-commandbar,
+  .sidebar-scrim,
+  .handover-actions,
+  .ds-tabs { display: none !important; }
+  .app-shell,
+  .app-main,
+  .app-content,
+  .workspace-page,
+  .handover-print { position: absolute; inset: 0 auto auto 0; display: block !important; width: 100% !important; min-height: 0 !important; margin: 0 !important; padding: 0 !important; background: #fff !important; }
+  .handover-print .app-card,
+  .handover-print .app-card-strong { break-inside: avoid; box-shadow: none !important; }
+  .handover-print table { font-size: 10px; }
+  .handover-print th,
+  .handover-print td { padding: 7px 8px; }
+}
+
 label {
   display: block;
   color: var(--muted);

@@ -1,8 +1,8 @@
 # Supabase Setup
 
-Run the SQL files in `supabase/migrations` in filename order. If the first four files have already been run, only run the newer migration:
+Run the SQL files in `supabase/migrations` in filename order. If migrations 001 through 005 have already been run, only run the newest migration:
 
-- `005_company_admin_hardening.sql`
+- `006_rollout_workflow_and_accounts.sql`
 
 Supabase project supplied for this app:
 
@@ -17,10 +17,10 @@ For the requested local-first login behaviour:
 
 - Email/password auth: enabled
 - Email confirmation: disabled for now
-- Session persistence: browser session storage
+- Session persistence: browser local storage
 - Redirect URLs:
   - `http://localhost:3015`
-  - later Vercel URL
+  - `https://repair-costing.vercel.app`
   - later company server URL
 
 ## First Companies

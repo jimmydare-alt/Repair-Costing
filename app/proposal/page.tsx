@@ -1,1 +1,5 @@
-export { default } from "../workspace";
+import { redirect } from "next/navigation";
+
+export default function ProposalRedirect() {
+  redirect("/project-search");
+}

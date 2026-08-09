@@ -23,6 +23,7 @@ export const defaultRateMargins: Partial<Record<keyof AdminRates, number>> = {
   productionNightShiftAllowance: 0.2,
   surveyorDayRate: 0,
   surveyorTravelDayRate: 0,
+  otherInternalTravelDayRate: 0.2,
   labourerDayRate: 0.2,
   weekendDayRate: 0,
   travelDayRate: 0,
@@ -96,6 +97,7 @@ export const defaultRates: AdminRates = {
   productionNightShiftAllowance: 15,
   surveyorDayRate: 1000,
   surveyorTravelDayRate: 950,
+  otherInternalTravelDayRate: 575,
   labourerDayRate: 400,
   weekendDayRate: 500,
   travelDayRate: 950,
@@ -184,6 +186,9 @@ export const emptyInput: ProjectInput = {
   includeRepairs: false,
   travelMode: "None",
   projectTravelPeople: 1,
+  projectTravelProductionPeople: 0,
+  projectTravelSurveyorPeople: 0,
+  projectTravelOtherPeople: 0,
   distanceKmOneWay: 0,
   driveTimeDaysOneWay: 1,
   vehicles: 1,
@@ -198,7 +203,8 @@ export const emptyInput: ProjectInput = {
     order: ["Grinding", "Screeding", "Repairs"],
     dayOverrides: {},
     startsWithPrevious: {},
-    projectDaysOverride: 0
+    projectDaysOverride: 0,
+    projectDaysOverrideReason: ""
   },
   projectManagement: {
     enabled: false,
@@ -274,6 +280,7 @@ export const emptyInput: ProjectInput = {
     screwDays: 0,
     primerDays: 0,
     totalDaysOnSite: 0,
+    totalDaysOverrideReason: "",
     daysPerWeek: 5,
     weekendDaysPerWeek: 0,
     nightShiftRequired: false,
@@ -360,7 +367,7 @@ export const emptyInput: ProjectInput = {
     repairSubcontractors: [{ name: "Repair subcontractor", priceType: "lump sum", rate: 0, days: 0, margin: 0.3, mobilisationCost: 0, mobilisations: 0, mobilisationMargin: 0.3 }],
     subcontractors: [{ name: "Repair subcontractor", rate: 0, unit: "lump sum", quantity: 0, margin: 0.3 }],
     hireItems: [{ name: "Additional hire", rate: 0, unit: "week", quantity: 0, margin: 0.3 }],
-    haulageItems: [{ name: "Delivery of material", rate: 75, unit: "item", quantity: 0, margin: 0.2 }],
+    haulageItems: [{ name: "Delivery of material", rate: 75, unit: "item", quantity: 0, margin: 0.3 }],
     materialInputs: [
       { product: "CoGri Rapid Mender", lengthM: 0, widthMm: 0, depthMm: 0, areaM2: 0, thicknessMm: 0, coverageM2: 0 },
       { product: "CoGri Rapid Seal 60/75 (600ml)", lengthM: 0, widthMm: 0, depthMm: 0, areaM2: 0, thicknessMm: 0, coverageM2: 0 }
@@ -481,7 +488,7 @@ export const validationInput: ProjectInput = {
     repairSubcontractors: [{ name: "NCC", priceType: "lump sum", rate: 1500, days: 1, margin: 0.3, mobilisationCost: 0, mobilisations: 0, mobilisationMargin: 0.3 }],
     subcontractors: [{ name: "NCC", rate: 1500, unit: "lump sum", quantity: 1, margin: 0.3 }],
     hireItems: [{ name: "Waste skip", rate: 400, unit: "item", quantity: 1, margin: 0.3 }],
-    haulageItems: [{ name: "Delivery of material", rate: 75, unit: "item", quantity: 1, margin: 0.2 }],
+    haulageItems: [{ name: "Delivery of material", rate: 75, unit: "item", quantity: 1, margin: 0.3 }],
     materialInputs: [
       { product: "CoGri Rapid Mender", lengthM: 60, widthMm: 20, depthMm: 25, areaM2: 0, thicknessMm: 0, coverageM2: 0 },
       { product: "CoGri Rapid Seal 60/75 (600ml)", lengthM: 120, widthMm: 8, depthMm: 12, areaM2: 0, thicknessMm: 0, coverageM2: 0 },

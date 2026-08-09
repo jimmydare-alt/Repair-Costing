@@ -91,6 +91,7 @@ async function loadCompanyModules(client: SupabaseClient, companyId: string, rol
 function defaultModulesForRole(role: MembershipRole): AppModuleKey[] {
   if (role === "viewer") return ["dashboard", "projects", "reports"];
   if (role === "reviewer") return ["dashboard", "projects", "reports"];
+  if (role === "accounts") return ["dashboard", "projects", "reports"];
   if (role === "manager_editor") return ["dashboard", "projects", "calculations", "reports", "exports", "time_tracking"];
   return ["dashboard", "projects", "calculations", "reports", "admin_rates", "repair_database", "exports", "time_tracking", "company_admin"];
 }
@@ -122,8 +123,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     let live = true;
-    client.auth.getSession().then(async ({ data }) => {
+    client.auth.getSession().then(async ({ data, error }) => {
       if (!live) return;
+      if (error) {
+        setSession(null);
+        setLoading(false);
+        return;
+      }
       setSession(data.session);
       if (data.session?.user) {
         const loaded = await loadCompanies(client, data.session.user.id);
@@ -138,7 +144,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setActiveCompanyId(nextActive);
       }
       setLoading(false);
-    });
+    }).catch(() => { if (live) setLoading(false); });
     const { data: listener } = client.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
       if (!nextSession) {
@@ -146,7 +152,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setActiveCompanyId(defaultCompanies[1].id);
         setRole("super_admin");
         setEnabledModules(defaultModulesForRole("super_admin"));
+        setLoading(false);
+        return;
       }
+      setLoading(true);
+      setTimeout(() => {
+        void loadCompanies(client, nextSession.user.id).then(async (loaded) => {
+          if (!live) return;
+          setCompanies(loaded.companies);
+          const cookieCompany = typeof document !== "undefined" ? document.cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)?.[1] : undefined;
+          const requestedCompany = cookieCompany ? decodeURIComponent(cookieCompany) : "";
+          const nextActive = loaded.companies.some((company) => company.id === requestedCompany) ? requestedCompany : loaded.companies[0]?.id ?? defaultCompanies[1].id;
+          const nextRole = await loadRoleForCompany(client, nextSession.user.id, nextActive, loaded.role);
+          if (!live) return;
+          setActiveCompanyId(nextActive);
+          setRole(nextRole);
+          setEnabledModules(await loadCompanyModules(client, nextActive, nextRole));
+        }).finally(() => { if (live) setLoading(false); });
+      }, 0);
     });
     return () => {
       live = false;

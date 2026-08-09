@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { approvedBrandVariables, contrastRatio, isWcagAaText, validateLogoFile } from "@/lib/branding";
 import { convertCurrency, enabledNavigation, hasPermission, normaliseCurrency } from "@/lib/company";
+import { allowedStatusTransitions, normaliseProjectStatus, statusIsLocked } from "@/lib/workflow";
 
 describe("multi-company security helpers", () => {
   it("keeps viewer and editor permissions separate", () => {
@@ -40,5 +41,18 @@ describe("multi-company security helpers", () => {
     expect(normaliseCurrency("xxx", "GBP")).toBe("GBP");
     expect(convertCurrency(100, 4.25)).toBe(425);
   });
-});
 
+  it("keeps accounts out of costing edits while allowing P&L updates", () => {
+    expect(hasPermission("accounts", "projects.read")).toBe(true);
+    expect(hasPermission("accounts", "pl.update")).toBe(true);
+    expect(hasPermission("accounts", "projects.update")).toBe(false);
+    expect(hasPermission("accounts", "rates.update")).toBe(false);
+  });
+
+  it("normalises legacy quotes and locks approved workflow states", () => {
+    expect(normaliseProjectStatus("Quoted")).toBe("Approved Costing");
+    expect(statusIsLocked("Approved Costing")).toBe(true);
+    expect(allowedStatusTransitions("Approved Costing")).toEqual(["Approved Costing", "Won", "Lost"]);
+    expect(allowedStatusTransitions("Completed")).toEqual(["Completed", "Closed"]);
+  });
+});
