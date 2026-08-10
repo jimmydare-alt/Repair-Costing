@@ -1,9 +1,10 @@
 import type { ProjectStatus } from "./types";
 
-export const activeProjectStatuses: Exclude<ProjectStatus, "Quoted">[] = [
+export type ActiveProjectStatus = "Draft" | "Costing Complete" | "Won" | "Lost" | "Handover Issued" | "Completed" | "Closed";
+
+export const activeProjectStatuses: ActiveProjectStatus[] = [
   "Draft",
-  "Ready for Review",
-  "Approved Costing",
+  "Costing Complete",
   "Won",
   "Lost",
   "Handover Issued",
@@ -11,23 +12,23 @@ export const activeProjectStatuses: Exclude<ProjectStatus, "Quoted">[] = [
   "Closed"
 ];
 
-export function normaliseProjectStatus(status: unknown): Exclude<ProjectStatus, "Quoted"> {
-  if (status === "Quoted") return "Approved Costing";
-  return activeProjectStatuses.includes(status as Exclude<ProjectStatus, "Quoted">)
-    ? status as Exclude<ProjectStatus, "Quoted">
+export function normaliseProjectStatus(status: unknown): ActiveProjectStatus {
+  if (status === "Quoted" || status === "Approved Costing") return "Costing Complete";
+  if (status === "Ready for Review") return "Draft";
+  return activeProjectStatuses.includes(status as ActiveProjectStatus)
+    ? status as ActiveProjectStatus
     : "Draft";
 }
 
 export function statusIsLocked(status: ProjectStatus) {
-  return !["Draft", "Ready for Review"].includes(normaliseProjectStatus(status));
+  return normaliseProjectStatus(status) !== "Draft";
 }
 
-export function allowedStatusTransitions(status: ProjectStatus): Exclude<ProjectStatus, "Quoted">[] {
+export function allowedStatusTransitions(status: ProjectStatus): ActiveProjectStatus[] {
   const current = normaliseProjectStatus(status);
-  const transitions: Record<Exclude<ProjectStatus, "Quoted">, Exclude<ProjectStatus, "Quoted">[]> = {
-    "Draft": ["Draft", "Ready for Review"],
-    "Ready for Review": ["Draft", "Ready for Review", "Approved Costing"],
-    "Approved Costing": ["Approved Costing", "Won", "Lost"],
+  const transitions: Record<ActiveProjectStatus, ActiveProjectStatus[]> = {
+    "Draft": ["Draft", "Costing Complete"],
+    "Costing Complete": ["Costing Complete", "Won", "Lost"],
     "Won": ["Won", "Handover Issued", "Completed"],
     "Lost": ["Lost"],
     "Handover Issued": ["Handover Issued", "Completed"],

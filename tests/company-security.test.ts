@@ -49,10 +49,10 @@ describe("multi-company security helpers", () => {
     expect(hasPermission("accounts", "rates.update")).toBe(false);
   });
 
-  it("normalises legacy quotes and locks approved workflow states", () => {
-    expect(normaliseProjectStatus("Quoted")).toBe("Approved Costing");
-    expect(statusIsLocked("Approved Costing")).toBe(true);
-    expect(allowedStatusTransitions("Approved Costing")).toEqual(["Approved Costing", "Won", "Lost"]);
+  it("normalises legacy quotes and locks completed costings", () => {
+    expect(normaliseProjectStatus("Quoted")).toBe("Costing Complete");
+    expect(statusIsLocked("Costing Complete")).toBe(true);
+    expect(allowedStatusTransitions("Costing Complete")).toEqual(["Costing Complete", "Won", "Lost"]);
     expect(allowedStatusTransitions("Completed")).toEqual(["Completed", "Closed"]);
   });
 });

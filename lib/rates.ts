@@ -2,7 +2,7 @@ import type { AdminRates, ProjectInput, ScreedTeam } from "./types";
 import { createRepairLine } from "./repairCatalog";
 
 const screedTeam = (): ScreedTeam => ({
-  enabled: false,
+  enabled: true,
   contractorName: "",
   scabble: false,
   prep: false,
@@ -12,6 +12,9 @@ const screedTeam = (): ScreedTeam => ({
   mobilisationMargin: 0.3,
   priceType: "day",
   daysProgrammed: 0,
+  preparationDays: 0,
+  screedingDays: 0,
+  grindingDays: 0,
   rate: 0,
   margin: 0.3
 });
@@ -201,6 +204,7 @@ export const emptyInput: ProjectInput = {
   exchangeRateLockedAt: undefined,
   phaseSchedule: {
     order: ["Grinding", "Screeding", "Repairs"],
+    startDays: {},
     dayOverrides: {},
     startsWithPrevious: {},
     projectDaysOverride: 0,
@@ -219,6 +223,7 @@ export const emptyInput: ProjectInput = {
   },
   bdmBonusRequired: false,
   markupOverrideReason: "",
+  uiProgress: { builderStep: "Services", grindingPage: "Programme", screedPage: "Programme", repairPage: "Details" },
   grinding: {
     enabled: false,
     estimatedDays: 0,
@@ -259,6 +264,7 @@ export const emptyInput: ProjectInput = {
     subcontractRate: 0,
     subcontractPriceType: "day",
     generatorRequired: false,
+    generatorCount: 0,
     largeGeneratorRequired: false,
     largeGeneratorRate: 0,
     largeGeneratorDelivery: 0,
@@ -271,11 +277,15 @@ export const emptyInput: ProjectInput = {
     extensionCordsRequired: false,
     grindingSegmentsRequired: false,
     consumablesRequired: false,
-    equipmentShipping: 0
+    equipmentShipping: 0,
+    additionalTools: []
   },
   screeding: {
     enabled: false,
     areaM2: 0,
+    preparationDays: 0,
+    screedingDays: 0,
+    grindingDays: 0,
     pourDays: 0,
     screwDays: 0,
     primerDays: 0,
@@ -320,7 +330,7 @@ export const emptyInput: ProjectInput = {
     sandRate: 0,
     sandMargin: 0.2,
     materialShipping: 0,
-    teams: [screedTeam(), screedTeam(), screedTeam(), screedTeam()],
+    teams: [],
     generatorDays: 0,
     largeGeneratorRequired: false,
     largeGeneratorRate: 0,
@@ -423,6 +433,9 @@ export const validationInput: ProjectInput = {
     ...emptyInput.screeding,
     enabled: true,
     areaM2: 600,
+    preparationDays: 1,
+    screedingDays: 2,
+    grindingDays: 1,
     pourDays: 1,
     screwDays: 2,
     primerDays: 1,
@@ -444,8 +457,8 @@ export const validationInput: ProjectInput = {
     sandRate: 8,
     materialShipping: 450,
     teams: [
-      { ...screedTeam(), enabled: true, contractorName: "Team 1", scabble: true, prep: true, screed: true, mobilisation: 900, daysProgrammed: 4, rate: 2200 },
-      { ...screedTeam(), enabled: true, contractorName: "Team 2", grind: true, mobilisation: 400, daysProgrammed: 1, rate: 1200 },
+      { ...screedTeam(), enabled: true, contractorName: "Team 1", prep: true, screed: true, mobilisation: 900, daysProgrammed: 3, preparationDays: 1, screedingDays: 2, rate: 2200 },
+      { ...screedTeam(), enabled: true, contractorName: "Team 2", grind: true, mobilisation: 400, daysProgrammed: 1, grindingDays: 1, rate: 1200 },
       screedTeam(),
       screedTeam()
     ],

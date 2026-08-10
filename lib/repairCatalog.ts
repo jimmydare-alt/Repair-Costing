@@ -19,17 +19,26 @@ export const repairMaterials: RepairMaterial[] = [
   { id: "densifier", name: "CoGri Densifier / CoGri Denpro", category: "Other", unitType: "litres", unitSize: 1, costPerUnit: 0, calcMethod: "manual", measuredUnitType: "litres", coveragePerUnit: 1, wasteFactor: 1.1, sourceNote: "Admin setup required", active: false, notes: "Fill out in full before activating" }
 ];
 
-const rule = (materialId: string, role: "required" | "optional", defaultSelected = role === "required") => ({ materialId, role, defaultSelected });
+const rule = (materialId: string, role: "required" | "optional", defaultSelected = role === "required", dimensions?: { widthMm: number; depthMm: number }) => ({
+  materialId,
+  role,
+  defaultSelected,
+  usesOwnDimensions: Boolean(dimensions),
+  defaultWidthMm: dimensions?.widthMm,
+  defaultDepthMm: dimensions?.depthMm
+});
+
+const type3Sealant = (materialId: string, role: "required" | "optional") => rule(materialId, role, role === "required", { widthMm: 3, depthMm: 30 });
 
 export const repairTypes: RepairType[] = [
   { code: "Type 1", name: "Crack Repair", measurementBasis: "linear", defaultWidthMm: 8, defaultDepthMm: 30, defaultThicknessMm: 0, defaultOutputPerDay: 60, description: "Saw cut crack repair filled with LV Rapid resin.", materialRules: [rule("lv-rapid-600", "required"), rule("rapid-seal-600", "optional")], active: true },
   { code: "Type 2", name: "Joint Reseal", measurementBasis: "linear", defaultWidthMm: 8, defaultDepthMm: 30, defaultThicknessMm: 0, defaultOutputPerDay: 120, description: "3-10mm joint reseal.", materialRules: [rule("rapid-seal-600", "required"), rule("rapid-seal-37", "optional"), rule("arbo-mp20", "optional"), rule("backing-cord", "optional")], active: true },
   { code: "Type 2a", name: "Wide Joint Reseal", measurementBasis: "linear", defaultWidthMm: 15, defaultDepthMm: 30, defaultThicknessMm: 0, defaultOutputPerDay: 90, description: "10-20mm wider joint reseal.", materialRules: [rule("rapid-seal-37", "required"), rule("rapid-seal-600", "optional"), rule("arbo-mp20", "optional"), rule("backing-cord", "optional")], active: true },
   { code: "Type 2b", name: "Armour Joint Reseal", measurementBasis: "linear", defaultWidthMm: 15, defaultDepthMm: 30, defaultThicknessMm: 0, defaultOutputPerDay: 75, description: "Armoured joint reseal between steel arris plates.", materialRules: [rule("arbo-mp20", "required"), rule("rapid-seal-600", "optional"), rule("backing-cord", "optional")], active: true },
-  { code: "Type 3", name: "Joint Arris Repair", measurementBasis: "linear", defaultWidthMm: 50, defaultDepthMm: 50, defaultThicknessMm: 0, defaultOutputPerDay: 25, description: "Joint arris breakout and Rapid Mender repair with reseal.", materialRules: [rule("rapid-mender", "required"), rule("rapid-seal-600", "required"), rule("bondcoat-rbp", "optional"), rule("backing-cord", "optional")], active: true },
-  { code: "Type 3 Special", name: "Armoured Joint Arris Repair", measurementBasis: "linear", defaultWidthMm: 50, defaultDepthMm: 50, defaultThicknessMm: 0, defaultOutputPerDay: 18, description: "Armoured joint arris repair.", materialRules: [rule("rapid-mender", "required"), rule("rapid-seal-600", "required"), rule("bondcoat-rbp", "optional"), rule("backing-cord", "optional")], active: true },
-  { code: "Type 3n", name: "Joint Spall Nosing Repair", measurementBasis: "linear", defaultWidthMm: 50, defaultDepthMm: 50, defaultThicknessMm: 0, defaultOutputPerDay: 22, description: "Joint spall/nosing repair.", materialRules: [rule("rapid-mender", "required"), rule("rapid-seal-600", "required"), rule("backing-cord", "optional")], active: true },
-  { code: "Type 3PT", name: "PT Joint Repair", measurementBasis: "linear", defaultWidthMm: 100, defaultDepthMm: 50, defaultThicknessMm: 0, defaultOutputPerDay: 14, description: "Post-tensioned joint repair with steel joint removed locally.", materialRules: [rule("rapid-mender", "required"), rule("rapid-seal-600", "required"), rule("concrete-mix", "optional")], active: true },
+  { code: "Type 3", name: "Joint Arris Repair", measurementBasis: "linear", defaultWidthMm: 50, defaultDepthMm: 50, defaultThicknessMm: 0, defaultOutputPerDay: 25, description: "Joint arris breakout and Rapid Mender repair with reseal.", materialRules: [rule("rapid-mender", "required"), type3Sealant("rapid-seal-600", "required"), rule("bondcoat-rbp", "optional"), rule("backing-cord", "optional")], active: true },
+  { code: "Type 3 Special", name: "Armoured Joint Arris Repair", measurementBasis: "linear", defaultWidthMm: 50, defaultDepthMm: 50, defaultThicknessMm: 0, defaultOutputPerDay: 18, description: "Armoured joint arris repair.", materialRules: [rule("rapid-mender", "required"), type3Sealant("rapid-seal-600", "required"), rule("bondcoat-rbp", "optional"), rule("backing-cord", "optional")], active: true },
+  { code: "Type 3n", name: "Joint Spall Nosing Repair", measurementBasis: "linear", defaultWidthMm: 50, defaultDepthMm: 50, defaultThicknessMm: 0, defaultOutputPerDay: 22, description: "Joint spall/nosing repair.", materialRules: [rule("rapid-mender", "required"), type3Sealant("rapid-seal-600", "required"), rule("backing-cord", "optional")], active: true },
+  { code: "Type 3PT", name: "PT Joint Repair", measurementBasis: "linear", defaultWidthMm: 100, defaultDepthMm: 50, defaultThicknessMm: 0, defaultOutputPerDay: 14, description: "Post-tensioned joint repair with steel joint removed locally.", materialRules: [rule("rapid-mender", "required"), type3Sealant("rapid-seal-600", "required"), rule("concrete-mix", "optional")], active: true },
   { code: "Type 4a", name: "Surface Repair", measurementBasis: "area", defaultWidthMm: 0, defaultDepthMm: 0, defaultThicknessMm: 15, defaultOutputPerDay: 25, description: "Surface repair patch.", materialRules: [rule("arris-mortar-rbp", "required"), rule("bondcoat-rbp", "optional"), rule("rapid-mender", "optional")], active: true },
   { code: "Type 4b", name: "Surface Repair", measurementBasis: "area", defaultWidthMm: 0, defaultDepthMm: 0, defaultThicknessMm: 25, defaultOutputPerDay: 18, description: "Deeper surface repair / repair mortar patch.", materialRules: [rule("rapid-mender", "required"), rule("arris-mortar-rbp", "optional"), rule("bondcoat-rbp", "optional")], active: true },
   { code: "Type 5a", name: "Floor Bolt Cut and Fill", measurementBasis: "each", defaultWidthMm: 30, defaultDepthMm: 30, defaultThicknessMm: 0, defaultOutputPerDay: 60, description: "Floor bolt cut and resin fill.", materialRules: [rule("lv-rapid-600", "required"), rule("rapid-mender", "optional")], active: true },
@@ -92,6 +101,11 @@ export function createRepairLine(repairTypeCode = "", catalog: RepairCatalog = d
     holeDepthMm: type.measurementBasis === "each" ? type.defaultDepthMm : 0,
     manualMaterialQty: 0,
     outputPerDay: type.defaultOutputPerDay,
-    materialSelections: type.materialRules.map((rule) => ({ materialId: rule.materialId, selected: rule.defaultSelected, widthMm: type.defaultWidthMm, depthMm: type.defaultDepthMm }))
+    materialSelections: type.materialRules.map((rule) => ({
+      materialId: rule.materialId,
+      selected: rule.defaultSelected,
+      widthMm: rule.usesOwnDimensions ? rule.defaultWidthMm : undefined,
+      depthMm: rule.usesOwnDimensions ? rule.defaultDepthMm : undefined
+    }))
   };
 }

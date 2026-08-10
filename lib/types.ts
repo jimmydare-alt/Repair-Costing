@@ -1,5 +1,5 @@
 export type View = "Dashboard" | "New Project" | "Project Detail" | "Project Search" | "Admin Rates" | "Company Admin" | "Account";
-export type ProjectStatus = "Draft" | "Ready for Review" | "Approved Costing" | "Won" | "Lost" | "Handover Issued" | "Completed" | "Closed" | "Quoted";
+export type ProjectStatus = "Draft" | "Costing Complete" | "Won" | "Lost" | "Handover Issued" | "Completed" | "Closed" | "Ready for Review" | "Approved Costing" | "Quoted";
 export type AccountsStatus = "Not Required" | "Awaiting Accounts" | "Actuals Saved";
 export type DetailTab = "Summary" | "Costing" | "Commercial Review" | "PM Handover" | "Actual P&L" | "Activity" | "Overview" | "Grinding" | "Screeding" | "Repairs" | "Proposal" | "Budget" | "P&L" | "Time" | "Assumptions" | "Revisions" | "Notes" | "Change Log" | "Exports" | "Audit";
 export type PriceType = "day" | "lump sum";
@@ -12,6 +12,7 @@ export type ProjectServiceKey = "Grinding" | "Screeding" | "Repairs";
 
 export type PhaseSchedule = {
   order: ProjectServiceKey[];
+  startDays: Partial<Record<ProjectServiceKey, number>>;
   dayOverrides: Partial<Record<ProjectServiceKey, number>>;
   startsWithPrevious: Partial<Record<ProjectServiceKey, boolean>>;
   projectDaysOverride: number;
@@ -79,6 +80,7 @@ export type GrindingScope = {
   subcontractRate: number;
   subcontractPriceType: PriceType;
   generatorRequired: boolean;
+  generatorCount: number;
   largeGeneratorRequired: boolean;
   largeGeneratorRate: number;
   largeGeneratorDelivery: number;
@@ -92,6 +94,7 @@ export type GrindingScope = {
   grindingSegmentsRequired: boolean;
   consumablesRequired: boolean;
   equipmentShipping: number;
+  additionalTools: AdditionalItem[];
 };
 
 export type ScreedTeam = {
@@ -105,6 +108,9 @@ export type ScreedTeam = {
   mobilisationMargin: number;
   priceType: PriceType;
   daysProgrammed: number;
+  preparationDays: number;
+  screedingDays: number;
+  grindingDays: number;
   rate: number;
   margin: number;
 };
@@ -112,6 +118,9 @@ export type ScreedTeam = {
 export type ScreedScope = {
   enabled: boolean;
   areaM2: number;
+  preparationDays: number;
+  screedingDays: number;
+  grindingDays: number;
   pourDays: number;
   screwDays: number;
   primerDays: number;
@@ -209,6 +218,9 @@ export type RepairTypeMaterialRule = {
   materialId: string;
   role: RepairMaterialRole;
   defaultSelected: boolean;
+  usesOwnDimensions?: boolean;
+  defaultWidthMm?: number;
+  defaultDepthMm?: number;
 };
 
 export type RepairType = {
@@ -332,6 +344,12 @@ export type ProjectInput = {
   projectManagement: ProjectManagementScope;
   bdmBonusRequired: boolean;
   markupOverrideReason: string;
+  uiProgress?: {
+    builderStep?: string;
+    grindingPage?: "Programme" | "Labour" | "Tools & Review";
+    screedPage?: "Programme" | "Labour" | "Materials" | "Tools & Review";
+    repairPage?: "Details" | "Labour" | "Review";
+  };
   grinding: GrindingScope;
   screeding: ScreedScope;
   repairs: RepairsScope;
@@ -444,6 +462,7 @@ export type MaterialCalc = {
   rate: number;
   cost: number;
   formula: string;
+  unroundedUnits?: number;
 };
 
 export type ProjectCalculations = {

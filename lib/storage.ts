@@ -162,8 +162,13 @@ function mergeCatalog(saved: Partial<RepairCatalog>): RepairCatalog {
   const materials = savedMaterials.length ? savedMaterials.map((material) => ({ ...material, active: material.active && material.costPerUnit > 0 && material.unitSize > 0 && material.coveragePerUnit > 0 })) : defaultRepairCatalog.materials;
   const materialMap = new Map(materials.map((material) => [material.id, material]));
   const types = savedTypes.length ? savedTypes.map((type) => {
-    const usableRules = type.materialRules.filter((rule) => materialMap.get(rule.materialId)?.active);
-    return { ...type, active: type.active && type.defaultOutputPerDay > 0 && usableRules.length > 0 };
+    const defaultType = defaultRepairCatalog.types.find((item) => item.code === type.code);
+    const materialRules = (type.materialRules ?? []).map((rule) => ({
+      ...defaultType?.materialRules.find((item) => item.materialId === rule.materialId),
+      ...rule
+    }));
+    const usableRules = materialRules.filter((rule) => materialMap.get(rule.materialId)?.active);
+    return { ...type, materialRules, active: type.active && type.defaultOutputPerDay > 0 && usableRules.length > 0 };
   }) : defaultRepairCatalog.types;
   return {
     materials: materials.length ? materials : defaultRepairCatalog.materials,
@@ -243,9 +248,8 @@ function log(existing: ChangeLogEntry[] | undefined, actor: string, action: stri
   return [{ id: uid(), createdAt: now(), actor, action, detail }, ...(existing ?? [])].slice(0, 200);
 }
 
-function makeRevision(input: ProjectInput, calculations: ProjectRecord["calculations"], rates: AdminRates, repairCatalog: RepairCatalog, actor: string): QuoteRevision {
-  const approved = calculations.budgetCost > 0 && calculations.budgetProfit / calculations.budgetCost < 0.25 && Boolean(input.markupOverrideReason.trim());
-  return { id: uid(), label: input.revision || "Revision", createdAt: now(), proposalTotal: calculations.proposalTotal, budgetCost: calculations.budgetCost, budgetMargin: calculations.budgetMargin, discountPercentage: input.discountPercentage, inputs: input, calculations, rates, repairCatalog, calculationVersion: "4.0", markupApprovedBy: approved ? actor : undefined, markupApprovedAt: approved ? now() : undefined };
+function makeRevision(input: ProjectInput, calculations: ProjectRecord["calculations"], rates: AdminRates, repairCatalog: RepairCatalog): QuoteRevision {
+  return { id: uid(), label: input.revision || "Revision", createdAt: now(), proposalTotal: calculations.proposalTotal, budgetCost: calculations.budgetCost, budgetMargin: calculations.budgetMargin, discountPercentage: input.discountPercentage, inputs: input, calculations, rates, repairCatalog, calculationVersion: "5.0" };
 }
 
 function normaliseRepairSubcontractors(input?: Partial<ProjectInput>) {
@@ -346,12 +350,26 @@ function normaliseActuals(actuals: PLActuals | undefined, calculations: ProjectR
 export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
   const savedGrinding = (input?.grinding ?? {}) as Partial<ProjectInput["grinding"]>;
   const savedScreeding = (input?.screeding ?? {}) as Partial<ProjectInput["screeding"]>;
-  const legacyGrindingDays = Number(savedGrinding.weeks ?? emptyInput.grinding.weeks) * Number(savedGrinding.daysPerWeek ?? emptyInput.grinding.daysPerWeek);
-  const estimatedGrindingDays = Number(savedGrinding.estimatedDays ?? legacyGrindingDays ?? emptyInput.grinding.estimatedDays);
+  const hasLegacyGrindingProgramme = savedGrinding.estimatedDays == null && savedGrinding.weeks != null && savedGrinding.daysPerWeek != null;
+  const legacyGrindingDays = hasLegacyGrindingProgramme ? Number(savedGrinding.weeks) * Number(savedGrinding.daysPerWeek) : 0;
+  const estimatedGrindingDays = Number(savedGrinding.estimatedDays ?? legacyGrindingDays);
   const productionMen = Number(savedGrinding.productionMen ?? (savedGrinding.labourerRequired ? 1 : 0));
   const surveyorCount = Number(savedGrinding.surveyorCount ?? savedGrinding.surveyorsOnSite ?? emptyInput.grinding.surveyorCount);
-  const activityDays = Number(savedScreeding.pourDays ?? 0) + Number(savedScreeding.screwDays ?? 0) + Number(savedScreeding.primerDays ?? 0);
+  const preparationDays = Number(savedScreeding.preparationDays ?? savedScreeding.pourDays ?? 0);
+  const screedingDays = Number(savedScreeding.screedingDays ?? savedScreeding.screwDays ?? 0);
+  const grindingDays = Number(savedScreeding.grindingDays ?? savedScreeding.primerDays ?? 0);
+  const activityDays = preparationDays + screedingDays + grindingDays;
   const screedDays = Number(savedScreeding.totalDaysOnSite ?? 0) || activityDays;
+  const normalisedTeams = (savedScreeding.teams ?? []).filter((team) => team.enabled !== false || Boolean(team.contractorName || team.rate || team.mobilisation || team.prep || team.screed || team.grind)).map((team) => ({
+    ...team,
+    enabled: true,
+    scabble: false,
+    preparationDays: Number(team.preparationDays ?? (team.prep ? preparationDays : 0)),
+    screedingDays: Number(team.screedingDays ?? (team.screed ? screedingDays : 0)),
+    grindingDays: Number(team.grindingDays ?? (team.grind ? grindingDays : 0)),
+    margin: asNumber(team.margin, 0.3),
+    mobilisationMargin: asNumber(team.mobilisationMargin, 0.3)
+  }));
   return {
     ...emptyInput,
     ...(input ?? {}),
@@ -366,16 +384,20 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
       ...emptyInput.phaseSchedule,
       ...(input?.phaseSchedule ?? {}),
       order: input?.phaseSchedule?.order?.length ? input.phaseSchedule.order : emptyInput.phaseSchedule.order,
+      startDays: input?.phaseSchedule?.startDays ?? {},
       dayOverrides: input?.phaseSchedule?.dayOverrides ?? {},
       startsWithPrevious: input?.phaseSchedule?.startsWithPrevious ?? {}
     },
     projectManagement: { ...emptyInput.projectManagement, ...(input?.projectManagement ?? {}) },
     bdmBonusRequired: Boolean(input?.bdmBonusRequired),
     markupOverrideReason: input?.markupOverrideReason ?? "",
+    uiProgress: { ...emptyInput.uiProgress, ...(input?.uiProgress ?? {}) },
     grinding: {
       ...emptyInput.grinding,
       ...savedGrinding,
       estimatedDays: estimatedGrindingDays,
+      generatorCount: Number(savedGrinding.generatorCount ?? (savedGrinding.generatorRequired ? 1 : 0)),
+      additionalTools: Array.isArray(savedGrinding.additionalTools) ? savedGrinding.additionalTools.map((item) => ({ ...item, unit: "item", quantity: 1, plCategory: "Equipment" as const })) : [],
       productionMen,
       surveyorCount,
       productionLabourMode: savedGrinding.productionLabourMode ?? (savedGrinding.subcontractRate || savedGrinding.subcontractMobilisation ? "subcontract" : emptyInput.grinding.productionLabourMode),
@@ -386,6 +408,9 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
     screeding: {
       ...emptyInput.screeding,
       ...savedScreeding,
+      preparationDays,
+      screedingDays,
+      grindingDays,
       totalDaysOnSite: screedDays,
       productionLabourMode: savedScreeding.productionLabourMode ?? "subcontract",
       productionLabourDays: Number(savedScreeding.productionLabourDays ?? 0),
@@ -394,7 +419,7 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
       surveyorDays: Number(savedScreeding.surveyorDays ?? screedDays),
       surveyorVehicles: Number(savedScreeding.surveyorVehicles ?? emptyInput.screeding.surveyorVehicles),
       surveyorSubcontractors: normaliseSubcontractors(savedScreeding.surveyorSubcontractors, "Screed surveyor subcontractor"),
-      teams: (savedScreeding.teams?.length ? savedScreeding.teams : emptyInput.screeding.teams).map((team) => ({ ...team, margin: asNumber(team.margin, 0.3), mobilisationMargin: asNumber(team.mobilisationMargin, 0.3) }))
+      teams: normalisedTeams
     },
     repairs: {
       ...emptyInput.repairs,
@@ -440,18 +465,16 @@ export async function saveProject(input: ProjectInput, rates: AdminRates, existi
     createdAt: existing?.createdAt ?? now(),
     createdBy: existing?.createdBy ?? savedActor,
     updatedBy: savedActor,
-    status,
+    status: normaliseProjectStatus(status),
     accountsStatus: existing?.accountsStatus ?? "Not Required",
     inputs,
     calculations,
     actuals: existing?.actuals,
     rateSnapshot: rates,
     repairCatalogSnapshot: repairCatalog,
-    calculationVersion: "4.0",
-    markupApprovedBy: calculations.budgetCost > 0 && calculations.budgetProfit / calculations.budgetCost < 0.25 && inputs.markupOverrideReason.trim() ? savedActor : undefined,
-    markupApprovedAt: calculations.budgetCost > 0 && calculations.budgetProfit / calculations.budgetCost < 0.25 && inputs.markupOverrideReason.trim() ? now() : undefined,
-    revisions: normaliseProjectStatus(status) === "Approved Costing"
-      ? [...(existing?.revisions ?? []), makeRevision(inputs, calculations, rates, repairCatalog, savedActor)]
+    calculationVersion: "5.0",
+    revisions: normaliseProjectStatus(status) === "Costing Complete"
+      ? [...(existing?.revisions ?? []), makeRevision(inputs, calculations, rates, repairCatalog)]
       : existing?.revisions ?? [],
     notes: existing?.notes ?? [],
     changeLog: log(existing?.changeLog, savedActor, existing ? `${status} edited` : `${status} created`, `${inputs.projectReference || "Draft"} ${calculations.serviceSummary} ${calculations.proposalTotal}`)
@@ -529,7 +552,7 @@ export async function recordProjectHandover(projectId: string, actor = "System",
   if (!current) throw new Error("The selected project no longer exists.");
   const currentStatus = normaliseProjectStatus(current.status);
   if (issued && !["Won", "Handover Issued"].includes(currentStatus)) throw new Error("Mark the project as Won before issuing the project manager handover.");
-  if (!issued && !["Approved Costing", "Won", "Handover Issued"].includes(currentStatus)) throw new Error("Approve the costing before saving a project manager handover.");
+  if (!issued && !["Costing Complete", "Won", "Handover Issued"].includes(currentStatus)) throw new Error("Complete the costing before saving a project manager handover.");
   const issuedAt = now();
   const action = issued ? "PM handover issued" : "PM handover generated";
   const nextStatus = issued ? "Handover Issued" : currentStatus;

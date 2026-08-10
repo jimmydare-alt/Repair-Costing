@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { Calculator, Download, FileSpreadsheet, History, Printer, Save, Search, Send, Settings } from "lucide-react";
-import { calculateActualSiteDays, calculatePhaseSchedule, calculatePL, calculateProject, calculateProjectRepairMaterials, calculateRepairLineMaterials, calculateWorkingDays, defaultActuals, weekendDaysForProgramme } from "@/lib/calculations";
+import { calculatedHotelNights, calculateActualSiteDays, calculatePhaseSchedule, calculatePL, calculateProject, calculateProjectRepairMaterials, calculateRepairLineMaterials, calculateWorkingDays, defaultActuals, weekendDaysForProgramme } from "@/lib/calculations";
 import { money, percent, formatDateTime, setMoneyCurrency } from "@/lib/format";
 import { projectCsv } from "@/lib/export";
 import { defaultRates, emptyInput } from "@/lib/rates";
@@ -17,10 +17,10 @@ import { allowedStatusTransitions, normaliseProjectStatus, statusIsLocked } from
 import { buildHandoverSummary } from "@/lib/handover";
 import { ProductShell } from "@/components/AppShell";
 import type { AppModuleKey, CurrencyCode, MembershipRole, Permission } from "@/lib/company";
-import type { AdditionalItem, AdminRates, DetailTab, LabourMode, Line, PLCategory, PriceType, ProjectInput, ProjectRecord, ProjectServiceKey, ProjectStatus, RepairCatalog, RepairLabourMode, RepairLineItem, RepairMaterial, RepairMaterialCategory, RepairSubcontractor, RepairType, RepairUnitType, ScreedTeam, View } from "@/lib/types";
+import type { AdditionalItem, AdminRates, DetailTab, LabourMode, Line, PLCategory, PriceType, ProjectInput, ProjectRecord, ProjectStatus, RepairCatalog, RepairLabourMode, RepairLineItem, RepairMaterial, RepairMaterialCategory, RepairSubcontractor, RepairType, RepairUnitType, ScreedTeam, View } from "@/lib/types";
 
 const detailTabs: DetailTab[] = ["Summary", "Costing", "Commercial Review", "PM Handover", "Actual P&L", "Activity"];
-type BuilderStep = "Services" | "Project" | "Phase Schedule" | "Grinding" | "Screeding" | "Repairs" | "Project Management" | "Extras" | "Travel" | "Review";
+type BuilderStep = "Services" | "Project" | "Grinding" | "Screeding" | "Repairs" | "Phase Schedule" | "Project Management" | "Extras" | "Review";
 type RepairPage = "Details" | "Labour" | "Review";
 type GrindingPage = "Programme" | "Labour" | "Tools & Review";
 type ScreedPage = "Programme" | "Labour" | "Materials" | "Tools & Review";
@@ -97,10 +97,10 @@ function repairReadiness(input: ProjectInput, repairCatalog: RepairCatalog): Rep
   const labourMode = input.repairs.labourMode ?? "subcontract";
   const usesSubcontract = labourMode === "subcontract" || labourMode === "both";
   const usesInHouse = labourMode === "in_house" || labourMode === "both";
-  if (!labourMode) blockers.push("Select a repair labour type before approval.");
+  if (!labourMode) blockers.push("Select a repair labour type.");
   if (!input.repairs.repairLines.length) blockers.push("Add at least one repair type.");
-  if (usesSubcontract && !input.repairs.repairSubcontractors.some((item) => item.rate > 0 && (item.priceType === "lump sum" || item.days > 0))) blockers.push("Add at least one repair subcontractor as a lump sum or day rate before approval.");
-  if (usesInHouse && input.repairs.labourMen <= 0) blockers.push("Add the number of in-house repair men before approval.");
+  if (usesSubcontract && !input.repairs.repairSubcontractors.some((item) => item.rate > 0 && (item.priceType === "lump sum" || item.days > 0))) blockers.push("Add at least one repair subcontractor as a lump sum or day rate.");
+  if (usesInHouse && input.repairs.labourMen <= 0) blockers.push("Add the number of in-house repair men.");
   input.repairs.repairLines.forEach((repairLine, index) => {
     const line = `Line ${index + 1}`;
     const type = repairTypeByCode(repairLine.repairTypeCode, repairCatalog);
@@ -132,7 +132,6 @@ function repairReadiness(input: ProjectInput, repairCatalog: RepairCatalog): Rep
   });
   const calculatedRepairDays = Math.ceil(input.repairs.repairLines.reduce((sum, repairLine) => sum + repairLineDays(repairLine, repairCatalog), 0));
   if (input.repairs.labourDays > 0 && input.repairs.labourDays !== calculatedRepairDays) warnings.push(`Repair days are manually overridden from ${calculatedRepairDays} to ${input.repairs.labourDays}.`);
-  if (usesInHouse && input.repairs.hotelRequired && input.repairs.hotelNights <= 0) blockers.push("Hotel is ticked for in-house labour but nights per team is zero.");
   if (usesInHouse && input.repairs.mobilisationOneWayKm > 0 && input.repairs.mobilisationVehicles <= 0) blockers.push("Add at least one repair vehicle when mobilisation distance is entered.");
   if (usesInHouse && input.repairs.travelDays > 0 && !input.repairs.hotelRequired) warnings.push("Travel is included without hotel/subsistence. Check this is a local or same-day job.");
   if (input.repairs.materialInputs.some((item) => item.lengthM || item.areaM2 || item.widthMm || item.depthMm || item.thicknessMm)) warnings.push("Legacy material inputs are ignored; use repair lines/material rules only.");
@@ -144,14 +143,14 @@ function grindingReadiness(input: ProjectInput): RepairReadiness {
   const warnings: string[] = [];
   if (!input.includeGrinding || !input.grinding.enabled) return { blockers, warnings };
   const g = input.grinding;
-  const days = g.estimatedDays || g.weeks * g.daysPerWeek;
+  const days = g.estimatedDays;
   const productionMode = g.productionLabourMode ?? "in_house";
   const surveyorMode = g.surveyorLabourMode ?? "in_house";
   const usesProductionInHouse = productionMode === "in_house" || productionMode === "both";
   const usesProductionSubcontract = productionMode === "subcontract" || productionMode === "both";
   const usesSurveyorInHouse = surveyorMode === "in_house" || surveyorMode === "both";
   const usesSurveyorSubcontract = surveyorMode === "subcontract" || surveyorMode === "both";
-  if (days <= 0) blockers.push("Add estimated grinding days before approval.");
+  if (days <= 0) blockers.push("Add estimated grinding days.");
   if (!surveyorMode) blockers.push("Surveyor labour must be selected.");
   if (usesSurveyorInHouse && g.surveyorCount <= 0) blockers.push("Add at least one grinding surveyor.");
   if (usesSurveyorSubcontract && !g.surveyorSubcontractors.some((item) => item.rate > 0 && (item.priceType === "lump sum" || item.days > 0))) blockers.push("Add at least one surveyor subcontractor cost.");
@@ -160,8 +159,6 @@ function grindingReadiness(input: ProjectInput): RepairReadiness {
   if (usesProductionInHouse && g.productionMen <= 0) warnings.push("In-house grinding is selected but no production men are entered for grinder days.");
   if (usesProductionInHouse && !g.dustVacuums) warnings.push("In-house grinding is selected but no dust vacuums are entered.");
   if (g.nightShiftRequired && !g.nightShifts && !g.productionNightShifts && !g.surveyorNightShifts) blockers.push("Night shift is selected but no night shifts are entered.");
-  if (usesProductionInHouse && g.productionHotelRequired && g.productionHotelNights <= 0) blockers.push("Production hotel is selected but nights per team is zero.");
-  if (usesSurveyorInHouse && g.surveyorHotelRequired && g.surveyorHotelNights <= 0) blockers.push("Surveyor hotel is selected but nights per team is zero.");
   if (usesProductionInHouse && g.productionOneWayKm > 0 && g.productionVehicles <= 0) blockers.push("Add at least one production vehicle when grinding travel distance is entered.");
   if (usesSurveyorInHouse && g.surveyorOneWayKm > 0 && g.surveyorVehicles <= 0) blockers.push("Add at least one surveyor vehicle when grinding travel distance is entered.");
   if (g.productionLabourDays > 0 && g.productionLabourDays !== days) warnings.push(`Production labour days are overridden from ${days} to ${g.productionLabourDays}.`);
@@ -174,64 +171,44 @@ function screedReadiness(input: ProjectInput): RepairReadiness {
   const warnings: string[] = [];
   if (!input.includeScreeding || !input.screeding.enabled) return { blockers, warnings };
   const s = input.screeding;
-  const days = s.totalDaysOnSite || s.pourDays + s.screwDays + s.primerDays;
+  const days = s.preparationDays + s.screedingDays + s.grindingDays;
   const productionMode = s.productionLabourMode ?? "subcontract";
   const surveyorMode = s.surveyorLabourMode ?? "in_house";
   const usesProductionInHouse = productionMode === "in_house" || productionMode === "both";
   const usesProductionSubcontract = productionMode === "subcontract" || productionMode === "both";
   const usesSurveyorInHouse = surveyorMode === "in_house" || surveyorMode === "both";
   const usesSurveyorSubcontract = surveyorMode === "subcontract" || surveyorMode === "both";
-  if (days <= 0) blockers.push("Add total screeding days on site before approval.");
+  if (days <= 0) blockers.push("Add total screeding days on site.");
   if (s.areaM2 <= 0) warnings.push("Screeding area is zero. Check materials and programme are intentional.");
   if (!surveyorMode) blockers.push("Surveyor labour must be selected for screeding.");
   if (usesSurveyorInHouse && s.surveyors <= 0) blockers.push("Add at least one screeding surveyor.");
   if (usesSurveyorSubcontract && !s.surveyorSubcontractors.some((item) => item.rate > 0 && (item.priceType === "lump sum" || item.days > 0))) blockers.push("Add at least one screeding surveyor subcontractor cost.");
   if (usesProductionInHouse && s.productionMen <= 0) blockers.push("Add production men for in-house screeding labour.");
-  if (usesProductionSubcontract && !s.teams.some((team) => team.enabled && team.rate > 0 && (team.priceType === "lump sum" || team.daysProgrammed > 0))) blockers.push("Add at least one screeding production subcontractor cost.");
+  if (usesProductionSubcontract && !s.teams.some((team) => team.rate > 0 && (team.priceType === "lump sum" || team.preparationDays + team.screedingDays + team.grindingDays > 0))) blockers.push("Add at least one screeding production subcontractor cost.");
   if (s.nightShiftRequired && !s.nightShifts && !s.productionNightShifts && !s.surveyorNightShifts) blockers.push("Night shift is selected but no night shifts are entered.");
-  if (usesProductionInHouse && s.productionHotelRequired && s.productionHotelNights <= 0) blockers.push("Production hotel is selected but nights per team is zero.");
-  if (usesSurveyorInHouse && s.surveyorHotelRequired && s.surveyorHotelNights <= 0) blockers.push("Surveyor hotel is selected but nights per team is zero.");
   if (usesProductionInHouse && s.productionOneWayKm > 0 && s.productionVehicles <= 0) blockers.push("Add at least one production vehicle when screeding travel distance is entered.");
   if (usesSurveyorInHouse && s.surveyorOneWayKm > 0 && s.surveyorVehicles <= 0) blockers.push("Add at least one surveyor vehicle when screeding travel distance is entered.");
   if (s.productionLabourDays > 0 && s.productionLabourDays !== days) warnings.push(`Production labour days are overridden from ${days} to ${s.productionLabourDays}.`);
   if (s.surveyorDays > 0 && s.surveyorDays !== days) warnings.push(`Surveyor labour days are overridden from ${days} to ${s.surveyorDays}.`);
   if (s.ukSupervisorRequired) warnings.push("UK supervisor is no longer priced in the screeding model. Use surveyor labour instead.");
-  const calculatedActivityDays = s.pourDays + s.screwDays + s.primerDays;
-  if (s.totalDaysOnSite > 0 && s.totalDaysOnSite !== calculatedActivityDays && !s.totalDaysOverrideReason.trim()) blockers.push("Explain why screeding total days override the summed activity days.");
   return { blockers, warnings };
 }
 
 function projectReadiness(input: ProjectInput, budgetMarkupExact: number, duplicateReference = false, hasCommercialValue = false, repairCatalog: RepairCatalog = defaultRepairCatalog): RepairReadiness {
   const blockers: string[] = [];
   const warnings: string[] = [];
-  if (!input.includeGrinding && !input.includeScreeding && !input.includeRepairs) blockers.push("Select at least one service.");
-  if (input.includeGrinding && !input.grinding.enabled) blockers.push("Grinding is selected but its costing section is not enabled.");
-  if (input.includeScreeding && !input.screeding.enabled) blockers.push("Screeding is selected but its costing section is not enabled.");
-  if (input.includeRepairs && !input.repairs.enabled) blockers.push("Repairs are selected but their costing section is not enabled.");
-  if (!input.projectReference.trim()) blockers.push("Add a project reference.");
-  if (!input.client.trim()) blockers.push("Add the client name.");
-  if (!input.location.trim()) blockers.push("Add the project location.");
-  if (input.exchangeRateToCompanyCurrency <= 0 || input.exchangeRateToGroupCurrency <= 0) blockers.push("Exchange rates must be greater than zero.");
-  if (hasCommercialValue && budgetMarkupExact < 25 && !input.markupOverrideReason.trim()) blockers.push(`Markup is ${percent(budgetMarkupExact)}. Enter a manager approval reason for costings below 25%.`);
+  void repairCatalog;
+  if (!input.includeGrinding && !input.includeScreeding && !input.includeRepairs) warnings.push("No service has been selected.");
+  if (input.includeGrinding && !input.grinding.enabled) warnings.push("Grinding is selected but its costing section is not enabled.");
+  if (input.includeScreeding && !input.screeding.enabled) warnings.push("Screeding is selected but its costing section is not enabled.");
+  if (input.includeRepairs && !input.repairs.enabled) warnings.push("Repairs are selected but their costing section is not enabled.");
+  if (!input.projectReference.trim()) warnings.push("Project reference is blank.");
+  if (!input.client.trim()) warnings.push("Client name is blank.");
+  if (!input.location.trim()) warnings.push("Project location is blank.");
+  if (input.exchangeRateToCompanyCurrency <= 0 || input.exchangeRateToGroupCurrency <= 0) warnings.push("Exchange rates should be greater than zero.");
+  if (hasCommercialValue && budgetMarkupExact < 25) warnings.push(`Overall markup is ${percent(budgetMarkupExact)}, below 25%.`);
   if (duplicateReference && input.projectReference.trim()) warnings.push("This project reference already exists. Confirm this is intentional before saving.");
   if (input.projectManagement.enabled && input.projectManagement.days <= 0) warnings.push("Project management is enabled but no management days are entered.");
-  const phaseSchedule = calculatePhaseSchedule(input, repairCatalog);
-  if (input.phaseSchedule.projectDaysOverride > 0 && input.phaseSchedule.projectDaysOverride !== phaseSchedule.calculatedProjectDays && !input.phaseSchedule.projectDaysOverrideReason.trim()) blockers.push("Enter a reason for overriding the calculated project programme.");
-  if (phaseSchedule.projectDays < phaseSchedule.calculatedProjectDays) blockers.push("Inputted project days finish before the phase schedule. Adjust phase overlap or phase days instead.");
-  const grindingServiceTravel = input.includeGrinding && (((["in_house", "both"] as LabourMode[]).includes(input.grinding.productionLabourMode) && (input.grinding.productionTravelDays > 0 || input.grinding.productionOneWayKm > 0)) || ((["in_house", "both"] as LabourMode[]).includes(input.grinding.surveyorLabourMode) && (input.grinding.surveyorTravelDays > 0 || input.grinding.surveyorOneWayKm > 0)));
-  const screedServiceTravel = input.includeScreeding && (((["in_house", "both"] as LabourMode[]).includes(input.screeding.productionLabourMode) && (input.screeding.productionTravelDays > 0 || input.screeding.productionOneWayKm > 0)) || ((["in_house", "both"] as LabourMode[]).includes(input.screeding.surveyorLabourMode) && (input.screeding.surveyorTravelDays > 0 || input.screeding.surveyorOneWayKm > 0)));
-  const repairServiceTravel = input.includeRepairs && (["in_house", "both"] as RepairLabourMode[]).includes(input.repairs.labourMode) && (input.repairs.travelDays > 0 || input.repairs.mobilisationOneWayKm > 0);
-  if (input.travelMode !== "None" && (grindingServiceTravel || screedServiceTravel || repairServiceTravel)) warnings.push("Project-wide travel and service-specific in-house travel are both populated. Check that travel is not duplicated.");
-  const roleTravellerCount = input.projectTravelProductionPeople + input.projectTravelSurveyorPeople + input.projectTravelOtherPeople;
-  const projectTravellerCount = roleTravellerCount > 0 ? roleTravellerCount : input.projectTravelPeople;
-  if (input.travelMode !== "None" && projectTravellerCount + input.additionalFlights <= 0) blockers.push("Project travel is selected but no internal travellers or additional flights are entered. Select None if no travel is required.");
-  if (input.travelMode === "Drive" && input.distanceKmOneWay <= 0) blockers.push("Driving is selected but the one-way distance is zero.");
-  if (input.travelMode === "Drive" && input.vehicles <= 0) blockers.push("Driving is selected but no vehicles are entered.");
-  if (input.travelMode === "Fly" && projectTravellerCount <= 0) blockers.push("Flying is selected but no internal travellers are entered.");
-  const hasInHouseProduction = (input.includeGrinding && (["in_house", "both"] as LabourMode[]).includes(input.grinding.productionLabourMode)) || (input.includeScreeding && (["in_house", "both"] as LabourMode[]).includes(input.screeding.productionLabourMode)) || (input.includeRepairs && (["in_house", "both"] as RepairLabourMode[]).includes(input.repairs.labourMode));
-  const hasInHouseSurveyor = (input.includeGrinding && (["in_house", "both"] as LabourMode[]).includes(input.grinding.surveyorLabourMode)) || (input.includeScreeding && (["in_house", "both"] as LabourMode[]).includes(input.screeding.surveyorLabourMode));
-  if (input.travelMode !== "None" && input.projectTravelProductionPeople > 0 && !hasInHouseProduction) warnings.push("Production workers are included in project travel, but every selected production team is subcontracted.");
-  if (input.travelMode !== "None" && input.projectTravelSurveyorPeople > 0 && !hasInHouseSurveyor) warnings.push("Surveyors are included in project travel, but every selected surveyor is subcontracted.");
   if (input.projectManagement.enabled && input.projectManagement.travelMode === "Drive" && input.projectManagement.oneWayKm <= 0) warnings.push("Project manager driving is selected but the one-way distance is zero.");
   if (input.projectManagement.enabled && input.projectManagement.travelMode === "Drive" && input.projectManagement.vehicles <= 0) warnings.push("Project manager driving is selected but no vehicles are entered.");
   if (input.projectManagement.enabled && input.projectManagement.travelMode === "Fly" && input.projectManagement.returnFlights <= 0) warnings.push("Project manager flying is selected but no return flights are entered.");
@@ -308,16 +285,18 @@ export default function Workspace() {
       setInput(companyBlank);
       setBaselineInput(cloneInput(companyBlank));
       setEditingId("");
-      const routedProject = loadedProjects.find((project) => project.id === routeProjectId);
-      if (routedProject) {
-        setSelectedId(routedProject.id);
-        setActuals(routedProject.actuals ?? defaultActuals(routedProject.calculations));
-      } else {
-        setSelectedId("");
-        setActuals(defaultActuals(calculateProject(companyBlank, loadedRates, loadedRepairCatalog)));
-      }
+      setSelectedId("");
+      setActuals(defaultActuals(calculateProject(companyBlank, loadedRates, loadedRepairCatalog)));
     }).catch((error: unknown) => setWorkspaceError(error instanceof Error ? error.message : "Could not load the company workspace.")).finally(() => setWorkspaceLoading(false));
-  }, [auth.activeCompany.defaultCurrency, auth.activeCompany.id, auth.companies.length, auth.configured, auth.session, auth.session?.user.email, auth.session?.user.id, routeProjectId]);
+  }, [auth.activeCompany.defaultCurrency, auth.activeCompany.id, auth.companies.length, auth.configured, auth.session, auth.session?.user.email, auth.session?.user.id]);
+
+  useEffect(() => {
+    if (!routeProjectId) return;
+    const routedProject = projects.find((project) => project.id === routeProjectId);
+    if (!routedProject) return;
+    setSelectedId(routedProject.id);
+    setActuals(routedProject.actuals ?? defaultActuals(routedProject.calculations));
+  }, [projects, routeProjectId]);
 
   useEffect(() => {
     if (selected) setActuals(selected.actuals ?? defaultActuals(selected.calculations));
@@ -344,18 +323,6 @@ export default function Workspace() {
   }
 
   async function saveCurrentProject(status: ProjectStatus = "Draft") {
-    const readiness = repairReadiness(input, pricingCatalog);
-    const grindingChecks = grindingReadiness(input);
-    const screedChecks = screedReadiness(input);
-    const duplicateReference = projects.some((project) => project.id !== editingId && project.inputs.projectReference.trim().toLowerCase() === input.projectReference.trim().toLowerCase());
-    const exactMarkup = calculations.budgetCost ? calculations.budgetProfit / calculations.budgetCost * 100 : 0;
-    const projectChecks = projectReadiness(input, exactMarkup, duplicateReference, calculations.proposalTotal > 0 || calculations.budgetCost > 0, pricingCatalog);
-    const blockers = [...projectChecks.blockers, ...grindingChecks.blockers, ...screedChecks.blockers, ...readiness.blockers];
-    if (status !== "Draft" && blockers.length) {
-      alert(`Save as Draft until these checks are fixed:\n\n${blockers.slice(0, 10).join("\n")}`);
-      return;
-    }
-    if (status !== "Draft" && duplicateReference && !confirm("This project reference already exists. Save this costing anyway?")) return;
     try {
       setSaveState("saving");
       setWorkspaceError("");
@@ -490,7 +457,7 @@ function ModuleBlocked({ moduleKey }: { moduleKey: AppModuleKey }) {
 
 function WorkspaceBanner({ view, selected, projects }: { view: View; selected?: ProjectRecord; projects: ProjectRecord[] }) {
   const auth = useAuth();
-  const approved = projects.filter((project) => ["Approved Costing", "Won", "Handover Issued"].includes(normaliseProjectStatus(project.status))).reduce((sum, project) => sum + (project.calculations.proposalCompanyCurrency ?? project.calculations.proposalTotal), 0);
+  const approved = projects.filter((project) => ["Costing Complete", "Won", "Handover Issued"].includes(normaliseProjectStatus(project.status))).reduce((sum, project) => sum + (project.calculations.proposalCompanyCurrency ?? project.calculations.proposalTotal), 0);
   return (
     <div className="mb-6 rounded-2xl bg-slate-950 p-5 text-white shadow-xl">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -501,7 +468,7 @@ function WorkspaceBanner({ view, selected, projects }: { view: View; selected?: 
         </div>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <Mini label="Projects" value={String(projects.length)} />
-          <Mini label={`Approved ${auth.activeCompany.defaultCurrency}`} value={money(approved, auth.activeCompany.defaultCurrency)} />
+          <Mini label={`Costings Complete ${auth.activeCompany.defaultCurrency}`} value={money(approved, auth.activeCompany.defaultCurrency)} />
           <Mini label="Won" value={String(projects.filter((p) => ["Won", "Handover Issued"].includes(normaliseProjectStatus(p.status))).length)} />
           <Mini label="Awaiting" value={String(projects.filter((p) => p.accountsStatus === "Awaiting Accounts").length)} />
         </div>
@@ -752,8 +719,8 @@ function Mini({ label, value }: { label: string; value: string }) {
 }
 
 function Dashboard({ projects, companyCurrency, open }: { projects: ProjectRecord[]; companyCurrency: CurrencyCode; open: (project: ProjectRecord) => void }) {
-  const draftProjects = projects.filter((project) => ["Draft", "Ready for Review"].includes(normaliseProjectStatus(project.status)));
-  const pipelineProjects = projects.filter((project) => normaliseProjectStatus(project.status) === "Approved Costing");
+  const draftProjects = projects.filter((project) => normaliseProjectStatus(project.status) === "Draft");
+  const pipelineProjects = projects.filter((project) => normaliseProjectStatus(project.status) === "Costing Complete");
   const wonProjects = projects.filter((project) => ["Won", "Handover Issued"].includes(normaliseProjectStatus(project.status)));
   const pipeline = pipelineProjects.reduce((sum, project) => sum + (project.calculations.proposalCompanyCurrency ?? project.calculations.proposalTotal), 0);
   const won = wonProjects.reduce((sum, project) => sum + (project.calculations.proposalCompanyCurrency ?? project.calculations.proposalTotal), 0);
@@ -765,7 +732,7 @@ function Dashboard({ projects, companyCurrency, open }: { projects: ProjectRecor
     <div className="grid gap-5">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <Metric label="Draft / Review" value={String(draftProjects.length)} />
-        <Metric label={`Approved Pipeline (${companyCurrency})`} value={money(pipeline, companyCurrency)} />
+        <Metric label={`Costings Complete (${companyCurrency})`} value={money(pipeline, companyCurrency)} />
         <Metric label={`Won Backlog (${companyCurrency})`} value={money(won, companyCurrency)} />
         <Metric label="Weighted Markup" value={percent(weightedMarkup)} />
         <Metric label="Awaiting Accounts" value={String(projects.filter((project) => project.accountsStatus === "Awaiting Accounts").length)} />
@@ -783,32 +750,35 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, onSave, detailTab, setDetailTab, duplicateReference, usingSnapshot, saving, dirty, reprice }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates; repairCatalog: RepairCatalog; calculations: ReturnType<typeof calculateProject>; onSave: (status?: ProjectStatus) => void; detailTab: DetailTab; setDetailTab: (tab: DetailTab) => void; duplicateReference: boolean; usingSnapshot: boolean; saving: boolean; dirty: boolean; reprice: () => void }) {
-  const initialStep = detailTab === "Grinding" || detailTab === "Screeding" || detailTab === "Repairs" ? detailTab : "Services";
+  const savedStep = input.uiProgress?.builderStep as BuilderStep | undefined;
+  const initialStep = detailTab === "Grinding" || detailTab === "Screeding" || detailTab === "Repairs" ? detailTab : savedStep ?? "Services";
   const [builderStep, setBuilderStep] = useState<BuilderStep>(initialStep);
+  const serviceCount = Number(input.includeGrinding) + Number(input.includeScreeding) + Number(input.includeRepairs);
   const allSteps = [
     { key: "Services", label: "Services", enabled: true },
     { key: "Project", label: "Project", enabled: true },
-    { key: "Phase Schedule", label: "Phase Schedule", enabled: input.includeGrinding || input.includeScreeding || input.includeRepairs },
     { key: "Grinding", label: "Grinding", enabled: input.includeGrinding },
     { key: "Screeding", label: "Screeding", enabled: input.includeScreeding },
     { key: "Repairs", label: "Repairs", enabled: input.includeRepairs },
+    { key: "Phase Schedule", label: "Phase Programme", enabled: serviceCount > 1 },
     { key: "Project Management", label: "Project Management", enabled: true },
     { key: "Extras", label: "Extras", enabled: true },
-    { key: "Travel", label: "Travel", enabled: true },
     { key: "Review", label: "Review", enabled: true }
   ] satisfies Array<{ key: BuilderStep; label: string; enabled: boolean }>;
   const steps = allSteps.filter((step) => step.enabled);
   useEffect(() => {
-    const routedStep = detailTab === "Grinding" || detailTab === "Screeding" || detailTab === "Repairs" ? detailTab : builderStep;
+    const progressStep = input.uiProgress?.builderStep as BuilderStep | undefined;
+    const routedStep = detailTab === "Grinding" || detailTab === "Screeding" || detailTab === "Repairs" ? detailTab : progressStep ?? builderStep;
     const nextStep = steps.some((step) => step.key === routedStep) ? routedStep : "Services";
     if (builderStep !== nextStep) setBuilderStep(nextStep);
     if (!tabIsAllowed(detailTab, input)) setDetailTab("Summary");
   // The primitive service flags are the intentional routing dependencies.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detailTab, input.includeGrinding, input.includeScreeding, input.includeRepairs, input.grinding.enabled, input.screeding.enabled, input.repairs.enabled]);
+  }, [detailTab, input.includeGrinding, input.includeScreeding, input.includeRepairs, input.grinding.enabled, input.screeding.enabled, input.repairs.enabled, input.uiProgress?.builderStep]);
   const activeIndex = Math.max(0, steps.findIndex((step) => step.key === builderStep));
   const setStep = (step: typeof builderStep) => {
     setBuilderStep(step);
+    setInput({ ...input, uiProgress: { ...input.uiProgress, builderStep: step } });
     if (step === "Grinding" || step === "Screeding" || step === "Repairs") setDetailTab(step);
     if (step === "Review") setDetailTab("Commercial Review");
   };
@@ -820,7 +790,6 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
   const exactMarkup = calculations.budgetCost ? calculations.budgetProfit / calculations.budgetCost * 100 : 0;
   const projectChecks = projectReadiness(input, exactMarkup, duplicateReference, calculations.proposalTotal > 0 || calculations.budgetCost > 0, repairCatalog);
   const approvalBlockers = [...projectChecks.blockers, ...grindingChecks.blockers, ...screedChecks.blockers, ...readiness.blockers];
-  const canApprove = approvalBlockers.length === 0;
   const issueStep = (issue: string): BuilderStep => issue.toLowerCase().includes("grind") ? "Grinding" : issue.toLowerCase().includes("screed") ? "Screeding" : issue.toLowerCase().includes("repair") || issue.toLowerCase().includes("material") ? "Repairs" : issue.toLowerCase().includes("programme") || issue.toLowerCase().includes("phase") ? "Phase Schedule" : "Project";
   const stepState = (step: BuilderStep) => {
     if (step === "Services") return input.includeGrinding || input.includeScreeding || input.includeRepairs ? "Complete" : "Needs attention";
@@ -849,19 +818,19 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
       </div>
 
       <section className="grid min-w-0 gap-5">
-      {usingSnapshot && <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950"><div><b>Approved pricing snapshot in use.</b> Admin rate changes do not alter this revision unless you explicitly reprice it.</div><button className="secondary-button" onClick={reprice}>Reprice with current admin rates</button></div>}
+      {usingSnapshot && <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950"><div><b>Saved pricing snapshot in use.</b> Admin rate changes do not alter this revision unless you explicitly reprice it.</div><button className="secondary-button" onClick={reprice}>Reprice with current admin rates</button></div>}
       {projectChecks.warnings.length > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"><div className="font-bold uppercase">Project checks</div>{projectChecks.warnings.map((warning) => <div className="mt-1" key={warning}>{warning}</div>)}</div>}
       {input.includeRepairs && (readiness.blockers.length > 0 || readiness.warnings.length > 0) && (
-        <div className={`rounded-xl border p-4 text-sm ${readiness.blockers.length ? "border-amber-200 bg-amber-50 text-amber-950" : "border-sky-200 bg-sky-50 text-sky-950"}`}>
-          <div className="font-bold uppercase">{readiness.blockers.length ? "Repair costing is draft only" : "Repair costing needs review"}</div>
-          <div className="mt-1">{readiness.blockers.length ? `${readiness.blockers.length} item${readiness.blockers.length === 1 ? "" : "s"} must be fixed before approval is available.` : "There are repair assumptions to check before approval."}</div>
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
+          <div className="font-bold uppercase">Repair sense checks</div>
+          <div className="mt-1">{readiness.blockers.length + readiness.warnings.length} item{readiness.blockers.length + readiness.warnings.length === 1 ? "" : "s"} to review. These checks do not block saving or completing the costing.</div>
           <button className="secondary-button mt-3" onClick={() => setStep("Repairs")}>Open Repairs</button>
         </div>
       )}
       {approvalBlockers.length > 0 && !input.includeRepairs && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
-          <div className="font-bold uppercase">Costing is draft only</div>
-          <div className="mt-1">{approvalBlockers.length} item{approvalBlockers.length === 1 ? "" : "s"} must be fixed before approval is available.</div>
+          <div className="font-bold uppercase">Costing sense checks</div>
+          <div className="mt-1">{approvalBlockers.length} item{approvalBlockers.length === 1 ? "" : "s"} to review. These checks do not block the costing.</div>
         </div>
       )}
       <div className="app-card-strong">
@@ -869,8 +838,7 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
           <div><div className="flex flex-wrap items-center gap-2"><h2 className="text-xl font-semibold">New Project</h2>{dirty && <span className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-bold uppercase text-amber-800">Unsaved changes</span>}</div><p className="text-sm text-slate-500">Pick services first, then complete only the sections needed for this costing.</p></div>
           <div className="flex flex-wrap gap-2">
             <button className="secondary-button" onClick={() => onSave("Draft")} disabled={saving}><Save size={16} /> {saving ? "Saving..." : "Save Draft"}</button>
-            <button className="secondary-button" onClick={() => onSave("Ready for Review")} disabled={!canApprove || saving}>Ready for Review</button>
-            <button className="primary-button" onClick={() => onSave("Approved Costing")} disabled={!canApprove || saving}><Save size={16} /> {saving ? "Saving..." : "Approve Costing"}</button>
+            <button className="primary-button" onClick={() => onSave("Costing Complete")} disabled={saving}><Save size={16} /> {saving ? "Saving..." : "Complete Costing"}</button>
           </div>
         </div>
         <div className="p-5">
@@ -882,18 +850,16 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
           {builderStep === "Repairs" && <RepairsForm input={input} setInput={setInput} repairCatalog={repairCatalog} rates={rates} projectMaterialCalcs={calculations.repairMaterialCalcs} />}
           {builderStep === "Project Management" && <ProjectManagementStep input={input} setInput={setInput} rates={rates} />}
           {builderStep === "Extras" && <ExtrasStep input={input} setInput={setInput} />}
-          {builderStep === "Travel" && <TravelStep input={input} setInput={setInput} />}
           {builderStep === "Review" && detailTab !== "Audit" && <ReviewStep calculations={calculations} input={input} setInput={setInput} />}
           {builderStep === "Review" && detailTab === "Audit" && <AuditPanel calculations={calculations} />}
-          {builderStep === "Review" && <div className={`mt-5 rounded-xl border p-4 ${approvalBlockers.length ? "border-amber-200 bg-amber-50" : "border-emerald-200 bg-emerald-50"}`}><div className="font-bold text-slate-950">Final Approval Checklist</div>{approvalBlockers.length ? <div className="mt-3 grid gap-2">{approvalBlockers.map((issue) => <button className="flex min-h-10 items-center justify-between rounded-lg bg-white px-3 py-2 text-left text-sm font-semibold text-amber-950 ring-1 ring-amber-200" onClick={() => setStep(issueStep(issue))} key={issue}><span>{issue}</span><span className="ml-3 text-xs uppercase">Open section</span></button>)}</div> : <div className="mt-2 text-sm font-semibold text-emerald-900">All required project, service, programme and commercial checks have passed.</div>}</div>}
+          {builderStep === "Review" && <div className={`mt-5 rounded-xl border p-4 ${approvalBlockers.length ? "border-amber-200 bg-amber-50" : "border-emerald-200 bg-emerald-50"}`}><div className="font-bold text-slate-950">Final Costing Sense Checks</div>{approvalBlockers.length ? <div className="mt-3 grid gap-2">{approvalBlockers.map((issue) => <button className="flex min-h-10 items-center justify-between rounded-lg bg-white px-3 py-2 text-left text-sm font-semibold text-amber-950 ring-1 ring-amber-200" onClick={() => setStep(issueStep(issue))} key={issue}><span>{issue}</span><span className="ml-3 text-xs uppercase">Open section</span></button>)}</div> : <div className="mt-2 text-sm font-semibold text-emerald-900">No costing checks are currently flagged.</div>}</div>}
         </div>
       </div>
       <div className="flex flex-wrap justify-between gap-3">
         <button className="secondary-button" onClick={previousStep} disabled={activeIndex === 0}>Back</button>
         <div className="flex flex-wrap gap-2">
           {activeIndex === steps.length - 1 && <button className="secondary-button" onClick={() => onSave("Draft")} disabled={saving}>Save Draft</button>}
-          {activeIndex === steps.length - 1 && <button className="secondary-button" onClick={() => onSave("Ready for Review")} disabled={saving || !canApprove}>Ready for Review</button>}
-          <button className="primary-button" onClick={activeIndex === steps.length - 1 ? () => onSave("Approved Costing") : nextStep} disabled={saving || (activeIndex === steps.length - 1 && !canApprove)}>{activeIndex === steps.length - 1 ? saving ? "Saving..." : "Approve Costing" : "Next"}</button>
+          <button className="primary-button" onClick={activeIndex === steps.length - 1 ? () => onSave("Costing Complete") : nextStep} disabled={saving}>{activeIndex === steps.length - 1 ? saving ? "Saving..." : "Complete Costing" : "Next"}</button>
         </div>
       </div>
       <QuoteSummary calculations={calculations} />
@@ -968,35 +934,27 @@ function ProjectBasics({ input, setInput, duplicateReference }: { input: Project
 
 function PhaseScheduleStep({ input, setInput, repairCatalog }: { input: ProjectInput; setInput: (input: ProjectInput) => void; repairCatalog: RepairCatalog }) {
   const schedule = calculatePhaseSchedule(input, repairCatalog);
-  const order = schedule.rows.map((row) => row.service);
-  const move = (service: ProjectServiceKey, direction: -1 | 1) => {
-    const index = order.indexOf(service);
-    const target = index + direction;
-    if (index < 0 || target < 0 || target >= order.length) return;
-    const nextOrder = [...order];
-    [nextOrder[index], nextOrder[target]] = [nextOrder[target], nextOrder[index]];
-    setInput({ ...input, phaseSchedule: { ...input.phaseSchedule, order: [...nextOrder, ...input.phaseSchedule.order.filter((item) => !nextOrder.includes(item))] } });
-  };
+  const maxDay = Math.max(1, schedule.calculatedProjectDays);
   return (
     <div className="grid gap-5">
-      <div><h3 className="text-2xl font-bold text-slate-950">Phase schedule</h3><p className="mt-1 text-sm text-slate-600">Set the order of works and show which phases run together. This controls the whole-project site duration.</p></div>
-      <div className="grid gap-3">
-        {schedule.rows.map((row, index) => (
-          <div key={row.service} className="grid items-end gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 lg:grid-cols-[minmax(150px,1fr)_120px_170px_170px_160px]">
-            <div><div className="text-xs font-bold uppercase text-slate-500">Phase {index + 1}</div><div className="mt-1 text-lg font-bold text-slate-950">{row.service}</div><div className="mt-2 flex gap-2"><button className="secondary-button min-h-9 px-3" onClick={() => move(row.service, -1)} disabled={index === 0}>Up</button><button className="secondary-button min-h-9 px-3" onClick={() => move(row.service, 1)} disabled={index === schedule.rows.length - 1}>Down</button></div></div>
-            <Mini label="Calculated" value={`${row.calculatedDays} days`} />
-            <div className={row.inputDays !== row.calculatedDays ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Inputted Phase Days" value={row.inputDays} onChange={(value) => setInput({ ...input, phaseSchedule: { ...input.phaseSchedule, dayOverrides: { ...input.phaseSchedule.dayOverrides, [row.service]: value } } })} /></div>
-            {index > 0 ? <Toggle label="Starts With Previous" checked={row.concurrent} onChange={(value) => setInput({ ...input, phaseSchedule: { ...input.phaseSchedule, startsWithPrevious: { ...input.phaseSchedule.startsWithPrevious, [row.service]: value } } })} /> : <Mini label="Start" value="Project day 1" />}
-            <Mini label="Programme" value={`Day ${row.startDay} to ${row.endDay}`} />
+      <div><h3 className="text-2xl font-bold text-slate-950">Phase programme</h3><p className="mt-1 text-sm text-slate-600">Durations come directly from each costing sheet. Set the start day to sequence or overlap services.</p></div>
+      <div className="grid gap-4">
+        {schedule.rows.map((row) => (
+          <div key={row.service} className="grid gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 lg:grid-cols-[170px_140px_minmax(240px,1fr)_160px] lg:items-center">
+            <div><div className="text-lg font-bold text-slate-950">{row.service}</div><div className="text-xs font-semibold text-slate-500">From costing sheet</div></div>
+            <Mini label="Duration" value={`${row.calculatedDays} days`} />
+            <div>
+              <NumberInput label="Start Day" value={row.startDay} onChange={(value) => setInput({ ...input, phaseSchedule: { ...input.phaseSchedule, startDays: { ...input.phaseSchedule.startDays, [row.service]: Math.max(1, Math.ceil(value)) } } })} />
+              <input aria-label={`${row.service} start day`} className="mt-2 h-2 w-full cursor-pointer accent-sky-700" type="range" min="1" max={Math.max(maxDay + 10, row.startDay)} step="1" value={row.startDay} onChange={(event) => setInput({ ...input, phaseSchedule: { ...input.phaseSchedule, startDays: { ...input.phaseSchedule.startDays, [row.service]: Number(event.target.value) } } })} />
+            </div>
+            <Mini label="Programme" value={row.calculatedDays ? `Day ${row.startDay} to ${row.endDay}` : "No days entered"} />
           </div>
         ))}
       </div>
-      <div className="grid gap-4 rounded-xl border border-sky-200 bg-sky-50 p-4 sm:grid-cols-3">
-        <Mini label="Calculated Project Days" value={`${schedule.calculatedProjectDays}`} />
-        <div className={schedule.projectDays !== schedule.calculatedProjectDays ? "rounded-lg border border-amber-300 bg-amber-50 p-2" : ""}><NumberInput label="Inputted Project Days" value={schedule.projectDays} onChange={(value) => setInput({ ...input, phaseSchedule: { ...input.phaseSchedule, projectDaysOverride: value } })} /></div>
-        <Mini label="Days Used in Costing" value={`${schedule.projectDays}`} />
+      <div className="grid gap-4 rounded-xl border border-sky-200 bg-sky-50 p-4 sm:grid-cols-2">
+        <Mini label="Overall Project Duration" value={`${schedule.projectDays} days`} />
+        <Mini label="Overlap" value={schedule.rows.some((row) => row.concurrent) ? "Phases overlap" : "Sequential"} />
       </div>
-      {schedule.projectDays !== schedule.calculatedProjectDays && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4"><Text label="Project Days Override Reason" value={input.phaseSchedule.projectDaysOverrideReason} onChange={(value) => setInput({ ...input, phaseSchedule: { ...input.phaseSchedule, projectDaysOverrideReason: value } })} /></div>}
     </div>
   );
 }
@@ -1004,7 +962,12 @@ function PhaseScheduleStep({ input, setInput, repairCatalog }: { input: ProjectI
 function ProjectManagementStep({ input, setInput, rates }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates }) {
   const pm = input.projectManagement;
   const patch = (next: Partial<typeof pm>) => setInput({ ...input, projectManagement: { ...pm, ...next } });
-  const managerSell = pm.days * rates.projectManagerDayRate * (1 + adminRateMargin(rates, "projectManagerDayRate", rates.defaultMargin));
+  const sell = (rate: number, quantity: number, key: keyof AdminRates, fallback: number) => rate * quantity * (1 + adminRateMargin(rates, key, fallback));
+  const labourSell = sell(rates.projectManagerDayRate, pm.days, "projectManagerDayRate", rates.defaultMargin);
+  const travelSell = sell(rates.otherInternalTravelDayRate, pm.travelDays, "otherInternalTravelDayRate", rates.travelMargin)
+    + (pm.travelMode === "Drive" ? sell(rates.mileagePerKm, pm.oneWayKm * 2 * pm.vehicles * pm.visits, "mileagePerKm", rates.travelMargin) : 0)
+    + (pm.travelMode === "Fly" ? sell(rates.returnFlight, pm.returnFlights, "returnFlight", rates.flightMargin) : 0);
+  const staySell = sell(rates.hotel, pm.hotelNights, "hotel", rates.hotelMargin) + sell(rates.subsistence, pm.hotelNights, "subsistence", rates.subsistenceMargin);
   return (
     <div className="grid gap-5">
       <div><h3 className="text-2xl font-bold text-slate-950">Project management</h3><p className="mt-1 text-sm text-slate-600">Whole-project management is entered once here, even when several services are included.</p></div>
@@ -1014,7 +977,7 @@ function ProjectManagementStep({ input, setInput, rates }: { input: ProjectInput
           <NumberInput label="Project Manager Days" value={pm.days} onChange={(days) => patch({ days })} />
           <NumberInput label="Number of Visits" value={pm.visits} onChange={(visits) => patch({ visits })} />
           <NumberInput label="Travel Days" value={pm.travelDays} onChange={(travelDays) => patch({ travelDays })} />
-          <Mini label="Management Sell" value={money(managerSell)} />
+          <Mini label="Labour Sell" value={money(labourSell)} />
         </div>
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <Select label="Travel Mode" value={pm.travelMode} options={["None", "Drive", "Fly"]} onChange={(travelMode) => patch({ travelMode: travelMode as ProjectInput["projectManagement"]["travelMode"] })} />
@@ -1023,32 +986,12 @@ function ProjectManagementStep({ input, setInput, rates }: { input: ProjectInput
           {pm.travelMode === "Fly" && <NumberInput label="Return Flights" value={pm.returnFlights} onChange={(returnFlights) => patch({ returnFlights })} />}
           <NumberInput label="Hotel Nights" value={pm.hotelNights} onChange={(hotelNights) => patch({ hotelNights })} />
         </div>
+        <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-3">
+          <Mini label="Travel Sell" value={money(travelSell)} />
+          <Mini label="Hotel + Subsistence Sell" value={money(staySell)} />
+          <Mini label="Total Project Management Sell" value={money(labourSell + travelSell + staySell)} />
+        </div>
       </div>}
-    </div>
-  );
-}
-
-function TravelStep({ input, setInput }: { input: ProjectInput; setInput: (input: ProjectInput) => void }) {
-  const hasTravel = input.travelMode !== "None";
-  return (
-    <div>
-      <div className="mb-5">
-        <h3 className="text-2xl font-bold text-slate-950">Travel and accommodation</h3>
-        <p className="mt-1 text-sm text-slate-600">Optional project-wide FACE travel. Leave blank when travel is already included in the service labour or subcontract price. Distances are kilometres.</p>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        <Select label="Project-Wide Travel" value={input.travelMode} options={["None", "Drive", "Fly"]} onChange={(v) => setInput({ ...input, travelMode: v as ProjectInput["travelMode"] })} />
-        {!hasTravel && <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm font-bold text-sky-950 sm:col-span-2">No project-wide FACE travel will be added. Service-specific in-house travel still prices inside each selected labour section.</div>}
-        {hasTravel && <NumberInput label="Production Workers Travelling" value={input.projectTravelProductionPeople} onChange={(v) => setInput({ ...input, projectTravelProductionPeople: v, projectTravelPeople: 0 })} />}
-        {hasTravel && <NumberInput label="Surveyors Travelling" value={input.projectTravelSurveyorPeople} onChange={(v) => setInput({ ...input, projectTravelSurveyorPeople: v, projectTravelPeople: 0 })} />}
-        {hasTravel && <NumberInput label="Other Internal People Travelling" value={input.projectTravelOtherPeople} onChange={(v) => setInput({ ...input, projectTravelOtherPeople: v, projectTravelPeople: 0 })} />}
-        {hasTravel && <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600 sm:col-span-2 xl:col-span-3"><b className="text-slate-950">Internal travel only.</b> Do not add subcontractors here; their travel and mobilisation remain in their subcontract work package.</div>}
-        {hasTravel && input.travelMode === "Drive" && <NumberInput label="Distance One-Way km" value={input.distanceKmOneWay} onChange={(v) => setInput({ ...input, distanceKmOneWay: v })} />}
-        {hasTravel && input.travelMode === "Drive" && <NumberInput label="Drive Time One-Way Days" value={input.driveTimeDaysOneWay} onChange={(v) => setInput({ ...input, driveTimeDaysOneWay: v })} />}
-        {hasTravel && input.travelMode === "Drive" && <NumberInput label="Vehicles" value={input.vehicles} onChange={(v) => setInput({ ...input, vehicles: v })} />}
-        {input.travelMode === "Fly" && <Select label="Airport Transport" value={input.airportTransport} options={["N/A", "Drive", "Uber"]} onChange={(v) => setInput({ ...input, airportTransport: v as ProjectInput["airportTransport"] })} />}
-        {input.travelMode === "Fly" && <NumberInput label="Additional Flights" value={input.additionalFlights} onChange={(v) => setInput({ ...input, additionalFlights: v })} />}
-      </div>
     </div>
   );
 }
@@ -1074,8 +1017,6 @@ function ExtrasStep({ input, setInput }: { input: ProjectInput; setInput: (input
 }
 
 function ReviewStep({ calculations, input, setInput }: { calculations: ReturnType<typeof calculateProject>; input: ProjectInput; setInput: (input: ProjectInput) => void }) {
-  const auth = useAuth();
-  const canApproveLowMarkup = hasPermission(auth.role, "projects.review");
   const overallExactMarkup = calculations.budgetCost ? calculations.budgetProfit / calculations.budgetCost * 100 : 0;
   const grouped = calculations.proposalLines.filter((line) => line.total).reduce<Record<string, number>>((acc, line) => {
     acc[line.section] = (acc[line.section] ?? 0) + line.total;
@@ -1090,7 +1031,7 @@ function ReviewStep({ calculations, input, setInput }: { calculations: ReturnTyp
     return { category, proposal, budget, profit, markup, grossMargin };
   }).filter((row) => row.proposal || row.budget);
   const markupWarnings = [
-    calculations.proposalTotal && overallExactMarkup < 25 ? `Overall markup is ${percent(overallExactMarkup)}, below the 25% approval threshold.` : "",
+    calculations.proposalTotal && overallExactMarkup < 25 ? `Overall markup is ${percent(overallExactMarkup)}, below 25%.` : "",
     ...categoryRows
       .filter((row) => row.budget > 0 && row.markup < 25)
       .map((row) => `${row.category} markup is ${percent(row.markup)}, below 25%.`)
@@ -1123,7 +1064,6 @@ function ReviewStep({ calculations, input, setInput }: { calculations: ReturnTyp
           <div className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-600">Discount is applied across proposal lines. Budget cost is not discounted.</div>
         </div>
       </div>
-      {calculations.proposalTotal > 0 && overallExactMarkup < 25 && <div className="app-card p-4"><label className="form-label">Manager approval reason (required below 25% markup)</label><textarea className="input mt-2 min-h-24 w-full" disabled={!canApproveLowMarkup} value={input.markupOverrideReason} onChange={(event) => setInput({ ...input, markupOverrideReason: event.target.value })} placeholder={canApproveLowMarkup ? "Explain why this lower markup is commercially acceptable." : "A manager must enter the approval reason."} />{!canApproveLowMarkup && <div className="mt-2 text-sm font-bold text-amber-700">Your role cannot approve a costing below 25% markup.</div>}</div>}
       <div className="app-card p-4">
         <h4 className="mb-3 font-bold">Budget / Proposal by P&L Category</h4>
         <div className="table-shell border-0">
@@ -1180,9 +1120,13 @@ function DetailTabs({ tab, setTab, input }: { tab: DetailTab; setTab: (tab: Deta
 
 function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates }) {
   const g = input.grinding;
-  const [grindingPage, setGrindingPage] = useState<GrindingPage>("Programme");
+  const [grindingPage, setGrindingPageState] = useState<GrindingPage>(input.uiProgress?.grindingPage ?? "Programme");
   const patch = (next: Partial<typeof g>) => setInput({ ...input, grinding: { ...g, ...next } });
-  const estimatedDays = g.estimatedDays || g.weeks * g.daysPerWeek;
+  const setGrindingPage = (page: GrindingPage) => {
+    setGrindingPageState(page);
+    setInput({ ...input, uiProgress: { ...input.uiProgress, grindingPage: page } });
+  };
+  const estimatedDays = g.estimatedDays;
   const productionMode = g.productionLabourMode ?? "in_house";
   const surveyorMode = g.surveyorLabourMode ?? "in_house";
   const usesProductionInHouse = productionMode === "in_house" || productionMode === "both";
@@ -1193,6 +1137,12 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
   const surveyorDays = g.surveyorDays > 0 ? g.surveyorDays : estimatedDays;
   const productionDaysOverridden = g.productionLabourDays > 0 && g.productionLabourDays !== estimatedDays;
   const surveyorDaysOverridden = g.surveyorDays > 0 && g.surveyorDays !== estimatedDays;
+  const calculatedProductionWeekendDays = weekendDaysForProgramme(productionDays, 5, g.weekendDaysPerWeek);
+  const calculatedSurveyorWeekendDays = weekendDaysForProgramme(surveyorDays, 5, g.weekendDaysPerWeek);
+  const calculatedProductionHotelNights = calculatedHotelNights(productionDays, g.weekendDaysPerWeek, g.productionTravelDays);
+  const calculatedSurveyorHotelNights = calculatedHotelNights(surveyorDays, g.weekendDaysPerWeek, g.surveyorTravelDays);
+  const productionHotelNights = g.productionHotelNights || calculatedProductionHotelNights;
+  const surveyorHotelNights = g.surveyorHotelNights || calculatedSurveyorHotelNights;
   const productionSubcontractSell = repairSubcontractorSell(g.productionSubcontractors);
   const surveyorSubcontractSell = repairSubcontractorSell(g.surveyorSubcontractors);
   const productionLabourSell = usesProductionInHouse ? g.productionMen * productionDays * rates.productionLabourDayRate * (1 + adminRateMargin(rates, "productionLabourDayRate", rates.defaultMargin)) : 0;
@@ -1201,14 +1151,18 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
   const grinderDays = g.productionMen * toolDays;
   const planerDays = g.gasPlaners * toolDays;
   const vacuumDays = g.dustVacuums * toolDays;
-  const generatorDays = (g.generatorRequired ? toolDays : 0) + (g.largeGeneratorRequired ? toolDays : 0);
+  const generatorDays = (g.generatorRequired ? g.generatorCount * toolDays : 0) + (g.largeGeneratorRequired ? toolDays : 0);
   const toolSell = usesProductionInHouse ? (
-    (g.generatorRequired ? rates.grindingSmallGeneratorDayRate * toolDays * (1 + adminRateMargin(rates, "grindingSmallGeneratorDayRate", rates.equipmentMargin)) : 0) +
+    (g.generatorRequired ? rates.grindingSmallGeneratorDayRate * g.generatorCount * toolDays * (1 + adminRateMargin(rates, "grindingSmallGeneratorDayRate", rates.equipmentMargin)) : 0) +
+    (g.largeGeneratorRequired ? ((g.largeGeneratorRate * toolDays) + g.largeGeneratorDelivery + g.largeGeneratorCollection) * (1 + rates.equipmentMargin) : 0) +
     (grinderDays * rates.grindingGrinderDayRate * (1 + adminRateMargin(rates, "grindingGrinderDayRate", rates.equipmentMargin))) +
     (g.gasPlaners * toolDays * rates.grindingPlanerDayRate * (1 + adminRateMargin(rates, "grindingPlanerDayRate", rates.equipmentMargin))) +
     (g.dustVacuums * toolDays * rates.grindingDustVacuumDayRate * (1 + adminRateMargin(rates, "grindingDustVacuumDayRate", rates.equipmentMargin))) +
     (g.grindingSegmentsRequired ? grinderDays * rates.grindingSegmentsDayRate * (1 + adminRateMargin(rates, "grindingSegmentsDayRate", rates.equipmentMargin)) : 0) +
-    (g.consumablesRequired ? grinderDays * rates.grindingConsumablesDayRate * (1 + adminRateMargin(rates, "grindingConsumablesDayRate", rates.equipmentMargin)) : 0)
+    (g.extensionCordsRequired ? toolDays * rates.grindingExtensionCordsDayRate * (1 + adminRateMargin(rates, "grindingExtensionCordsDayRate", rates.equipmentMargin)) : 0) +
+    (g.consumablesRequired ? grinderDays * rates.grindingConsumablesDayRate * (1 + adminRateMargin(rates, "grindingConsumablesDayRate", rates.equipmentMargin)) : 0) +
+    (g.equipmentShipping ? g.equipmentShipping * (1 + rates.equipmentMargin) : 0) +
+    g.additionalTools.reduce((sum, item) => sum + item.rate * (1 + item.margin), 0)
   ) : 0;
   const readiness = grindingReadiness(input);
   const labourModeButton = (label: string, value: LabourMode, current: LabourMode, onChange: (value: LabourMode) => void) => (
@@ -1223,11 +1177,11 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
           <Mini label="Surveyor Labour" value={surveyorMode === "subcontract" ? "Subcontract" : surveyorMode === "in_house" ? "In-house" : "Both"} />
           <Mini label="Tool Sell" value={money(toolSell)} />
           <Mini label="Subcontract Sell" value={money((usesProductionSubcontract ? productionSubcontractSell : 0) + (usesSurveyorSubcontract ? surveyorSubcontractSell : 0))} />
-          <Mini label="Approval Status" value={readiness.blockers.length ? "Draft only" : readiness.warnings.length ? "Review" : "Ready"} />
+          <Mini label="Sense Checks" value={readiness.blockers.length + readiness.warnings.length ? `${readiness.blockers.length + readiness.warnings.length} flagged` : "Clear"} />
         </div>
       </div>
-      {readiness.blockers.length > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"><div className="mb-2 font-bold uppercase">Draft only - fix before approval</div><div className="grid gap-1">{readiness.blockers.slice(0, 8).map((warning) => <div key={warning}>{warning}</div>)}</div></div>}
-      {!readiness.blockers.length && readiness.warnings.length > 0 && <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950"><div className="mb-2 font-bold uppercase">Review before approval</div><div className="grid gap-1">{readiness.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div></div>}
+      {readiness.blockers.length > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"><div className="mb-2 font-bold uppercase">Grinding sense checks</div><div className="grid gap-1">{readiness.blockers.slice(0, 8).map((warning) => <div key={warning}>{warning}</div>)}</div></div>}
+      {!readiness.blockers.length && readiness.warnings.length > 0 && <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950"><div className="mb-2 font-bold uppercase">Grinding review notes</div><div className="grid gap-1">{readiness.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div></div>}
       <GrindingPageTabs grindingPage={grindingPage} setGrindingPage={setGrindingPage} />
       {grindingPage === "Programme" && <>
         <div className="app-card-strong">
@@ -1262,10 +1216,10 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
             </div>
             {productionDaysOverridden && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-950">Production labour days overridden from {estimatedDays} to {productionDays}.</div>}
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <NumberInput label="Weekend Days" value={g.productionWeekendDays || g.weekendDaysPerWeek} onChange={(v) => patch({ productionWeekendDays: v })} />
+              <Mini label="Weekend Days On Project" value={`${calculatedProductionWeekendDays}`} />
               <NumberInput label="Night Shifts" value={g.productionNightShifts || g.nightShifts} onChange={(v) => patch({ productionNightShifts: v })} />
               <Toggle label="Hotel / Subsistence" checked={g.productionHotelRequired} onChange={(v) => patch({ productionHotelRequired: v })} />
-              {g.productionHotelRequired && <NumberInput label="Nights Per Team" value={g.productionHotelNights} onChange={(v) => patch({ productionHotelNights: v })} />}
+              {g.productionHotelRequired && <div className={g.productionHotelNights > 0 && g.productionHotelNights !== calculatedProductionHotelNights ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Hotel Nights Per Team" value={productionHotelNights} onChange={(v) => patch({ productionHotelNights: v === calculatedProductionHotelNights ? 0 : v })} />{g.productionHotelNights > 0 && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => patch({ productionHotelNights: 0 })}>Reset to calculated {calculatedProductionHotelNights}</button>}</div>}
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <NumberInput label="Travel Days" value={g.productionTravelDays} onChange={(v) => patch({ productionTravelDays: v })} />
@@ -1295,11 +1249,11 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
             </div>
             {surveyorDaysOverridden && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-950">Surveyor days overridden from {estimatedDays} to {surveyorDays}.</div>}
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <NumberInput label="Weekend Days" value={g.surveyorWeekendDays || g.weekendDaysPerWeek} onChange={(v) => patch({ surveyorWeekendDays: v })} />
+              <Mini label="Weekend Days On Project" value={`${calculatedSurveyorWeekendDays}`} />
               <NumberInput label="Night Shifts" value={g.surveyorNightShifts || g.nightShifts} onChange={(v) => patch({ surveyorNightShifts: v })} />
               <Toggle label="Engineering Report" checked={g.engineeringReport} onChange={(v) => patch({ engineeringReport: v })} />
               <Toggle label="Hotel / Subsistence" checked={g.surveyorHotelRequired} onChange={(v) => patch({ surveyorHotelRequired: v })} />
-              {g.surveyorHotelRequired && <NumberInput label="Nights Per Team" value={g.surveyorHotelNights} onChange={(v) => patch({ surveyorHotelNights: v })} />}
+              {g.surveyorHotelRequired && <div className={g.surveyorHotelNights > 0 && g.surveyorHotelNights !== calculatedSurveyorHotelNights ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Hotel Nights Per Team" value={surveyorHotelNights} onChange={(v) => patch({ surveyorHotelNights: v === calculatedSurveyorHotelNights ? 0 : v })} />{g.surveyorHotelNights > 0 && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => patch({ surveyorHotelNights: 0 })}>Reset to calculated {calculatedSurveyorHotelNights}</button>}</div>}
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <NumberInput label="Travel Days" value={g.surveyorTravelDays} onChange={(v) => patch({ surveyorTravelDays: v })} />
@@ -1323,11 +1277,12 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
               <Mini label="Tool Sell" value={money(toolSell)} />
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <Toggle label="10000 watt generator" checked={g.generatorRequired} onChange={(v) => patch({ generatorRequired: v })} />
+              <Toggle label="10000 watt generator" checked={g.generatorRequired} onChange={(v) => patch({ generatorRequired: v, generatorCount: v ? g.generatorCount || 1 : 0 })} />
+              {g.generatorRequired && <NumberInput label="10000 watt Generators On Site" value={g.generatorCount} onChange={(v) => patch({ generatorCount: v })} />}
               <Toggle label="Large Generator" checked={g.largeGeneratorRequired} onChange={(v) => patch({ largeGeneratorRequired: v })} />
-              <NumberInput label="Large Generator Rate" value={g.largeGeneratorRate} onChange={(v) => patch({ largeGeneratorRate: v })} />
-              <NumberInput label="Delivery" value={g.largeGeneratorDelivery} onChange={(v) => patch({ largeGeneratorDelivery: v })} />
-              <NumberInput label="Collection" value={g.largeGeneratorCollection} onChange={(v) => patch({ largeGeneratorCollection: v })} />
+              {g.largeGeneratorRequired && <NumberInput label="Large Generator Rate" value={g.largeGeneratorRate} onChange={(v) => patch({ largeGeneratorRate: v })} />}
+              {g.largeGeneratorRequired && <NumberInput label="Delivery" value={g.largeGeneratorDelivery} onChange={(v) => patch({ largeGeneratorDelivery: v })} />}
+              {g.largeGeneratorRequired && <NumberInput label="Collection" value={g.largeGeneratorCollection} onChange={(v) => patch({ largeGeneratorCollection: v })} />}
               <Mini label="Grinders" value={`${g.productionMen} men x ${toolDays} days = ${grinderDays}`} />
               <NumberInput label="Planers" value={g.gasPlaners} onChange={(v) => patch({ gasPlaners: v })} />
               <NumberInput label="Vacuums" value={g.dustVacuums} onChange={(v) => patch({ dustVacuums: v })} />
@@ -1336,6 +1291,7 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
               <Toggle label="Consumables" checked={g.consumablesRequired} onChange={(v) => patch({ consumablesRequired: v })} />
               <NumberInput label="Equipment Shipping" value={g.equipmentShipping} onChange={(v) => patch({ equipmentShipping: v })} />
             </div>
+            <AdditionalTools items={g.additionalTools} onChange={(additionalTools) => patch({ additionalTools })} />
           </div>}
         </div>
         <div className="app-card-strong">
@@ -1366,13 +1322,16 @@ function GrindingPageTabs({ grindingPage, setGrindingPage, placement = "top" }: 
 
 function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates }) {
   const s = input.screeding;
-  const [screedPage, setScreedPage] = useState<ScreedPage>("Programme");
+  const [screedPage, setScreedPageState] = useState<ScreedPage>(input.uiProgress?.screedPage ?? "Programme");
   const patch = (next: Partial<typeof s>) => setInput({ ...input, screeding: { ...s, ...next } });
+  const setScreedPage = (page: ScreedPage) => {
+    setScreedPageState(page);
+    setInput({ ...input, uiProgress: { ...input.uiProgress, screedPage: page } });
+  };
   const updateTeam = (index: number, next: Partial<ScreedTeam>) => patch({ teams: s.teams.map((team, i) => i === index ? { ...team, ...next } : team) });
   const removeTeam = (index: number) => patch({ teams: s.teams.filter((_, i) => i !== index) });
-  const addTeam = () => patch({ teams: [...s.teams, { enabled: true, contractorName: `Screed subcontractor ${s.teams.length + 1}`, scabble: false, prep: false, screed: true, grind: false, mobilisation: 0, mobilisationMargin: 0.3, priceType: "day", daysProgrammed: screedDays, rate: 0, margin: 0.3 }] });
-  const calculatedActivityDays = s.pourDays + s.screwDays + s.primerDays;
-  const screedDays = s.totalDaysOnSite || calculatedActivityDays;
+  const screedDays = s.preparationDays + s.screedingDays + s.grindingDays;
+  const addTeam = () => patch({ teams: [...s.teams, { enabled: true, contractorName: `Screed subcontractor ${s.teams.length + 1}`, scabble: false, prep: false, screed: true, grind: false, mobilisation: 0, mobilisationMargin: 0.3, priceType: "day", daysProgrammed: screedDays, preparationDays: 0, screedingDays: s.screedingDays, grindingDays: 0, rate: 0, margin: 0.3 }] });
   const productionMode = s.productionLabourMode ?? "subcontract";
   const surveyorMode = s.surveyorLabourMode ?? "in_house";
   const usesProductionInHouse = productionMode === "in_house" || productionMode === "both";
@@ -1383,9 +1342,15 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
   const surveyorDays = s.surveyorDays > 0 ? s.surveyorDays : screedDays;
   const productionDaysOverridden = s.productionLabourDays > 0 && s.productionLabourDays !== screedDays;
   const surveyorDaysOverridden = s.surveyorDays > 0 && s.surveyorDays !== screedDays;
+  const calculatedProductionWeekendDays = weekendDaysForProgramme(productionDays, 5, s.weekendDaysPerWeek);
+  const calculatedSurveyorWeekendDays = weekendDaysForProgramme(surveyorDays, 5, s.weekendDaysPerWeek);
+  const calculatedProductionHotelNights = calculatedHotelNights(productionDays, s.weekendDaysPerWeek, s.productionTravelDays);
+  const calculatedSurveyorHotelNights = calculatedHotelNights(surveyorDays, s.weekendDaysPerWeek, s.surveyorTravelDays);
+  const productionHotelNights = s.productionHotelNights || calculatedProductionHotelNights;
+  const surveyorHotelNights = s.surveyorHotelNights || calculatedSurveyorHotelNights;
   const productionSubcontractSell = s.teams.reduce((sum, team) => {
-    if (!team.enabled) return sum;
-    const qty = team.priceType === "day" ? team.daysProgrammed || screedDays : team.rate ? 1 : 0;
+    const activityDays = (team.prep ? team.preparationDays : 0) + (team.screed ? team.screedingDays : 0) + (team.grind ? team.grindingDays : 0);
+    const qty = team.priceType === "day" ? activityDays : team.rate ? 1 : 0;
     return sum + (team.mobilisation * (1 + (team.mobilisationMargin ?? rates.subcontractMargin))) + (team.rate * qty * (1 + (team.margin ?? rates.subcontractMargin)));
   }, 0);
   const surveyorSubcontractSell = repairSubcontractorSell(s.surveyorSubcontractors);
@@ -1422,25 +1387,22 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
           <Mini label="Surveyor Labour" value={surveyorMode === "subcontract" ? "Subcontract" : surveyorMode === "in_house" ? "In-house" : "Both"} />
           <Mini label="Material Sell" value={money(materialSell)} />
           <Mini label="Subcontract Sell" value={money((usesProductionSubcontract ? productionSubcontractSell : 0) + (usesSurveyorSubcontract ? surveyorSubcontractSell : 0))} />
-          <Mini label="Approval Status" value={readiness.blockers.length ? "Draft only" : readiness.warnings.length ? "Review" : "Ready"} />
+          <Mini label="Sense Checks" value={readiness.blockers.length + readiness.warnings.length ? `${readiness.blockers.length + readiness.warnings.length} flagged` : "Clear"} />
         </div>
       </div>
-      {readiness.blockers.length > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"><div className="mb-2 font-bold uppercase">Draft only - fix before approval</div><div className="grid gap-1">{readiness.blockers.slice(0, 8).map((warning) => <div key={warning}>{warning}</div>)}</div></div>}
-      {!readiness.blockers.length && readiness.warnings.length > 0 && <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950"><div className="mb-2 font-bold uppercase">Review before approval</div><div className="grid gap-1">{readiness.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div></div>}
+      {readiness.blockers.length > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"><div className="mb-2 font-bold uppercase">Screeding sense checks</div><div className="grid gap-1">{readiness.blockers.slice(0, 8).map((warning) => <div key={warning}>{warning}</div>)}</div></div>}
+      {!readiness.blockers.length && readiness.warnings.length > 0 && <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950"><div className="mb-2 font-bold uppercase">Screeding review notes</div><div className="grid gap-1">{readiness.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div></div>}
       <ScreedPageTabs screedPage={screedPage} setScreedPage={setScreedPage} />
       {screedPage === "Programme" && <>
         <div className="app-card-strong">
           <div className="panel-heading"><h2 className="text-xl font-semibold">Screeding Programme</h2><p className="text-sm text-slate-500">Set the expected site duration first. These days drive default labour, surveyor and in-house equipment quantities.</p></div>
           <div className="grid gap-4 p-5 sm:grid-cols-2 xl:grid-cols-4">
             <NumberInput label="Area m2" value={s.areaM2} onChange={(v) => patch({ areaM2: v })} />
-            <NumberInput label="Pour Days" value={s.pourDays} onChange={(v) => patch({ pourDays: v })} />
-            <NumberInput label="Screeding Days" value={s.screwDays} onChange={(v) => patch({ screwDays: v })} />
-            <NumberInput label="Primer Days" value={s.primerDays} onChange={(v) => patch({ primerDays: v })} />
-            <Mini label="Calculated Activity Days" value={String(calculatedActivityDays)} />
-            <div className={s.totalDaysOnSite > 0 && s.totalDaysOnSite !== calculatedActivityDays ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Inputted Total Days On Site" value={s.totalDaysOnSite || calculatedActivityDays} onChange={(v) => patch({ totalDaysOnSite: v === calculatedActivityDays ? 0 : v })} /></div>
-            <NumberInput label="Days Per Week" value={s.daysPerWeek} onChange={(v) => patch({ daysPerWeek: v })} />
+            <NumberInput label="Preparation Days" value={s.preparationDays} onChange={(v) => patch({ preparationDays: v })} />
+            <NumberInput label="Screeding Days" value={s.screedingDays} onChange={(v) => patch({ screedingDays: v })} />
+            <NumberInput label="Grinding Days" value={s.grindingDays} onChange={(v) => patch({ grindingDays: v })} />
+            <Mini label="Total Site Days" value={String(screedDays)} />
             <NumberInput label="Weekend Days Worked Per Week" value={s.weekendDaysPerWeek} onChange={(v) => patch({ weekendDaysPerWeek: v, productionWeekendDays: v, surveyorWeekendDays: v })} />
-            {s.totalDaysOnSite > 0 && s.totalDaysOnSite !== calculatedActivityDays && <div className="sm:col-span-2 xl:col-span-4"><Text label="Total Days Override Reason" value={s.totalDaysOverrideReason} onChange={(v) => patch({ totalDaysOverrideReason: v })} /></div>}
             <Toggle label="Night Shifts" checked={s.nightShiftRequired} onChange={(v) => patch({ nightShiftRequired: v })} />
             {s.nightShiftRequired && <NumberInput label="Number of Night Shifts" value={s.nightShifts} onChange={(v) => patch({ nightShifts: v, productionNightShifts: v, surveyorNightShifts: v })} />}
           </div>
@@ -1463,31 +1425,37 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
           </div>
           <div className="grid gap-4 p-5">
             {(s.teams.length ? s.teams : []).map((team, index) => {
-              const scope = [team.scabble && "Scabble", team.prep && "Prep", team.screed && "Screed", team.grind && "Grind"].filter(Boolean).join(", ") || "Scope not set";
-              const qty = team.priceType === "day" ? team.daysProgrammed || screedDays : team.rate ? 1 : 0;
-              const daysOverridden = team.priceType === "day" && team.daysProgrammed !== screedDays;
-              const sell = team.enabled ? (team.mobilisation * (1 + (team.mobilisationMargin ?? rates.subcontractMargin))) + (team.rate * qty * (1 + (team.margin ?? rates.subcontractMargin))) : 0;
+              const scope = [team.prep && "Preparation", team.screed && "Screeding", team.grind && "Grinding"].filter(Boolean).join(", ") || "Scope not set";
+              const activityDays = (team.prep ? team.preparationDays : 0) + (team.screed ? team.screedingDays : 0) + (team.grind ? team.grindingDays : 0);
+              const qty = team.priceType === "day" ? activityDays : team.rate ? 1 : 0;
+              const prepDifferent = team.prep && team.preparationDays !== s.preparationDays;
+              const screedDifferent = team.screed && team.screedingDays !== s.screedingDays;
+              const grindDifferent = team.grind && team.grindingDays !== s.grindingDays;
+              const sell = (team.mobilisation * (1 + (team.mobilisationMargin ?? rates.subcontractMargin))) + (team.rate * qty * (1 + (team.margin ?? rates.subcontractMargin)));
               return (
                 <div className="grid gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4" key={index}>
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div><div className="text-xs font-bold uppercase text-slate-500">Subcontractor {index + 1}</div><h3 className="font-bold text-slate-950">{team.contractorName || "Unnamed subcontractor"}</h3><p className="text-sm text-slate-500">{scope}</p></div>
-                    <div className="flex flex-wrap gap-2"><Toggle label="Enabled" checked={team.enabled} onChange={(v) => updateTeam(index, { enabled: v })} /><button className="secondary-button" onClick={() => removeTeam(index)} disabled={s.teams.length === 1}>Remove</button></div>
+                    <button className="secondary-button" onClick={() => removeTeam(index)}>Remove</button>
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-                    <Text label="Subcontractor / Scope" value={team.contractorName} onChange={(v) => updateTeam(index, { contractorName: v })} />
+                    <Text label="Subcontractor" value={team.contractorName} onChange={(v) => updateTeam(index, { contractorName: v })} />
                     <Select label="Price Type" value={team.priceType} options={["day", "lump sum"]} onChange={(v) => updateTeam(index, { priceType: v as ScreedTeam["priceType"] })} />
                     <NumberInput label="Rate / Budget Cost" value={team.rate} onChange={(v) => updateTeam(index, { rate: v })} />
-                    <NumberInput label="Margin %" value={(team.margin ?? rates.subcontractMargin) * 100} onChange={(v) => updateTeam(index, { margin: v / 100 })} />
-                    {team.priceType === "day" ? <div className={daysOverridden ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Days Programmed" value={team.daysProgrammed} onChange={(v) => updateTeam(index, { daysProgrammed: v })} /></div> : <Mini label="Quantity" value="1 lump sum" />}
+                    <NumberInput label="Markup %" value={(team.margin ?? rates.subcontractMargin) * 100} onChange={(v) => updateTeam(index, { margin: v / 100 })} />
+                    {team.priceType === "day" ? <Mini label="Total Subcontractor Days" value={`${activityDays}`} /> : <Mini label="Quantity" value="1 lump sum" />}
                     <Mini label="Proposal Cost" value={money(sell)} />
                     <NumberInput label="Mobilisation" value={team.mobilisation} onChange={(v) => updateTeam(index, { mobilisation: v })} />
-                    <NumberInput label="Mobilisation Margin %" value={(team.mobilisationMargin ?? rates.subcontractMargin) * 100} onChange={(v) => updateTeam(index, { mobilisationMargin: v / 100 })} />
-                    <Toggle label="Scabble" checked={team.scabble} onChange={(v) => updateTeam(index, { scabble: v })} />
-                    <Toggle label="Prep" checked={team.prep} onChange={(v) => updateTeam(index, { prep: v })} />
-                    <Toggle label="Screed" checked={team.screed} onChange={(v) => updateTeam(index, { screed: v })} />
-                    <Toggle label="Grind" checked={team.grind} onChange={(v) => updateTeam(index, { grind: v })} />
+                    <NumberInput label="Mobilisation Markup %" value={(team.mobilisationMargin ?? rates.subcontractMargin) * 100} onChange={(v) => updateTeam(index, { mobilisationMargin: v / 100 })} />
+                    <Toggle label="Preparation" checked={team.prep} onChange={(v) => updateTeam(index, { prep: v, preparationDays: v ? s.preparationDays : 0 })} />
+                    <Toggle label="Screeding" checked={team.screed} onChange={(v) => updateTeam(index, { screed: v, screedingDays: v ? s.screedingDays : 0 })} />
+                    <Toggle label="Grinding" checked={team.grind} onChange={(v) => updateTeam(index, { grind: v, grindingDays: v ? s.grindingDays : 0 })} />
                   </div>
-                  {daysOverridden && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-950">Subcontract days overridden from calculated {screedDays} to {team.daysProgrammed}.</div>}
+                  {team.priceType === "day" && <div className="grid gap-3 sm:grid-cols-3">
+                    {team.prep && <div className={prepDifferent ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Preparation Days" value={team.preparationDays} onChange={(v) => updateTeam(index, { preparationDays: v })} />{prepDifferent && <div className="mt-1 text-xs font-bold text-amber-900">Programme: {s.preparationDays} days</div>}</div>}
+                    {team.screed && <div className={screedDifferent ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Screeding Days" value={team.screedingDays} onChange={(v) => updateTeam(index, { screedingDays: v })} />{screedDifferent && <div className="mt-1 text-xs font-bold text-amber-900">Programme: {s.screedingDays} days</div>}</div>}
+                    {team.grind && <div className={grindDifferent ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Grinding Days" value={team.grindingDays} onChange={(v) => updateTeam(index, { grindingDays: v })} />{grindDifferent && <div className="mt-1 text-xs font-bold text-amber-900">Programme: {s.grindingDays} days</div>}</div>}
+                  </div>}
                 </div>
               );
             })}
@@ -1504,10 +1472,10 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
             </div>
             {productionDaysOverridden && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-950">Production labour days overridden from {screedDays} to {productionDays}.</div>}
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <NumberInput label="Weekend Days" value={s.productionWeekendDays || s.weekendDaysPerWeek} onChange={(v) => patch({ productionWeekendDays: v })} />
+              <Mini label="Weekend Days On Project" value={`${calculatedProductionWeekendDays}`} />
               <NumberInput label="Night Shifts" value={s.productionNightShifts || s.nightShifts} onChange={(v) => patch({ productionNightShifts: v })} />
               <Toggle label="Hotel / Subsistence" checked={s.productionHotelRequired} onChange={(v) => patch({ productionHotelRequired: v })} />
-              {s.productionHotelRequired && <NumberInput label="Nights Per Team" value={s.productionHotelNights} onChange={(v) => patch({ productionHotelNights: v })} />}
+              {s.productionHotelRequired && <div className={s.productionHotelNights > 0 && s.productionHotelNights !== calculatedProductionHotelNights ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Hotel Nights Per Team" value={productionHotelNights} onChange={(v) => patch({ productionHotelNights: v === calculatedProductionHotelNights ? 0 : v })} />{s.productionHotelNights > 0 && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => patch({ productionHotelNights: 0 })}>Reset to calculated {calculatedProductionHotelNights}</button>}</div>}
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <NumberInput label="Travel Days" value={s.productionTravelDays} onChange={(v) => patch({ productionTravelDays: v })} />
@@ -1537,11 +1505,11 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
             </div>
             {surveyorDaysOverridden && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-950">Surveyor days overridden from {screedDays} to {surveyorDays}.</div>}
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <NumberInput label="Weekend Days" value={s.surveyorWeekendDays || s.weekendDaysPerWeek} onChange={(v) => patch({ surveyorWeekendDays: v })} />
+              <Mini label="Weekend Days On Project" value={`${calculatedSurveyorWeekendDays}`} />
               <NumberInput label="Night Shifts" value={s.surveyorNightShifts || s.nightShifts} onChange={(v) => patch({ surveyorNightShifts: v })} />
               <Toggle label="Engineering Report" checked={s.engineeringReport} onChange={(v) => patch({ engineeringReport: v })} />
               <Toggle label="Hotel / Subsistence" checked={s.surveyorHotelRequired || s.hotelRequired} onChange={(v) => patch({ surveyorHotelRequired: v, hotelRequired: v })} />
-              {(s.surveyorHotelRequired || s.hotelRequired) && <NumberInput label="Nights Per Team" value={s.surveyorHotelNights} onChange={(v) => patch({ surveyorHotelNights: v })} />}
+              {(s.surveyorHotelRequired || s.hotelRequired) && <div className={s.surveyorHotelNights > 0 && s.surveyorHotelNights !== calculatedSurveyorHotelNights ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Hotel Nights Per Team" value={surveyorHotelNights} onChange={(v) => patch({ surveyorHotelNights: v === calculatedSurveyorHotelNights ? 0 : v })} />{s.surveyorHotelNights > 0 && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => patch({ surveyorHotelNights: 0 })}>Reset to calculated {calculatedSurveyorHotelNights}</button>}</div>}
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <NumberInput label="Travel Days" value={s.surveyorTravelDays} onChange={(v) => patch({ surveyorTravelDays: v })} />
@@ -1555,19 +1523,19 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
       </>}
       {screedPage === "Materials" && <>
         <div className="app-card-strong">
-          <div className="panel-heading"><h2 className="text-xl font-semibold">Screed Materials</h2><p className="text-sm text-slate-500">Material quantities and budget rates from the screeding costing sheet. Proposal cost applies the entered material margin.</p></div>
+          <div className="panel-heading"><h2 className="text-xl font-semibold">Screed Materials</h2><p className="text-sm text-slate-500">Material quantities and budget rates from the screeding costing sheet. Proposal cost applies the entered material markup.</p></div>
           <div className="grid gap-4 p-5 sm:grid-cols-2 xl:grid-cols-4">
             <NumberInput label="Screed Bags" value={s.screedMaterialBags} onChange={(v) => patch({ screedMaterialBags: v })} />
             <NumberInput label="Screed Rate" value={s.screedMaterialRate} onChange={(v) => patch({ screedMaterialRate: v })} />
-            <NumberInput label="Screed Margin %" value={s.screedMaterialMargin * 100} onChange={(v) => patch({ screedMaterialMargin: v / 100 })} />
+              <NumberInput label="Screed Markup %" value={s.screedMaterialMargin * 100} onChange={(v) => patch({ screedMaterialMargin: v / 100 })} />
             <Mini label="Screed Proposal Cost" value={money(s.screedMaterialBags * s.screedMaterialRate * (1 + s.screedMaterialMargin))} />
             <NumberInput label="Primer Units" value={s.primerUnits} onChange={(v) => patch({ primerUnits: v })} />
             <NumberInput label="Primer Rate" value={s.primerRate} onChange={(v) => patch({ primerRate: v })} />
-            <NumberInput label="Primer Margin %" value={s.primerMargin * 100} onChange={(v) => patch({ primerMargin: v / 100 })} />
+              <NumberInput label="Primer Markup %" value={s.primerMargin * 100} onChange={(v) => patch({ primerMargin: v / 100 })} />
             <Mini label="Primer Proposal Cost" value={money(s.primerUnits * s.primerRate * (1 + s.primerMargin))} />
             <NumberInput label="Sand Bags" value={s.sandBags} onChange={(v) => patch({ sandBags: v })} />
             <NumberInput label="Sand Rate" value={s.sandRate} onChange={(v) => patch({ sandRate: v })} />
-            <NumberInput label="Sand Margin %" value={s.sandMargin * 100} onChange={(v) => patch({ sandMargin: v / 100 })} />
+              <NumberInput label="Sand Markup %" value={s.sandMargin * 100} onChange={(v) => patch({ sandMargin: v / 100 })} />
             <Mini label="Sand Proposal Cost" value={money(s.sandBags * s.sandRate * (1 + s.sandMargin))} />
             <NumberInput label="Material Shipping" value={s.materialShipping} onChange={(v) => patch({ materialShipping: v })} />
             <Mini label="Total Material Sell" value={money(materialSell)} />
@@ -1589,9 +1557,9 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <NumberInput label="Generator Days" value={s.generatorDays} onChange={(v) => patch({ generatorDays: v })} />
               <Toggle label="Large Generator" checked={s.largeGeneratorRequired} onChange={(v) => patch({ largeGeneratorRequired: v })} />
-              <NumberInput label="Large Generator Rate" value={s.largeGeneratorRate} onChange={(v) => patch({ largeGeneratorRate: v })} />
-              <NumberInput label="Delivery" value={s.largeGeneratorDelivery} onChange={(v) => patch({ largeGeneratorDelivery: v })} />
-              <NumberInput label="Collection" value={s.largeGeneratorCollection} onChange={(v) => patch({ largeGeneratorCollection: v })} />
+              {s.largeGeneratorRequired && <NumberInput label="Large Generator Rate" value={s.largeGeneratorRate} onChange={(v) => patch({ largeGeneratorRate: v })} />}
+              {s.largeGeneratorRequired && <NumberInput label="Delivery" value={s.largeGeneratorDelivery} onChange={(v) => patch({ largeGeneratorDelivery: v })} />}
+              {s.largeGeneratorRequired && <NumberInput label="Collection" value={s.largeGeneratorCollection} onChange={(v) => patch({ largeGeneratorCollection: v })} />}
               <NumberInput label="Grinders" value={grinderCount} onChange={(v) => patch({ propaneGrinders: v })} />
               <NumberInput label="Planers" value={s.gasPlaners} onChange={(v) => patch({ gasPlaners: v })} />
               <NumberInput label="Vacuums" value={s.dustVacuums} onChange={(v) => patch({ dustVacuums: v })} />
@@ -1630,10 +1598,14 @@ function ScreedPageTabs({ screedPage, setScreedPage, placement = "top" }: { scre
 
 function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCalcs }: { input: ProjectInput; setInput: (input: ProjectInput) => void; repairCatalog: RepairCatalog; rates: AdminRates; projectMaterialCalcs: ReturnType<typeof calculateProjectRepairMaterials> }) {
   const r = input.repairs;
-  const [repairMode, setRepairMode] = useState<"Simple" | "Advanced">("Simple");
-  const [repairPage, setRepairPage] = useState<RepairPage>("Details");
+  const [advancedLines, setAdvancedLines] = useState<Record<string, boolean>>({});
+  const [repairPage, setRepairPageState] = useState<RepairPage>(input.uiProgress?.repairPage ?? "Details");
   const [pendingOptional, setPendingOptional] = useState<Record<string, string>>({});
   const patch = (next: Partial<typeof r>) => setInput({ ...input, repairs: { ...r, ...next } });
+  const setRepairPage = (page: RepairPage) => {
+    setRepairPageState(page);
+    setInput({ ...input, uiProgress: { ...input.uiProgress, repairPage: page } });
+  };
   const updateRepairLine = (index: number, next: Partial<RepairLineItem>) => patch({ repairLines: r.repairLines.map((item, i) => i === index ? { ...item, ...next } : item) });
   const materialCost = (repairLine: RepairLineItem) => calculateRepairLineMaterials(repairLine, repairCatalog).reduce((sum, calc) => sum + calc.cost, 0);
   const selectedMaterialIds = (repairLine: RepairLineItem) => {
@@ -1641,8 +1613,6 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
     const selected = new Set(repairLine.materialSelections.filter((selection) => selection.selected).map((selection) => selection.materialId));
     return type.materialRules.filter((rule) => rule.role === "required" || selected.has(rule.materialId)).map((rule) => rule.materialId);
   };
-  const selectedMaterials = (repairLine: RepairLineItem) => selectedMaterialIds(repairLine).map((id) => repairCatalog.materials.find((material) => material.id === id)).filter((material): material is RepairMaterial => Boolean(material));
-  const materialUsesOwnDimensions = (material: RepairMaterial) => material.category === "Sealant" && material.calcMethod === "volume_lwd";
   const materialSelection = (repairLine: RepairLineItem, materialId: string) => repairLine.materialSelections.find((selection) => selection.materialId === materialId);
   const patchMaterialSelection = (lineIndex: number, repairLine: RepairLineItem, materialId: string, next: Partial<RepairLineItem["materialSelections"][number]>) => {
     const exists = repairLine.materialSelections.some((selection) => selection.materialId === materialId);
@@ -1666,9 +1636,11 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
   const usesSubcontract = labourMode === "subcontract" || labourMode === "both";
   const usesInHouse = labourMode === "in_house" || labourMode === "both";
   const mobilisationKm = Math.max(0, r.mobilisationOneWayKm) * 2 * Math.max(0, r.mobilisationVehicles);
-  const hotelRoomNights = r.hotelRequired ? r.hotelNights * Math.max(0, r.labourMen) : 0;
+  const calculatedRepairHotelNights = calculatedHotelNights(effectiveRepairDays, r.weekendRequired ? r.weekendDays : 0, r.travelDays);
+  const effectiveRepairHotelNights = r.hotelNights || calculatedRepairHotelNights;
+  const hotelRoomNights = r.hotelRequired ? effectiveRepairHotelNights * Math.max(0, r.labourMen) : 0;
   const inHouseMen = Math.max(0, r.labourMen);
-  const inHouseSellTotal = usesInHouse ? ((inHouseMen * effectiveRepairDays * rates.productionLabourDayRate * (1 + adminRateMargin(rates, "productionLabourDayRate", rates.defaultMargin))) + (r.weekendRequired ? inHouseMen * weekendDaysForProgramme(effectiveRepairDays, r.daysPerWeek, r.weekendDays) * rates.productionWeekendDayRate * (1 + adminRateMargin(rates, "productionWeekendDayRate", rates.defaultMargin)) : 0) + (r.nightShiftRequired ? inHouseMen * r.nightShiftHours * rates.productionNightShiftAllowance * (1 + adminRateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin)) : 0) + (inHouseMen * r.travelDays * rates.productionLabourTravelDayRate * (1 + adminRateMargin(rates, "productionLabourTravelDayRate", rates.travelMargin))) + (hotelRoomNights * rates.hotel * (1 + adminRateMargin(rates, "hotel", rates.hotelMargin))) + (hotelRoomNights * rates.subsistence * (1 + adminRateMargin(rates, "subsistence", rates.subsistenceMargin))) + (mobilisationKm * rates.repairFuelPerKm * (1 + adminRateMargin(rates, "repairFuelPerKm", rates.travelMargin)))) : 0;
+  const inHouseSellTotal = usesInHouse ? ((inHouseMen * effectiveRepairDays * rates.productionLabourDayRate * (1 + adminRateMargin(rates, "productionLabourDayRate", rates.defaultMargin))) + (r.weekendRequired ? inHouseMen * weekendDaysForProgramme(effectiveRepairDays, 5, r.weekendDays) * rates.productionWeekendDayRate * (1 + adminRateMargin(rates, "productionWeekendDayRate", rates.defaultMargin)) : 0) + (r.nightShiftRequired ? inHouseMen * r.nightShiftHours * rates.productionNightShiftAllowance * (1 + adminRateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin)) : 0) + (inHouseMen * r.travelDays * rates.productionLabourTravelDayRate * (1 + adminRateMargin(rates, "productionLabourTravelDayRate", rates.travelMargin))) + (hotelRoomNights * rates.hotel * (1 + adminRateMargin(rates, "hotel", rates.hotelMargin))) + (hotelRoomNights * rates.subsistence * (1 + adminRateMargin(rates, "subsistence", rates.subsistenceMargin))) + (mobilisationKm * rates.repairFuelPerKm * (1 + adminRateMargin(rates, "repairFuelPerKm", rates.travelMargin)))) : 0;
   const subcontractSellTotal = repairSubcontractorSell(r.repairSubcontractors);
   const logisticsSellTotal = additionalItemsSell(r.haulageItems);
   const selectedOptionalRules = (repairLine: RepairLineItem) => {
@@ -1688,10 +1660,13 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
   };
   const toggleMaterial = (lineIndex: number, materialId: string, selected: boolean) => {
     const line = r.repairLines[lineIndex];
+    const rule = repairTypeByCode(line.repairTypeCode, repairCatalog).materialRules.find((item) => item.materialId === materialId);
+    const widthMm = rule?.usesOwnDimensions ? rule.defaultWidthMm : line.widthMm;
+    const depthMm = rule?.usesOwnDimensions ? rule.defaultDepthMm : line.depthMm;
     const existing = line.materialSelections.some((item) => item.materialId === materialId);
     const materialSelections = existing
-      ? line.materialSelections.map((item) => item.materialId === materialId ? { ...item, selected, widthMm: item.widthMm ?? line.widthMm, depthMm: item.depthMm ?? line.depthMm } : item)
-      : [...line.materialSelections, { materialId, selected, widthMm: line.widthMm, depthMm: line.depthMm }];
+      ? line.materialSelections.map((item) => item.materialId === materialId ? { ...item, selected, widthMm: item.widthMm ?? widthMm, depthMm: item.depthMm ?? depthMm } : item)
+      : [...line.materialSelections, { materialId, selected, widthMm, depthMm }];
     updateRepairLine(lineIndex, { materialSelections });
   };
   return (
@@ -1703,18 +1678,18 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
           <Mini label="Materials Cost" value={money(repairLineMaterialTotal)} />
           <Mini label="Subcontract Sell" value={money(usesSubcontract ? subcontractSellTotal : 0)} />
           <Mini label="Haulage" value={money(logisticsSellTotal)} />
-          <Mini label="Approval Status" value={readiness.blockers.length ? "Draft only" : readiness.warnings.length ? "Review" : "Ready"} />
+          <Mini label="Sense Checks" value={readiness.blockers.length + readiness.warnings.length ? `${readiness.blockers.length + readiness.warnings.length} flagged` : "Clear"} />
         </div>
       </div>
       {readiness.blockers.length > 0 && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
-          <div className="mb-2 font-bold uppercase">Draft only - fix before approval</div>
+          <div className="mb-2 font-bold uppercase">Repair sense checks</div>
           <div className="grid gap-1">{readiness.blockers.slice(0, 8).map((warning) => <div key={warning}>{warning}</div>)}</div>
         </div>
       )}
       {!readiness.blockers.length && readiness.warnings.length > 0 && (
         <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950">
-          <div className="mb-2 font-bold uppercase">Review before approval</div>
+          <div className="mb-2 font-bold uppercase">Repair review notes</div>
           <div className="grid gap-1">{readiness.warnings.map((warning) => <div key={warning}>{warning}</div>)}</div>
         </div>
       )}
@@ -1723,9 +1698,7 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
       <div className="app-card-strong">
         <div className="panel-heading flex flex-wrap items-center justify-between gap-3">
           <div><h2 className="text-xl font-semibold">Repair Type Schedule</h2><p className="text-sm text-slate-500">Add one row per repair type. Materials are suggested from the repair database using the company-standard booklet codes.</p></div>
-          <div className="flex rounded-lg bg-slate-100 p-1">
-            {(["Simple", "Advanced"] as const).map((mode) => <button key={mode} className={repairMode === mode ? "primary-button" : "secondary-button"} onClick={() => setRepairMode(mode)}>{mode}</button>)}
-          </div>
+          <div className="text-xs font-semibold text-slate-500">Open Advanced on only the repair rows that need extra detail.</div>
         </div>
         <div className="grid gap-4 p-5">
           {r.repairLines.map((repairLine, index) => {
@@ -1737,7 +1710,8 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
             const optionalAvailable = optional.filter((rule) => !optionalSelected.some((selected) => selected.materialId === rule.materialId));
             const pendingOptionalValue = pendingOptional[repairLine.id] || optionalAvailable[0]?.materialId || "";
             const materialCalcs = calculateRepairLineMaterials(repairLine, repairCatalog);
-            const sealantMaterials = selectedMaterials(repairLine).filter(materialUsesOwnDimensions);
+            const advanced = Boolean(advancedLines[repairLine.id]);
+            const ownDimensionRules = type.materialRules.filter((rule) => rule.usesOwnDimensions && selectedMaterialIds(repairLine).includes(rule.materialId));
             const days = Math.ceil(repairLineDays(repairLine, repairCatalog));
             const materials = materialCost(repairLine);
             const estimatedLineValue = materials * (1 + rates.materialMargin);
@@ -1750,6 +1724,7 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
                     <p className="mt-1 max-w-3xl text-sm text-slate-600">{type.description}</p>
                   </div>
                   <div className="flex flex-wrap gap-2">
+                    <button className={advanced ? "primary-button" : "secondary-button"} onClick={() => setAdvancedLines({ ...advancedLines, [repairLine.id]: !advanced })}>{advanced ? "Simple" : "Advanced"}</button>
                     <button className="secondary-button" onClick={() => duplicateRepairLine(index)}>Duplicate</button>
                     <button className="secondary-button" onClick={() => patch({ repairLines: r.repairLines.filter((_, i) => i !== index) })} disabled={r.repairLines.length === 1}>Remove</button>
                   </div>
@@ -1761,10 +1736,10 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
                   <Mini label="Material Sell" value={money(estimatedLineValue)} />
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                  <Select label="Repair Type" value={repairLine.repairTypeCode} options={repairCatalog.types.filter((item) => item.active).map((item) => item.code)} onChange={(v) => changeRepairType(index, v)} />
+                  <label className="block"><span className="field-label">Repair Type</span><select value={repairLine.repairTypeCode} onChange={(event) => changeRepairType(index, event.target.value)}>{repairCatalog.types.filter((item) => item.active).map((item) => <option key={item.code} value={item.code}>{item.code} / {item.name}</option>)}</select></label>
                   <Text label="Repair Name" value={repairLine.description || type.name} onChange={(v) => updateRepairLine(index, { description: v })} />
-                  {repairMode === "Advanced" && <NumberInput label="Output Per Day" value={repairLine.outputPerDay || type.defaultOutputPerDay} onChange={(v) => updateRepairLine(index, { outputPerDay: v })} />}
-                  {repairMode === "Advanced" && <Text label="Measure Basis" value={type.measurementBasis} onChange={() => undefined} />}
+                  {advanced && <NumberInput label="Output Per Day" value={repairLine.outputPerDay || type.defaultOutputPerDay} onChange={(v) => updateRepairLine(index, { outputPerDay: v })} />}
+                  {advanced && <Text label="Measure Basis" value={type.measurementBasis} onChange={() => undefined} />}
                   {type.measurementBasis === "linear" && <NumberInput label="Length m" value={repairLine.lengthM} onChange={(v) => updateRepairLine(index, { lengthM: v })} />}
                   {type.measurementBasis === "linear" && <NumberInput label="Width mm" value={repairLine.widthMm} onChange={(v) => updateRepairLine(index, { widthMm: v })} />}
                   {type.measurementBasis === "linear" && <NumberInput label="Depth mm" value={repairLine.depthMm} onChange={(v) => updateRepairLine(index, { depthMm: v })} />}
@@ -1804,18 +1779,20 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
                     </div>
                   </div>
                 </div>
-                {sealantMaterials.length > 0 && (
+                {advanced && ownDimensionRules.length > 0 && (
                   <div className="mt-4 rounded-lg border border-sky-100 bg-sky-50 p-3">
                     <div className="mb-2 text-xs font-bold uppercase text-sky-700">Sealant-Specific Dimensions</div>
                     <div className="grid gap-3 lg:grid-cols-2">
-                      {sealantMaterials.map((material) => {
+                      {ownDimensionRules.map((rule) => {
+                        const material = repairCatalog.materials.find((item) => item.id === rule.materialId);
+                        if (!material) return null;
                         const selection = materialSelection(repairLine, material.id);
                         return (
                           <div className="rounded-lg bg-white p-3 ring-1 ring-sky-100" key={material.id}>
                             <div className="mb-2 truncate text-sm font-bold text-slate-950">{material.name}</div>
                             <div className="grid gap-3 sm:grid-cols-2">
-                              <NumberInput label="Sealant Width mm" value={selection?.widthMm ?? repairLine.widthMm} onChange={(v) => patchMaterialSelection(index, repairLine, material.id, { widthMm: v })} />
-                              <NumberInput label="Sealant Depth mm" value={selection?.depthMm ?? repairLine.depthMm} onChange={(v) => patchMaterialSelection(index, repairLine, material.id, { depthMm: v })} />
+                              <NumberInput label="Material Width mm" value={selection?.widthMm && selection.widthMm !== repairLine.widthMm ? selection.widthMm : rule.defaultWidthMm ?? selection?.widthMm ?? repairLine.widthMm} onChange={(v) => patchMaterialSelection(index, repairLine, material.id, { widthMm: v })} />
+                              <NumberInput label="Material Depth mm" value={selection?.depthMm && selection.depthMm !== repairLine.depthMm ? selection.depthMm : rule.defaultDepthMm ?? selection?.depthMm ?? repairLine.depthMm} onChange={(v) => patchMaterialSelection(index, repairLine, material.id, { depthMm: v })} />
                             </div>
                           </div>
                         );
@@ -1823,13 +1800,13 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
                     </div>
                   </div>
                 )}
-                {repairMode === "Advanced" && <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                {advanced && <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
                   <div className="mb-2 text-xs font-bold uppercase text-slate-500">Material Take-Off Preview</div>
                   {materialCalcs.length ? (
                     <div className="table-shell border-0 bg-white">
                       <table>
-                        <thead><tr><th>Material</th><th>Qty</th><th>Rate</th><th>Cost</th></tr></thead>
-                        <tbody>{materialCalcs.map((calc) => <tr key={`${repairLine.id}-${calc.product}`}><td className="font-semibold">{calc.product.replace(`${repairLine.repairTypeCode} - `, "")}<div className="text-xs font-normal text-slate-500">{calc.formula}</div></td><td>{calc.quantity} {calc.unit}</td><td>{money(calc.rate)}</td><td className="font-bold">{money(calc.cost)}</td></tr>)}</tbody>
+                        <thead><tr><th>Material</th><th>Calculated Units</th><th>Full Units</th><th>Rate</th><th>Cost</th></tr></thead>
+                        <tbody>{materialCalcs.map((calc) => <tr key={`${repairLine.id}-${calc.product}`}><td className="font-semibold">{calc.product.replace(`${repairLine.repairTypeCode} - `, "")}<div className="text-xs font-normal text-slate-500">{calc.formula}</div></td><td>{(calc.unroundedUnits ?? calc.quantity).toFixed(2)}</td><td>{calc.quantity}</td><td>{money(calc.rate)}</td><td className="font-bold">{money(calc.cost)}</td></tr>)}</tbody>
                       </table>
                     </div>
                   ) : <div className="text-sm text-slate-500">No material quantity yet. Add dimensions/quantity or check the repair type material rules.</div>}
@@ -1854,7 +1831,7 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
         </div>
       </div>
       {usesSubcontract && <SubcontractLabourPanel items={r.repairSubcontractors} calculatedDays={effectiveRepairDays} onChange={(items) => patch({ repairSubcontractors: items })} />}
-      {usesInHouse && <InHouseLabourPanel input={r} rates={rates} calculatedDays={repairLineDaysTotal} effectiveDays={effectiveRepairDays} mobilisationKm={mobilisationKm} hotelRoomNights={hotelRoomNights} onChange={patch} />}
+      {usesInHouse && <InHouseLabourPanel input={r} rates={rates} calculatedDays={repairLineDaysTotal} effectiveDays={effectiveRepairDays} mobilisationKm={mobilisationKm} hotelRoomNights={hotelRoomNights} calculatedHotelNights={calculatedRepairHotelNights} effectiveHotelNights={effectiveRepairHotelNights} onChange={patch} />}
       <RepairPageTabs repairPage={repairPage} setRepairPage={setRepairPage} placement="bottom" />
       </>}
       {repairPage === "Review" && <>
@@ -1898,7 +1875,7 @@ function MaterialSummary({ materialCalcs, materialMargin, repairCatalog }: { mat
       <div className="panel-heading"><h2 className="text-xl font-semibold">Project Material Summary</h2><p className="text-sm text-slate-500">Same materials are combined across all repair types. Quantities are full purchasable units.</p></div>
       <div className="table-shell border-0">
         <table>
-          <thead><tr><th>Material</th><th>Full Units</th><th>Unit Size</th><th>Cost / Unit</th><th>Material Cost</th><th>Sell With Margin</th></tr></thead>
+          <thead><tr><th>Material</th><th>Full Units</th><th>Unit Size</th><th>Cost / Unit</th><th>Material Cost</th><th>Sell With Markup</th></tr></thead>
           <tbody>
             {grouped.map((calc) => {
               const material = repairCatalog.materials.find((item) => item.name === calc.product);
@@ -1924,7 +1901,7 @@ function HaulageItems({ items, onChange }: { items: AdditionalItem[]; onChange: 
           <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 md:grid-cols-[minmax(0,1fr)_160px_140px_140px_auto]" key={index}>
             <Text label="Name" value={item.name} onChange={(v) => update(index, { name: v })} />
             <NumberInput label="Rate" value={item.rate} onChange={(v) => update(index, { rate: v })} />
-            <NumberInput label="Margin %" value={item.margin * 100} onChange={(v) => update(index, { margin: v / 100 })} />
+            <NumberInput label="Markup %" value={item.margin * 100} onChange={(v) => update(index, { margin: v / 100 })} />
             <Mini label="Sell" value={money(item.rate * (1 + item.margin))} />
             <button className="secondary-button self-end" onClick={() => onChange(currentItems.filter((_, i) => i !== index))} disabled={currentItems.length === 1}>Remove</button>
           </div>
@@ -1935,7 +1912,7 @@ function HaulageItems({ items, onChange }: { items: AdditionalItem[]; onChange: 
   );
 }
 
-function InHouseLabourPanel({ input, rates, calculatedDays, effectiveDays, mobilisationKm, hotelRoomNights, onChange }: { input: ProjectInput["repairs"]; rates: AdminRates; calculatedDays: number; effectiveDays: number; mobilisationKm: number; hotelRoomNights: number; onChange: (next: Partial<ProjectInput["repairs"]>) => void }) {
+function InHouseLabourPanel({ input, rates, calculatedDays, effectiveDays, mobilisationKm, hotelRoomNights, calculatedHotelNights: autoHotelNights, effectiveHotelNights, onChange }: { input: ProjectInput["repairs"]; rates: AdminRates; calculatedDays: number; effectiveDays: number; mobilisationKm: number; hotelRoomNights: number; calculatedHotelNights: number; effectiveHotelNights: number; onChange: (next: Partial<ProjectInput["repairs"]>) => void }) {
   const inputtedDays = input.labourDays > 0 ? input.labourDays : calculatedDays;
   const overridden = input.labourDays > 0 && input.labourDays !== calculatedDays;
   return (
@@ -1957,7 +1934,7 @@ function InHouseLabourPanel({ input, rates, calculatedDays, effectiveDays, mobil
         </div>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Toggle label="Hotel / Subsistence" checked={input.hotelRequired} onChange={(v) => onChange({ hotelRequired: v, subsistenceRequired: v })} />
-          {input.hotelRequired && <NumberInput label="Nights Per Team" value={input.hotelNights} onChange={(v) => onChange({ hotelNights: v })} />}
+          {input.hotelRequired && <div className={input.hotelNights > 0 && input.hotelNights !== autoHotelNights ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Hotel Nights Per Team" value={effectiveHotelNights} onChange={(v) => onChange({ hotelNights: v === autoHotelNights ? 0 : v })} />{input.hotelNights > 0 && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => onChange({ hotelNights: 0 })}>Reset to calculated {autoHotelNights}</button>}</div>}
           {input.hotelRequired && <Mini label="Room Nights" value={`${hotelRoomNights}`} />}
         </div>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -1995,14 +1972,14 @@ function SubcontractLabourPanel({ items, calculatedDays, onChange, title = "Subc
                 <Select label="Pricing Method" value={method} options={["Lump Sum", "Day Rate"]} onChange={(v) => update(index, { priceType: v === "Day Rate" ? "day" : "lump sum", days: v === "Day Rate" ? item.days || calculatedDays || 0 : item.days })} />
                 <NumberInput label={item.priceType === "day" ? "Day Rate Cost" : "Lump Sum Cost"} value={item.rate} onChange={(v) => update(index, { rate: v })} />
                 {item.priceType === "day" ? <div className={daysOverridden ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Subcontract Days" value={item.days} onChange={(v) => update(index, { days: v })} /></div> : <Mini label="Quantity" value="1 lump sum" />}
-                <NumberInput label="Margin %" value={item.margin * 100} onChange={(v) => update(index, { margin: v / 100 })} />
+                <NumberInput label="Markup %" value={item.margin * 100} onChange={(v) => update(index, { margin: v / 100 })} />
                 <button className="secondary-button self-end" onClick={() => onChange(currentItems.filter((_, i) => i !== index))} disabled={currentItems.length === 1}>Remove</button>
               </div>
               {daysOverridden && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-950">Subcontract days overridden from calculated {calculatedDays} to {item.days}.</div>}
               <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_160px_160px_140px]">
                 <NumberInput label="Mobilisation Cost" value={item.mobilisationCost} onChange={(v) => update(index, { mobilisationCost: v })} />
                 <NumberInput label="No. of Mobilisations" value={item.mobilisations} onChange={(v) => update(index, { mobilisations: v })} />
-                <NumberInput label="Mobilisation Margin %" value={item.mobilisationMargin * 100} onChange={(v) => update(index, { mobilisationMargin: v / 100 })} />
+                <NumberInput label="Mobilisation Markup %" value={item.mobilisationMargin * 100} onChange={(v) => update(index, { mobilisationMargin: v / 100 })} />
                 <Mini label="Subcontract Sell" value={money((labourCost * (1 + item.margin)) + (mobilisationCost * (1 + item.mobilisationMargin)))} />
               </div>
             </div>
@@ -2017,7 +1994,7 @@ function SubcontractLabourPanel({ items, calculatedDays, onChange, title = "Subc
 function CostBuildUp({ materialCost, materialMargin, subcontractSell, inHouseSell, logisticsSell }: { materialCost: number; materialMargin: number; subcontractSell: number; inHouseSell: number; logisticsSell: number }) {
   const materialSell = materialCost * (1 + materialMargin);
   const rows = [
-    ["Materials incl. margin", materialSell],
+    ["Materials incl. markup", materialSell],
     ["Subcontract labour/equipment", subcontractSell],
     ["In-house labour/mobilisation", inHouseSell],
     ["Haulage", logisticsSell]
@@ -2049,7 +2026,7 @@ function AdditionalItems({ title, items, onChange }: { title: string; items: Add
             <NumberInput label="Budget Cost" value={item.rate} onChange={(v) => update(index, { rate: v })} />
             <Text label="Unit" value={item.unit} onChange={(v) => update(index, { unit: v })} />
             <NumberInput label="Quantity" value={item.quantity} onChange={(v) => update(index, { quantity: v })} />
-            <NumberInput label="Margin %" value={item.margin * 100} onChange={(v) => update(index, { margin: v / 100 })} />
+            <NumberInput label="Markup %" value={item.margin * 100} onChange={(v) => update(index, { margin: v / 100 })} />
           </div>
         ))}
       </div>
@@ -2058,13 +2035,28 @@ function AdditionalItems({ title, items, onChange }: { title: string; items: Add
   );
 }
 
+function AdditionalTools({ items, onChange }: { items: AdditionalItem[]; onChange: (items: AdditionalItem[]) => void }) {
+  const update = (index: number, next: Partial<AdditionalItem>) => onChange(items.map((item, i) => i === index ? { ...item, ...next, unit: "item", quantity: 1, plCategory: "Equipment" } : item));
+  return <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-3"><div><h3 className="font-bold text-slate-950">Additional Tools</h3><p className="text-sm text-slate-500">Add any one-off tool or equipment costs not covered above.</p></div><button className="secondary-button" onClick={() => onChange([...items, { name: "", rate: 0, unit: "item", quantity: 1, margin: 0.3, plCategory: "Equipment" }])}>Add Tool</button></div>
+    <div className="grid gap-3">{items.map((item, index) => <div className="grid gap-3 rounded-lg border border-slate-200 bg-white p-3 md:grid-cols-[minmax(0,1fr)_150px_130px_150px_auto]" key={index}>
+      <Text label="Description" value={item.name} onChange={(name) => update(index, { name })} />
+      <NumberInput label="Budget Cost" value={item.rate} onChange={(rate) => update(index, { rate })} />
+      <NumberInput label="Markup %" value={item.margin * 100} onChange={(margin) => update(index, { margin: margin / 100 })} />
+      <Mini label="Proposal Cost" value={money(item.rate * (1 + item.margin))} />
+      <button className="secondary-button self-end" onClick={() => onChange(items.filter((_, i) => i !== index))}>Remove</button>
+    </div>)}</div>
+    {!items.length && <div className="text-sm text-slate-500">No additional tools added.</div>}
+  </div>;
+}
+
 function ProjectDetail({ project, tab, setTab, actuals, setActuals, saveActuals, recordHandover: recordHandoverEvent, note, setNote, addNote, edit, updateStatus }: { project: ProjectRecord; tab: DetailTab; setTab: (tab: DetailTab) => void; actuals: ReturnType<typeof defaultActuals>; setActuals: (a: ReturnType<typeof defaultActuals>) => void; saveActuals: (finalise?: boolean) => void; recordHandover: (issued: boolean) => Promise<void>; note: string; setNote: (v: string) => void; addNote: () => void; edit: () => void; updateStatus: (status: ProjectStatus) => void }) {
   const auth = useAuth();
   const canEdit = hasPermission(auth.role, "projects.update");
   const summary = calculatePL(project.calculations, actuals);
   const projectStatus = normaliseProjectStatus(project.status);
   const terminalCosting = ["Lost", "Completed", "Closed"].includes(projectStatus);
-  const statusOptions = allowedStatusTransitions(project.status).filter((status) => !["Draft", "Ready for Review", "Approved Costing"].includes(status) || status === projectStatus);
+  const statusOptions = allowedStatusTransitions(project.status);
   useEffect(() => {
     if (!tabIsAllowed(tab, project.inputs)) setTab("Summary");
   // Project ID and active tab are sufficient; inputs are immutable in this view.
@@ -2093,7 +2085,7 @@ function SavedProjectSummary({ project }: { project: ProjectRecord }) {
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Sell Value" value={money(calculations.proposalTotal)} /><Metric label="Budget" value={money(calculations.budgetCost)} /><Metric label="Markup" value={percent(calculations.budgetMarkup ?? 0)} /><Metric label="Project Days" value={String(calculations.siteDays)} /></div>
     <div className="grid gap-4 lg:grid-cols-2">
       <div className="app-card p-5"><h3 className="font-bold text-slate-950">Project</h3><div className="mt-3 grid gap-2 text-sm"><div><b>Reference:</b> {project.inputs.projectReference}</div><div><b>Client:</b> {project.inputs.client}</div><div><b>Location:</b> {project.inputs.location}</div><div><b>Services:</b> {calculations.serviceSummary}</div><div><b>Status:</b> {normaliseProjectStatus(project.status)} / {project.accountsStatus}</div><div><b>Calculation:</b> {project.calculationVersion ?? "Legacy snapshot"}</div></div></div>
-      <div className="app-card p-5"><h3 className="font-bold text-slate-950">Phase programme</h3><div className="mt-3 grid gap-2">{calculations.phaseRows?.map((row) => <div key={row.service} className="flex flex-wrap justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm"><b>{row.service}</b><span>Day {row.startDay} to {row.endDay}{row.concurrent ? " / concurrent" : ""}</span></div>)}{!calculations.phaseRows?.length && <div className="text-sm text-slate-500">No phase schedule was saved on this legacy costing.</div>}</div></div>
+      {calculations.phaseRows?.length > 1 && <div className="app-card p-5"><h3 className="font-bold text-slate-950">Phase Programme</h3><div className="mt-3 grid gap-2">{calculations.phaseRows.map((row) => <div key={row.service} className="flex flex-wrap justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm"><b>{row.service}</b><span>Day {row.startDay} to {row.endDay}{row.concurrent ? " / overlaps" : ""}</span></div>)}</div></div>}
     </div>
   </div>;
 }
@@ -2122,7 +2114,7 @@ function SavedCommercialReview({ project }: { project: ProjectRecord }) {
     const profit = proposal - budget;
     return { category, proposal, budget, profit, markup: budget ? profit / budget * 100 : 0 };
   }).filter((row) => row.proposal || row.budget);
-  return <div className="grid gap-5"><div className={`rounded-xl border p-4 ${calculations.budgetMarkup < 25 ? "border-amber-200 bg-amber-50 text-amber-950" : "border-emerald-200 bg-emerald-50 text-emerald-950"}`}><b>{calculations.budgetMarkup < 25 ? `Approved below threshold: ${percent(calculations.budgetMarkup)}` : `Commercial check passed: ${percent(calculations.budgetMarkup)} markup`}</b>{calculations.budgetMarkup < 25 && <div className="mt-2 text-sm">Reason: {project.inputs.markupOverrideReason || "No approval reason recorded"}<br />Approved by: {project.markupApprovedBy || "Not recorded"}</div>}</div><div className="table-shell"><table><thead><tr><th>Category</th><th>Budget</th><th>Proposal</th><th>Profit</th><th>Markup</th></tr></thead><tbody>{rows.map((row) => <tr key={row.category}><td className="font-bold">{row.category}</td><td>{money(row.budget)}</td><td>{money(row.proposal)}</td><td>{money(row.profit)}</td><td className={row.markup < 25 ? "font-bold text-red-700" : "font-bold text-emerald-700"}>{percent(row.markup)}</td></tr>)}</tbody></table></div></div>;
+  return <div className="grid gap-5"><div className={`rounded-xl border p-4 ${calculations.budgetMarkup < 25 ? "border-amber-200 bg-amber-50 text-amber-950" : "border-emerald-200 bg-emerald-50 text-emerald-950"}`}><b>{calculations.budgetMarkup < 25 ? `Markup check: ${percent(calculations.budgetMarkup)}, below 25%` : `Commercial check passed: ${percent(calculations.budgetMarkup)} markup`}</b>{calculations.budgetMarkup < 25 && <div className="mt-2 text-sm">This is a warning only and does not block the costing.</div>}</div><div className="table-shell"><table><thead><tr><th>Category</th><th>Budget</th><th>Proposal</th><th>Profit</th><th>Markup</th></tr></thead><tbody>{rows.map((row) => <tr key={row.category}><td className="font-bold">{row.category}</td><td>{money(row.budget)}</td><td>{money(row.proposal)}</td><td>{money(row.profit)}</td><td className={row.markup < 25 ? "font-bold text-red-700" : "font-bold text-emerald-700"}>{percent(row.markup)}</td></tr>)}</tbody></table></div></div>;
 }
 
 async function handoverPdf(project: ProjectRecord, companyName: string, primaryColour: string) {
@@ -2146,7 +2138,7 @@ function ProjectHandover({ project, recordHandover: record }: { project: Project
   const summary = buildHandoverSummary(project);
   const filename = `${project.inputs.projectReference || "project"}-delivery-summary.pdf`;
   const canManageHandover = hasPermission(auth.role, "projects.update");
-  const canGenerate = canManageHandover && ["Approved Costing", "Won", "Handover Issued"].includes(normaliseProjectStatus(project.status));
+  const canGenerate = canManageHandover && ["Costing Complete", "Won", "Handover Issued"].includes(normaliseProjectStatus(project.status));
   const canIssue = canManageHandover && ["Won", "Handover Issued"].includes(normaliseProjectStatus(project.status));
   const savePdf = async () => {
     try {
@@ -2180,16 +2172,16 @@ function ProjectHandover({ project, recordHandover: record }: { project: Project
   return <div className="handover-print grid gap-5">
     <div className="app-card-strong">
       <div className="panel-heading flex flex-wrap items-start justify-between gap-3">
-        <div><div className="text-xs font-bold uppercase text-red-700">Internal and confidential</div><h2 className="mt-1 text-xl font-semibold">Project Cost & Delivery Summary</h2><p className="text-sm text-slate-500">Budget-only delivery handover generated from the approved costing revision.</p></div>
+        <div><div className="text-xs font-bold uppercase text-red-700">Internal and confidential</div><h2 className="mt-1 text-xl font-semibold">Project Cost & Delivery Summary</h2><p className="text-sm text-slate-500">Budget-only delivery handover generated from the completed costing revision.</p></div>
         <div className="handover-actions flex flex-wrap gap-2"><button className="secondary-button" onClick={() => window.print()} disabled={!canGenerate}><Printer size={16} />Print</button><button className="secondary-button" onClick={savePdf} disabled={!canGenerate || Boolean(busy)}><Download size={16} />{busy === "save" ? "Generating..." : "Save PDF"}</button><button className="primary-button" onClick={sendPdf} disabled={!canIssue || Boolean(busy)}><Send size={16} />{busy === "send" ? "Preparing..." : "Send to PM"}</button></div>
       </div>
-      {!canGenerate && <div className="m-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-950">Approve the costing before generating this handover.</div>}
+      {!canGenerate && <div className="m-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-950">Complete the costing before generating this handover.</div>}
       {canGenerate && !canIssue && <div className="mx-5 mt-5 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950">The PDF can be reviewed and saved now. Mark the project as Won before issuing it to the project manager.</div>}
-      <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-4"><Mini label="Project" value={project.inputs.projectReference} /><Mini label="Services" value={project.calculations.serviceSummary} /><Mini label="Project Days" value={String(project.calculations.siteDays)} /><Mini label="Approved Budget" value={money(project.calculations.budgetCost)} /></div>
+      <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-4"><Mini label="Project" value={project.inputs.projectReference} /><Mini label="Services" value={project.calculations.serviceSummary} /><Mini label="Project Days" value={String(project.calculations.siteDays)} /><Mini label="Project Budget" value={money(project.calculations.budgetCost)} /></div>
     </div>
     <div className="grid gap-5 lg:grid-cols-2">
       <div className="app-card p-5"><h3 className="font-bold text-slate-950">Actions Before Site</h3><div className="mt-3 grid gap-2 text-sm">{summary.actions.map((action) => <div className="rounded-lg bg-slate-50 px-3 py-2" key={action}>{action}</div>)}</div></div>
-      <div className="app-card p-5"><h3 className="font-bold text-slate-950">Phase Programme</h3><div className="mt-3 grid gap-2 text-sm">{project.calculations.phaseRows.map((row) => <div className="flex justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2" key={row.service}><b>{row.service}</b><span>Day {row.startDay} to {row.endDay}{row.concurrent ? " / overlaps" : ""}</span></div>)}</div></div>
+      {project.calculations.phaseRows.length > 1 && <div className="app-card p-5"><h3 className="font-bold text-slate-950">Phase Programme</h3><div className="mt-3 grid gap-2 text-sm">{project.calculations.phaseRows.map((row) => <div className="flex justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2" key={row.service}><b>{row.service}</b><span>Day {row.startDay} to {row.endDay}{row.concurrent ? " / overlaps" : ""}</span></div>)}</div></div>}
     </div>
     {rowTable("Materials to Procure", summary.materials)}
     {rowTable("Subcontract Work Packages", summary.subcontractors)}
@@ -2201,7 +2193,7 @@ function ProjectHandover({ project, recordHandover: record }: { project: Project
 }
 
 function ActivityPanel({ project, note, setNote, addNote }: { project: ProjectRecord; note: string; setNote: (value: string) => void; addNote: () => void }) {
-  return <div className="grid gap-5 lg:grid-cols-2"><div className="app-card p-5"><h3 className="font-bold">Notes</h3><textarea className="input mt-3 min-h-28 w-full" value={note} onChange={(event) => setNote(event.target.value)} /><button className="primary-button mt-3" onClick={addNote}>Add Note</button>{project.notes?.map((item) => <div className="mt-3 rounded-lg border border-slate-200 p-3 text-sm" key={item.id}><b>{item.author}</b><div className="mt-1">{item.text}</div></div>)}</div><div className="grid gap-5"><div className="app-card p-5"><h3 className="font-bold">Approved Revisions</h3>{project.revisions?.map((revision) => <div className="mt-3 rounded-lg border border-slate-200 p-3 text-sm" key={revision.id}><b>{revision.label}</b><div>{money(revision.proposalTotal)} sell value / {money(revision.budgetCost)} budget</div></div>)}</div><div className="app-card p-5"><h3 className="font-bold">Change Log</h3>{project.changeLog?.map((entry) => <div className="mt-3 text-sm" key={entry.id}><History size={14} className="mr-2 inline" />{formatDateTime(entry.createdAt)} - <b>{entry.action}</b>: {entry.detail}</div>)}</div></div></div>;
+  return <div className="grid gap-5 lg:grid-cols-2"><div className="app-card p-5"><h3 className="font-bold">Notes</h3><textarea className="input mt-3 min-h-28 w-full" value={note} onChange={(event) => setNote(event.target.value)} /><button className="primary-button mt-3" onClick={addNote}>Add Note</button>{project.notes?.map((item) => <div className="mt-3 rounded-lg border border-slate-200 p-3 text-sm" key={item.id}><b>{item.author}</b><div className="mt-1">{item.text}</div></div>)}</div><div className="grid gap-5"><div className="app-card p-5"><h3 className="font-bold">Costing Revisions</h3>{project.revisions?.map((revision) => <div className="mt-3 rounded-lg border border-slate-200 p-3 text-sm" key={revision.id}><b>{revision.label}</b><div>{money(revision.proposalTotal)} sell value / {money(revision.budgetCost)} budget</div></div>)}</div><div className="app-card p-5"><h3 className="font-bold">Change Log</h3>{project.changeLog?.map((entry) => <div className="mt-3 text-sm" key={entry.id}><History size={14} className="mr-2 inline" />{formatDateTime(entry.createdAt)} - <b>{entry.action}</b>: {entry.detail}</div>)}</div></div></div>;
 }
 
 function PLActualsPanel({ project, actuals, setActuals, summary, saveActuals }: { project: ProjectRecord; actuals: ReturnType<typeof defaultActuals>; setActuals: (a: ReturnType<typeof defaultActuals>) => void; summary: ReturnType<typeof calculatePL>; saveActuals: (finalise?: boolean) => void }) {
@@ -2331,11 +2323,11 @@ function varianceTone(value: number) {
 }
 
 function Overview({ calculations, rates }: { calculations: ReturnType<typeof calculateProject>; rates: AdminRates }) {
-  return <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Services" value={calculations.serviceSummary} /><Metric label="Original Proposal" value={money(calculations.originalProposalTotal)} /><Metric label="Discount" value={money(calculations.discountAmount)} /><Metric label="Proposal Total" value={money(calculations.proposalTotal)} /><Metric label="Budget Cost" value={money(calculations.budgetCost)} /><Metric label="Budget Margin" value={percent(calculations.budgetMargin)} /><Metric label="Daily Rate" value={money(calculations.dailyRate)} /><Metric label="Standby Rate" value={money(calculations.standbyRate || rates.hotel + rates.subsistence)} /></div>;
+  return <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Services" value={calculations.serviceSummary} /><Metric label="Original Proposal" value={money(calculations.originalProposalTotal)} /><Metric label="Discount" value={money(calculations.discountAmount)} /><Metric label="Proposal Total" value={money(calculations.proposalTotal)} /><Metric label="Budget Cost" value={money(calculations.budgetCost)} /><Metric label="Budget Markup" value={percent(calculations.budgetMarkup)} /><Metric label="Daily Rate" value={money(calculations.dailyRate)} /><Metric label="Standby Rate" value={money(calculations.standbyRate || rates.hotel + rates.subsistence)} /></div>;
 }
 
 function LineTable({ lines }: { lines: Line[] }) {
-  return <div className="table-shell"><table><thead><tr><th>Section</th><th>Item</th><th>Rate</th><th>Qty</th><th>Cost</th><th>Markup</th><th>Discount</th><th>Total</th></tr></thead><tbody>{lines.filter((l) => l.quantity || l.total).map((line, index) => <tr key={`${line.item}-${index}`}><td>{line.section}</td><td className="min-w-[220px] font-semibold">{line.item}</td><td>{money(line.rate)} / {line.unit}</td><td>{line.quantity}</td><td>{money(line.cost)}</td><td>{money(line.margin)}</td><td>{money(line.discount)}</td><td className="font-bold">{money(line.total)}</td></tr>)}</tbody></table></div>;
+  return <div className="table-shell"><table><thead><tr><th>Section</th><th>Item</th><th>Rate</th><th>Qty</th><th>Cost</th><th>Markup</th><th>Discount</th><th>Total</th></tr></thead><tbody>{lines.filter((l) => l.quantity || l.total).map((line, index) => <tr key={`${line.item}-${index}`}><td>{line.section}</td><td className="min-w-[220px] font-semibold">{line.item}</td><td>{money(line.rate)} / {line.unit}</td><td>{line.quantity}</td><td>{money(line.cost)}</td><td>{percent(line.margin * 100)}</td><td>{money(line.discount)}</td><td className="font-bold">{money(line.total)}</td></tr>)}</tbody></table></div>;
 }
 
 function SearchView({ projects, open, edit }: { projects: ProjectRecord[]; open: (project: ProjectRecord) => void; edit: (project: ProjectRecord) => void }) {
@@ -2345,7 +2337,7 @@ function SearchView({ projects, open, edit }: { projects: ProjectRecord[]; open:
   const filtered = projects.filter((p) => `${p.inputs.projectReference} ${p.inputs.client} ${p.inputs.location} ${p.calculations.serviceSummary} ${p.inputs.costedBy}`.toLowerCase().includes(q.toLowerCase()))
     .filter((project) => status === "All" || normaliseProjectStatus(project.status) === status)
     .filter((project) => service === "All" || project.calculations.serviceSummary.includes(service));
-  return <div className="app-card-strong"><div className="panel-heading"><h2 className="text-xl font-semibold"><Search className="mr-2 inline" />Project Search</h2><div className="mt-3 grid gap-3 md:grid-cols-[minmax(240px,1fr)_220px_180px]"><input placeholder="Reference, client, location or estimator" value={q} onChange={(e) => setQ(e.target.value)} /><Select label="Status" value={status} options={["All", "Draft", "Ready for Review", "Approved Costing", "Won", "Lost", "Handover Issued", "Completed", "Closed"]} onChange={setStatus} /><Select label="Service" value={service} options={["All", "Grinding", "Screeding", "Repairs"]} onChange={setService} /></div><div className="mt-3 text-sm text-slate-500">{filtered.length} project{filtered.length === 1 ? "" : "s"} found</div></div><ProjectTable projects={filtered.slice(0, 50)} open={open} edit={edit} /></div>;
+  return <div className="app-card-strong"><div className="panel-heading"><h2 className="text-xl font-semibold"><Search className="mr-2 inline" />Project Search</h2><div className="mt-3 grid gap-3 md:grid-cols-[minmax(240px,1fr)_220px_180px]"><input placeholder="Reference, client, location or estimator" value={q} onChange={(e) => setQ(e.target.value)} /><Select label="Status" value={status} options={["All", "Draft", "Costing Complete", "Won", "Lost", "Handover Issued", "Completed", "Closed"]} onChange={setStatus} /><Select label="Service" value={service} options={["All", "Grinding", "Screeding", "Repairs"]} onChange={setService} /></div><div className="mt-3 text-sm text-slate-500">{filtered.length} project{filtered.length === 1 ? "" : "s"} found</div></div><ProjectTable projects={filtered.slice(0, 50)} open={open} edit={edit} /></div>;
 }
 
 function ProjectTable({ projects, open, edit }: { projects: ProjectRecord[]; open: (project: ProjectRecord) => void; edit?: (project: ProjectRecord) => void }) {
@@ -2392,6 +2384,11 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, init
     if (!type) return;
     updateType(typeCode, { materialRules: type.materialRules.map((rule) => rule.materialId === materialId ? { ...rule, defaultSelected } : rule) });
   };
+  const updateMaterialRule = (typeCode: string, materialId: string, next: Partial<RepairType["materialRules"][number]>) => {
+    const type = repairCatalog.types.find((item) => item.code === typeCode);
+    if (!type) return;
+    updateType(typeCode, { materialRules: type.materialRules.map((rule) => rule.materialId === materialId ? { ...rule, ...next } : rule) });
+  };
   const addMaterialRule = (type: RepairType, role: "required" | "optional") => {
     const key = `${type.code}-${role}`;
     const selectedId = pendingRule[key] || repairCatalog.materials.find((material) => !type.materialRules.some((rule) => rule.materialId === material.id))?.id || "";
@@ -2427,7 +2424,7 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, init
     <div className="grid gap-5">
       <div className="app-card-strong">
         <div className="panel-heading flex flex-wrap justify-between gap-3">
-          <div><h2 className="text-xl font-semibold"><Settings className="mr-2 inline" />Admin</h2><p className="text-sm text-slate-500">Rates plus the repair type/material database. Margins are entered as percentages.</p></div>
+          <div><h2 className="text-xl font-semibold"><Settings className="mr-2 inline" />Admin</h2><p className="text-sm text-slate-500">Rates plus the repair type/material database. Markups are entered as percentages.</p></div>
           <button className="primary-button" onClick={saveValidated}>Validate & Save Admin Data</button>
         </div>
         <div className="flex flex-wrap gap-2 border-b border-slate-200 bg-white p-3">
@@ -2512,29 +2509,26 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, init
               fields={[
                 { key: "mileagePerKm", label: "Mileage / km", suffix: "/ km" },
                 { key: "returnFlight", label: "Return Flight", suffix: "/ flight" },
-                { key: "airportUberReturn", label: "Airport Uber Return", suffix: "/ return" },
-                { key: "airportParkingPerDay", label: "Airport Parking", suffix: "/ day" },
                 { key: "hotel", label: "Hotel", suffix: "/ night" },
                 { key: "subsistence", label: "Subsistence", suffix: "/ day" },
-                { key: "companyCar", label: "Company Car", suffix: "/ day" },
-                { key: "travelMargin", label: "Travel Default Margin", margin: true, helper: "Used for project-entered travel costs that do not have their own rate row." },
-                { key: "flightMargin", label: "Flight Default Margin", margin: true, helper: "Used for project-entered flight costs that do not have their own rate row." },
-                { key: "hotelMargin", label: "Hotel Default Margin", margin: true, helper: "Fallback only. The hotel row above has its own item margin." },
-                { key: "subsistenceMargin", label: "Subsistence Default Margin", margin: true, helper: "Fallback only. The subsistence row above has its own item margin." }
+                { key: "travelMargin", label: "Travel Default Markup", margin: true, helper: "Used for project-entered travel costs that do not have their own rate row." },
+                { key: "flightMargin", label: "Flight Default Markup", margin: true, helper: "Used for project-entered flight costs that do not have their own rate row." },
+                { key: "hotelMargin", label: "Hotel Default Markup", margin: true, helper: "Fallback only. The hotel row above has its own item markup." },
+                { key: "subsistenceMargin", label: "Subsistence Default Markup", margin: true, helper: "Fallback only. The subsistence row above has its own item markup." }
               ]}
             />
             <RateSection
               title="Subcontract, Materials & Equipment"
-              description="Default margins for project-entered costs plus general report/equipment rates."
-              badges={["All", "Margin"]}
+              description="Default markups for project-entered costs plus general report/equipment rates."
+              badges={["All", "Markup"]}
               rates={rates}
               onRateChange={updateRate}
               onMarginChange={updateMarginRate}
               onItemMarginChange={updateItemMargin}
               fields={[
-                { key: "subcontractMargin", label: "Subcontract Default Margin", margin: true, helper: "Used when subcontract costs are entered inside a costing." },
-                { key: "materialMargin", label: "Material Default Margin", margin: true, helper: "Used for repair materials and project-entered materials." },
-                { key: "equipmentMargin", label: "Equipment Default Margin", margin: true, helper: "Used when equipment costs are entered inside a costing." },
+                { key: "subcontractMargin", label: "Subcontract Default Markup", margin: true, helper: "Used when subcontract costs are entered inside a costing." },
+                { key: "materialMargin", label: "Material Default Markup", margin: true, helper: "Used for repair materials and project-entered materials." },
+                { key: "equipmentMargin", label: "Equipment Default Markup", margin: true, helper: "Used when equipment costs are entered inside a costing." },
                 { key: "engineeringReport", label: "Engineering Report", suffix: "/ report" }
               ]}
             />
@@ -2658,6 +2652,15 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, init
                               ) : null;
                             }) : <span className="text-sm text-slate-500">No {role} materials assigned.</span>}
                           </div>
+                          {assignedRules.map((rule) => {
+                            const material = repairCatalog.materials.find((item) => item.id === rule.materialId);
+                            if (!material || material.calcMethod !== "volume_lwd") return null;
+                            return <div className="mt-3 grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-3" key={`${type.code}-${rule.materialId}-dimensions`}>
+                              <Toggle label={`${material.name}: own dimensions`} checked={Boolean(rule.usesOwnDimensions)} onChange={(usesOwnDimensions) => updateMaterialRule(type.code, rule.materialId, { usesOwnDimensions, defaultWidthMm: usesOwnDimensions ? rule.defaultWidthMm || type.defaultWidthMm : undefined, defaultDepthMm: usesOwnDimensions ? rule.defaultDepthMm || type.defaultDepthMm : undefined })} />
+                              {rule.usesOwnDimensions && <NumberInput label="Default Width mm" value={rule.defaultWidthMm ?? type.defaultWidthMm} onChange={(defaultWidthMm) => updateMaterialRule(type.code, rule.materialId, { defaultWidthMm })} />}
+                              {rule.usesOwnDimensions && <NumberInput label="Default Depth mm" value={rule.defaultDepthMm ?? type.defaultDepthMm} onChange={(defaultDepthMm) => updateMaterialRule(type.code, rule.materialId, { defaultDepthMm })} />}
+                            </div>;
+                          })}
                           <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                             <select value={selectValue} onChange={(event) => setPendingRule({ ...pendingRule, [selectKey]: event.target.value })} disabled={!availableMaterials.length}>
                               {availableMaterials.map((material) => <option key={material.id} value={material.id}>{material.category} - {material.name}</option>)}
@@ -2684,7 +2687,7 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, init
                   <span className="rounded-full bg-sky-100 px-3 py-1 text-sky-900">{repairCatalog.materials.filter((material) => material.active).length} active</span>
                   <span className="rounded-full bg-amber-100 px-3 py-1 text-amber-900">{missingMaterialSetup.length} need setup</span>
                   <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">{unusedMaterials.length} unused</span>
-                  <span className="rounded-full bg-emerald-100 px-3 py-1 text-emerald-900">{percent(rates.materialMargin)} material margin</span>
+                  <span className="rounded-full bg-emerald-100 px-3 py-1 text-emerald-900">{percent(rates.materialMargin * 100)} material markup</span>
                 </div>
               </div>
               <button className="secondary-button" onClick={addMaterial}>Add Material</button>
@@ -2692,10 +2695,10 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, init
             <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4">
               <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_220px] md:items-end">
                 <div>
-                  <div className="text-sm font-bold text-emerald-950">Repair material margin</div>
-                  <p className="mt-1 text-sm text-emerald-900">Materials below are entered as cost per unit. New project repair costing sells them at cost plus this margin.</p>
+                  <div className="text-sm font-bold text-emerald-950">Repair material markup</div>
+                  <p className="mt-1 text-sm text-emerald-900">Materials below are entered as cost per unit. New project repair costing sells them at cost plus this markup.</p>
                 </div>
-                <NumberInput label="Material Margin %" value={rates.materialMargin * 100} onChange={(v) => setRates({ ...rates, materialMargin: v / 100 })} />
+                <NumberInput label="Material Markup %" value={rates.materialMargin * 100} onChange={(v) => setRates({ ...rates, materialMargin: v / 100 })} />
               </div>
             </div>
             <input placeholder="Search material, method or notes" value={adminSearch} onChange={(event) => setAdminSearch(event.target.value)} />
@@ -2731,7 +2734,7 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, init
                 <div className="mt-3 flex flex-wrap gap-2">
                   <div className="rounded-lg bg-white px-3 py-2 text-xs font-bold uppercase text-slate-500 ring-1 ring-slate-200">{formulaHelp(material.calcMethod)}</div>
                   <div className="rounded-lg bg-white px-3 py-2 text-xs font-bold uppercase text-slate-600 ring-1 ring-slate-200">One unit: {material.unitSize} {material.unitType}, covers {material.coveragePerUnit} {material.measuredUnitType}</div>
-                  <div className="rounded-lg bg-white px-3 py-2 text-xs font-bold uppercase text-emerald-700 ring-1 ring-emerald-200">Sell/unit at {percent(rates.materialMargin)} margin: {money(material.costPerUnit * (1 + rates.materialMargin))}</div>
+                  <div className="rounded-lg bg-white px-3 py-2 text-xs font-bold uppercase text-emerald-700 ring-1 ring-emerald-200">Sell/unit at {percent(rates.materialMargin * 100)} markup: {money(material.costPerUnit * (1 + rates.materialMargin))}</div>
                 </div>
               </div>
             ))}
@@ -2777,7 +2780,7 @@ function RateSection({ title, description, badges, fields, rates, onRateChange, 
                 <>
                   <NumberInput label={field.label} value={rawValue * 100} onChange={(value) => onMarginChange(field.key, value)} />
                   <div className="flex min-h-5 flex-wrap items-center gap-2 text-xs text-slate-500">
-                    <span className="font-semibold text-emerald-700">{rawValue * 100}% default margin</span>
+                    <span className="font-semibold text-emerald-700">{rawValue * 100}% default markup</span>
                     {field.helper && <span>{field.helper}</span>}
                   </div>
                 </>
@@ -2785,7 +2788,7 @@ function RateSection({ title, description, badges, fields, rates, onRateChange, 
                 <>
                   <NumberInput label={`${field.label} - Budget Cost`} value={rawValue} onChange={(value) => onRateChange(field.key, value)} />
                   <div className="grid gap-3 sm:grid-cols-2">
-                    <NumberInput label="Margin %" value={itemMargin * 100} onChange={(value) => onItemMarginChange(field.key, value)} />
+                    <NumberInput label="Markup %" value={itemMargin * 100} onChange={(value) => onItemMarginChange(field.key, value)} />
                     <Mini label="Proposal Cost" value={money(rawValue * (1 + itemMargin))} />
                   </div>
                   <div className="flex min-h-5 flex-wrap items-center gap-2 text-xs text-slate-500">

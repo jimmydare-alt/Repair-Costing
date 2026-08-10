@@ -46,7 +46,7 @@ export async function POST(request: Request) {
   }
   if (!body.project?.id || !Array.isArray(body.project.calculations?.budgetLines) || !Number.isFinite(body.project.calculations?.budgetCost)) return NextResponse.json({ error: "A valid saved project is required." }, { status: 400 });
   const project = body.project;
-  if (!["Approved Costing", "Won", "Handover Issued"].includes(normaliseProjectStatus(project.status))) return NextResponse.json({ error: "Approve the costing before generating a handover." }, { status: 409 });
+  if (!["Costing Complete", "Won", "Handover Issued"].includes(normaliseProjectStatus(project.status))) return NextResponse.json({ error: "Complete the costing before generating a handover." }, { status: 409 });
   const summary = buildHandoverSummary(project);
   const code = project.inputs.quoteCurrency;
   const primaryColour = /^#[0-9a-f]{6}$/i.test(body.primaryColour ?? "") ? body.primaryColour! : "#b91c1c";
@@ -67,7 +67,7 @@ export async function POST(request: Request) {
   doc.moveDown(0.4).text(`${project.calculations.serviceSummary} | Revision ${project.inputs.revision || project.revisions?.length || 1} | ${project.status}`);
   doc.moveDown(1).roundedRect(48, doc.y, 499, 55, 7).fill("#f3f5f7");
   const summaryY = doc.y + 14;
-  doc.fillColor("#172033").font("Helvetica-Bold").fontSize(9).text("APPROVED BUDGET", 64, summaryY).fontSize(15).text(currency(project.calculations.budgetCost, code), 64, summaryY + 16);
+  doc.fillColor("#172033").font("Helvetica-Bold").fontSize(9).text("PROJECT BUDGET", 64, summaryY).fontSize(15).text(currency(project.calculations.budgetCost, code), 64, summaryY + 16);
   doc.fontSize(9).text("PROJECT DAYS", 250, summaryY).fontSize(15).text(String(project.calculations.siteDays), 250, summaryY + 16);
   doc.fontSize(9).text("SERVICES", 375, summaryY).fontSize(10).text(project.calculations.serviceSummary, 375, summaryY + 17, { width: 150 });
   doc.y = summaryY + 55;
@@ -89,8 +89,7 @@ export async function POST(request: Request) {
   summary.categories.forEach((row) => doc.text(`${row.category}: ${currency(row.budget, code)}`));
   doc.moveDown(0.8).font("Helvetica-Bold").text(`Total budget: ${currency(project.calculations.budgetCost, code)}`);
 
-  if (project.inputs.markupOverrideReason) doc.moveDown(1).font("Helvetica").fontSize(8.5).fillColor("#596579").text(`Commercial approval note: ${project.inputs.markupOverrideReason}`);
-  doc.moveDown(1).fontSize(8).fillColor("#6c7480").text("Internal and confidential. Generated from the locked project costing revision. Verify live site conditions and supplier availability before ordering.");
+  doc.moveDown(1).fontSize(8).fillColor("#6c7480").text("Internal and confidential. Generated from the saved project costing revision. Verify live site conditions and supplier availability before ordering.");
   doc.end();
   const pdf = await complete;
   return new NextResponse(new Uint8Array(pdf), { headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="${(project.inputs.projectReference || "project").replace(/[^a-z0-9-_]/gi, "-")}-delivery-summary.pdf"` } });
