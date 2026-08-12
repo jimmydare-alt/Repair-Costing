@@ -2,25 +2,25 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Calculator, Download, FileSpreadsheet, History, Printer, Save, Search, Send, Settings } from "lucide-react";
 import { calculatedHotelNights, calculateActualSiteDays, calculatePhaseSchedule, calculatePL, calculateProject, calculateProjectRepairMaterials, calculateRepairLineMaterials, calculateWorkingDays, defaultActuals, weekendDaysForProgramme } from "@/lib/calculations";
 import { money, percent, formatDateTime, setMoneyCurrency } from "@/lib/format";
 import { projectCsv } from "@/lib/export";
 import { defaultRates, emptyInput } from "@/lib/rates";
-import { createRepairLine, defaultRepairCatalog, repairTypeByCode } from "@/lib/repairCatalog";
+import { createRepairLine, defaultRepairCatalog, repairTypeByCode, validateRepairCatalog } from "@/lib/repairCatalog";
 import { addProjectNote, loadProjects, loadRates, loadRepairCatalog, recordProjectHandover, saveActuals, saveAdminData, saveProject, setStorageContext, updateProjectWorkflow } from "@/lib/storage";
 import { useAuth } from "@/lib/authContext";
 import { hasPermission } from "@/lib/company";
 import { createBrowserSupabaseClient } from "@/lib/supabaseClient";
 import { allowedStatusTransitions, normaliseProjectStatus, statusIsLocked } from "@/lib/workflow";
 import { buildHandoverSummary } from "@/lib/handover";
+import { adjacentBuilderStep, builderStepLabels, parseEditRoute, resolveBuilderStep, visibleBuilderSteps, type BuilderStep } from "@/lib/builder";
 import { ProductShell } from "@/components/AppShell";
 import type { AppModuleKey, CurrencyCode, MembershipRole, Permission } from "@/lib/company";
 import type { AdditionalItem, AdminRates, DetailTab, LabourMode, Line, PLCategory, PriceType, ProjectInput, ProjectRecord, ProjectStatus, RepairCatalog, RepairLabourMode, RepairLineItem, RepairMaterial, RepairMaterialCategory, RepairSubcontractor, RepairType, RepairUnitType, ScreedTeam, View } from "@/lib/types";
 
 const detailTabs: DetailTab[] = ["Summary", "Costing", "Commercial Review", "PM Handover", "Actual P&L", "Activity"];
-type BuilderStep = "Services" | "Project" | "Grinding" | "Screeding" | "Repairs" | "Phase Schedule" | "Project Management" | "Extras" | "Review";
 type RepairPage = "Details" | "Labour" | "Review";
 type GrindingPage = "Programme" | "Labour" | "Tools & Review";
 type ScreedPage = "Programme" | "Labour" | "Materials" | "Tools & Review";
@@ -31,6 +31,10 @@ type RepairReadiness = { blockers: string[]; warnings: string[] };
 
 function cloneInput(input: ProjectInput): ProjectInput {
   return JSON.parse(JSON.stringify(input)) as ProjectInput;
+}
+
+function scrollToCostingSection(anchor = "costing-builder-content") {
+  window.requestAnimationFrame(() => document.getElementById(anchor)?.scrollIntoView({ behavior: "smooth", block: "start" }));
 }
 
 function serviceFlags(input: ProjectInput) {
@@ -220,6 +224,10 @@ export default function Workspace() {
   const pathname = usePathname();
   const router = useRouter();
   const routeProjectId = pathname.match(/^\/projects\/([^/]+)/)?.[1] ? decodeURIComponent(pathname.match(/^\/projects\/([^/]+)/)![1]) : "";
+  const editRoute = parseEditRoute(pathname);
+  const routeEditProjectId = editRoute.projectId;
+  const routeEditStep = editRoute.step;
+  const routeCreatesRevision = editRoute.createsRevision;
   const routeView = pathname.startsWith("/projects/") ? "Project Detail" : pathname.includes("new-project") || pathname.includes("grinding") || pathname.includes("screeding") || pathname.includes("repairs") ? "New Project" : pathname.includes("project-search") ? "Project Search" : pathname.includes("admin-rates") ? "Admin Rates" : pathname.includes("company-admin") ? "Company Admin" : "Dashboard";
   const routeTab: DetailTab = pathname.includes("grinding") ? "Grinding" : pathname.includes("screeding") ? "Screeding" : pathname.includes("repairs") ? "Repairs" : pathname.includes("proposal") ? "PM Handover" : pathname.includes("budget") ? "Costing" : pathname.includes("pl") ? "Actual P&L" : "Summary";
   const routeAdminTab: "Rates" | "Repair Types" | "Repair Materials" = pathname.includes("repair-types") ? "Repair Types" : pathname.includes("repair-materials") ? "Repair Materials" : "Rates";
@@ -228,7 +236,9 @@ export default function Workspace() {
   const [input, setInput] = useState<ProjectInput>(() => cloneInput(emptyInput));
   const [baselineInput, setBaselineInput] = useState<ProjectInput>(() => cloneInput(emptyInput));
   const [rates, setRatesState] = useState<AdminRates>(defaultRates);
+  const [baselineRates, setBaselineRates] = useState<AdminRates>(defaultRates);
   const [repairCatalog, setRepairCatalog] = useState<RepairCatalog>(defaultRepairCatalog);
+  const [baselineRepairCatalog, setBaselineRepairCatalog] = useState<RepairCatalog>(defaultRepairCatalog);
   const [pricingRates, setPricingRates] = useState<AdminRates>(defaultRates);
   const [pricingCatalog, setPricingCatalog] = useState<RepairCatalog>(defaultRepairCatalog);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
@@ -238,6 +248,9 @@ export default function Workspace() {
   const [workspaceError, setWorkspaceError] = useState("");
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
+  const [adminTab, setAdminTab] = useState<"Rates" | "Repair Types" | "Repair Materials">(routeAdminTab);
+  const companyLoadToken = useRef(0);
   const [actuals, setActuals] = useState(defaultActuals(calculateProject(emptyInput, defaultRates, defaultRepairCatalog)));
   const calculations = useMemo(() => calculateProject(input, pricingRates, pricingCatalog), [input, pricingRates, pricingCatalog]);
   const selected = projects.find((project) => project.id === selectedId);
@@ -248,22 +261,25 @@ export default function Workspace() {
   const moduleBlocked = routeModule && (routeModule === "company_admin" ? auth.role !== "super_admin" : !auth.enabledModules.includes(routeModule) || !hasPermission(auth.role, routePermission));
   const displayCurrency = view === "New Project" ? input.quoteCurrency : view === "Project Detail" && selected ? selected.inputs.quoteCurrency : auth.activeCompany.defaultCurrency;
   const hasUnsavedChanges = view === "New Project" && JSON.stringify(input) !== JSON.stringify(baselineInput);
+  const hasUnsavedAdminChanges = view === "Admin Rates" && (JSON.stringify(rates) !== JSON.stringify(baselineRates) || JSON.stringify(repairCatalog) !== JSON.stringify(baselineRepairCatalog));
+  const hasUnsavedWork = hasUnsavedChanges || hasUnsavedAdminChanges;
   setMoneyCurrency(displayCurrency);
 
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
-      if (!hasUnsavedChanges) return;
+      if (!hasUnsavedWork) return;
       event.preventDefault();
       event.returnValue = "";
     };
     window.addEventListener("beforeunload", warn);
     return () => window.removeEventListener("beforeunload", warn);
-  }, [hasUnsavedChanges]);
+  }, [hasUnsavedWork]);
 
   useEffect(() => {
     setView(routeView);
     setDetailTab(routeTab);
-  }, [pathname, routeTab, routeView]);
+    setAdminTab(routeAdminTab);
+  }, [pathname, routeAdminTab, routeTab, routeView]);
 
   useEffect(() => {
     if (auth.configured && (!auth.session || !auth.companies.length)) return;
@@ -272,11 +288,16 @@ export default function Workspace() {
       actorName: auth.session?.user.email ?? "James Dare",
       userId: auth.session?.user.id
     });
+    const loadToken = ++companyLoadToken.current;
     setWorkspaceLoading(true);
+    setWorkspaceLoaded(false);
     setWorkspaceError("");
     void Promise.all([loadRates(), loadProjects(), loadRepairCatalog()]).then(([loadedRates, loadedProjects, loadedRepairCatalog]) => {
+      if (loadToken !== companyLoadToken.current) return;
       setRatesState(loadedRates);
+      setBaselineRates(JSON.parse(JSON.stringify(loadedRates)) as AdminRates);
       setRepairCatalog(loadedRepairCatalog);
+      setBaselineRepairCatalog(JSON.parse(JSON.stringify(loadedRepairCatalog)) as RepairCatalog);
       setPricingRates(loadedRates);
       setPricingCatalog(loadedRepairCatalog);
       setProjects(loadedProjects);
@@ -287,7 +308,9 @@ export default function Workspace() {
       setEditingId("");
       setSelectedId("");
       setActuals(defaultActuals(calculateProject(companyBlank, loadedRates, loadedRepairCatalog)));
-    }).catch((error: unknown) => setWorkspaceError(error instanceof Error ? error.message : "Could not load the company workspace.")).finally(() => setWorkspaceLoading(false));
+      setWorkspaceLoaded(true);
+    }).catch((error: unknown) => { if (loadToken === companyLoadToken.current) setWorkspaceError(error instanceof Error ? error.message : "Could not load the company workspace."); }).finally(() => { if (loadToken === companyLoadToken.current) setWorkspaceLoading(false); });
+    return () => { if (loadToken === companyLoadToken.current) companyLoadToken.current += 1; };
   }, [auth.activeCompany.defaultCurrency, auth.activeCompany.id, auth.companies.length, auth.configured, auth.session, auth.session?.user.email, auth.session?.user.id]);
 
   useEffect(() => {
@@ -297,6 +320,27 @@ export default function Workspace() {
     setSelectedId(routedProject.id);
     setActuals(routedProject.actuals ?? defaultActuals(routedProject.calculations));
   }, [projects, routeProjectId]);
+
+  useEffect(() => {
+    if (!routeEditProjectId || !workspaceLoaded) return;
+    const project = projects.find((item) => item.id === routeEditProjectId);
+    if (!project) return;
+    const editable = cloneInput(project.inputs);
+    if (routeCreatesRevision) {
+      const numericRevision = Number.parseInt(editable.revision, 10);
+      editable.revision = Number.isFinite(numericRevision) ? String(numericRevision + 1) : `${editable.revision || "1"}.1`;
+    }
+    if (routeEditStep) editable.uiProgress = { ...editable.uiProgress, builderStep: routeEditStep };
+    setInput(editable);
+    setBaselineInput(cloneInput(project.inputs));
+    setPricingRates(project.rateSnapshot ?? rates);
+    setPricingCatalog(project.repairCatalogSnapshot ?? repairCatalog);
+    setEditingId(project.id);
+    setSelectedId(project.id);
+    setActuals(project.actuals ?? defaultActuals(project.calculations));
+  // Loading an edit route is intentionally keyed to the routed record, not input edits.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeEditProjectId, routeEditStep, routeCreatesRevision, workspaceLoaded]);
 
   useEffect(() => {
     if (selected) setActuals(selected.actuals ?? defaultActuals(selected.calculations));
@@ -320,6 +364,7 @@ export default function Workspace() {
     setActuals(defaultActuals(calculateProject(blank, rates, repairCatalog)));
     setView("New Project");
     setDetailTab("Summary");
+    if (pathname !== "/new-project") router.push("/new-project");
   }
 
   async function saveCurrentProject(status: ProjectStatus = "Draft") {
@@ -341,7 +386,7 @@ export default function Workspace() {
     }
   }
 
-  function editProject(project: ProjectRecord) {
+  function editProject(project: ProjectRecord, requestedStep?: BuilderStep) {
     const locked = statusIsLocked(project.status);
     const currentStatus = normaliseProjectStatus(project.status);
     if (["Lost", "Completed", "Closed"].includes(currentStatus)) {
@@ -349,19 +394,8 @@ export default function Workspace() {
       return;
     }
     if (locked && !confirm("This costing is locked. Create a new editable revision while preserving the approved version?")) return;
-    const editable = cloneInput(project.inputs);
-    if (locked) {
-      const numericRevision = Number.parseInt(editable.revision, 10);
-      editable.revision = Number.isFinite(numericRevision) ? String(numericRevision + 1) : `${editable.revision || "1"}.1`;
-    }
-    setInput(editable);
-    setBaselineInput(cloneInput(project.inputs));
-    setPricingRates(project.rateSnapshot ?? rates);
-    setPricingCatalog(project.repairCatalogSnapshot ?? repairCatalog);
-    setEditingId(project.id);
-    setSelectedId(project.id);
-    setView("New Project");
-    router.push("/new-project");
+    const stepSegment = requestedStep && ["Grinding", "Screeding", "Repairs"].includes(requestedStep) ? `/${requestedStep.toLowerCase()}` : "";
+    router.push(`/new-project/${encodeURIComponent(project.id)}${stepSegment}${locked ? "/revision" : ""}`);
   }
 
   function openProject(project: ProjectRecord, tab: DetailTab = "Summary") {
@@ -373,14 +407,29 @@ export default function Workspace() {
 
   const selectedContext = selected ? `${selected.inputs.projectReference || "Draft"} - ${selected.inputs.client || "No client"} - ${selected.calculations.serviceSummary}` : "No project selected";
   const shellServices = view === "Project Detail" && selected ? serviceFlags(selected.inputs) : serviceFlags(input);
+  const activeBuilderStep = input.uiProgress?.builderStep as BuilderStep | undefined;
+  const confirmNavigation = () => !hasUnsavedWork || confirm(`${hasUnsavedAdminChanges ? "Admin data" : "This costing"} has unsaved changes. Leave and discard them?`);
+  const navigateBuilder = (step: "Services" | "Grinding" | "Screeding" | "Repairs") => {
+    if (view === "New Project") {
+      setInput({ ...input, uiProgress: { ...input.uiProgress, builderStep: step } });
+      scrollToCostingSection();
+      return;
+    }
+    if (step === "Services") {
+      startNewProject();
+      return;
+    }
+    if (selected) {
+      editProject(selected, step);
+      return;
+    }
+    startNewProject();
+  };
 
   if (auth.configured && auth.session && !auth.companies.length) return <div className="min-h-screen bg-slate-100 p-8"><div className="mx-auto max-w-xl rounded-2xl border border-amber-200 bg-white p-6 shadow-sm"><h1 className="text-2xl font-bold">No company access</h1><p className="mt-2 text-sm text-slate-600">Your account is signed in but has no active company membership. Ask a super admin to restore the company membership.</p></div></div>;
 
   return (
-    <ProductShell view={view} pathname={pathname} selectedContext={selectedContext} activeServices={shellServices} onNewProject={startNewProject} canNavigate={(href) => {
-      if (!hasUnsavedChanges || ["/new-project", "/grinding", "/screeding", "/repairs"].includes(href) && href !== "/new-project") return true;
-      return confirm("This costing has unsaved changes. Leave this page and discard them?");
-    }}>
+    <ProductShell view={view} pathname={pathname} selectedContext={selectedContext} activeServices={shellServices} activeBuilderStep={activeBuilderStep} activeAdminTab={adminTab} onNewProject={startNewProject} onBuilderStep={navigateBuilder} onAdminTab={setAdminTab} canNavigate={confirmNavigation}>
       <section className="workspace-page">
         {workspaceError && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{workspaceError}</div>}
         {workspaceLoading && <div className="mb-5 rounded-xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-600">Loading company workspace...</div>}
@@ -389,9 +438,9 @@ export default function Workspace() {
         {!moduleBlocked && <>
         <WorkspaceBanner view={view} selected={selected} projects={projects} />
         {view === "Dashboard" && <Dashboard projects={projects} companyCurrency={auth.activeCompany.defaultCurrency} open={(project) => openProject(project)} />}
-        {view === "New Project" && <ProjectBuilder input={input} setInput={setInput} rates={pricingRates} repairCatalog={pricingCatalog} calculations={calculations} onSave={saveCurrentProject} detailTab={detailTab} setDetailTab={setDetailTab} duplicateReference={projects.some((project) => project.id !== editingId && project.inputs.projectReference.trim().toLowerCase() === input.projectReference.trim().toLowerCase())} usingSnapshot={Boolean(editingId && selected?.rateSnapshot)} saving={saveState === "saving"} dirty={hasUnsavedChanges} reprice={() => { setPricingRates(rates); setPricingCatalog(repairCatalog); setInput({ ...input, exchangeRateLockedAt: new Date().toISOString() }); }} />}
+        {view === "New Project" && <ProjectBuilder input={input} setInput={setInput} rates={pricingRates} repairCatalog={pricingCatalog} calculations={calculations} onSave={saveCurrentProject} duplicateReference={projects.some((project) => project.id !== editingId && project.inputs.projectReference.trim().toLowerCase() === input.projectReference.trim().toLowerCase())} usingSnapshot={Boolean(editingId && selected?.rateSnapshot)} saving={saveState === "saving"} dirty={hasUnsavedChanges} reprice={() => { setPricingRates(rates); setPricingCatalog(repairCatalog); setInput({ ...input, exchangeRateLockedAt: new Date().toISOString() }); }} />}
         {view === "Project Search" && <SearchView projects={projects} open={(project) => openProject(project)} edit={editProject} />}
-        {view === "Admin Rates" && <AdminRatesView rates={rates} setRates={setRatesState} repairCatalog={repairCatalog} setRepairCatalog={setRepairCatalog} initialAdminTab={routeAdminTab} save={async () => { try { await saveAdminData(rates, repairCatalog); alert("Admin data saved and versioned. New costings use these values; approved revisions keep their snapshot."); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "Admin data could not be saved."); } }} />}
+        {view === "Admin Rates" && <AdminRatesView rates={rates} setRates={setRatesState} repairCatalog={repairCatalog} setRepairCatalog={setRepairCatalog} adminTab={adminTab} setAdminTab={setAdminTab} save={async () => { try { await saveAdminData(rates, repairCatalog); setBaselineRates(JSON.parse(JSON.stringify(rates)) as AdminRates); setBaselineRepairCatalog(JSON.parse(JSON.stringify(repairCatalog)) as RepairCatalog); alert("Admin data saved and versioned. New costings use these values; saved projects keep their pricing snapshot until explicitly repriced."); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "Admin data could not be saved."); } }} />}
         {view === "Company Admin" && <CompanyAdminView />}
         {view === "Project Detail" && selected && (
           <ProjectDetail
@@ -422,6 +471,8 @@ export default function Workspace() {
             updateStatus={async (status) => { try { await updateProjectWorkflow(selected.id, status, undefined, auth.session?.user.email ?? "James Dare"); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "Project status could not be updated."); } }}
           />
         )}
+        {view === "Project Detail" && workspaceLoaded && routeProjectId && !selected && <div className="app-card-strong p-6"><h2 className="text-xl font-semibold">Project not found</h2><p className="mt-2 text-sm text-slate-600">This project does not exist or is not available in the active company.</p><button className="secondary-button mt-4" onClick={() => router.push("/project-search")}>Open Project Search</button></div>}
+        {view === "New Project" && workspaceLoaded && routeEditProjectId && !projects.some((project) => project.id === routeEditProjectId) && <div className="app-card-strong p-6"><h2 className="text-xl font-semibold">Draft not found</h2><p className="mt-2 text-sm text-slate-600">The saved costing does not exist or belongs to another company.</p><button className="secondary-button mt-4" onClick={startNewProject}>Start New Project</button></div>}
         </>}
       </section>
     </ProductShell>
@@ -749,41 +800,16 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="app-card min-w-0 border-t-4 border-t-sky-500 p-4"><div className="text-[11px] font-bold uppercase text-slate-500">{label}</div><div className="mt-2 break-words text-xl font-bold text-slate-950 sm:text-2xl">{value}</div></div>;
 }
 
-function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, onSave, detailTab, setDetailTab, duplicateReference, usingSnapshot, saving, dirty, reprice }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates; repairCatalog: RepairCatalog; calculations: ReturnType<typeof calculateProject>; onSave: (status?: ProjectStatus) => void; detailTab: DetailTab; setDetailTab: (tab: DetailTab) => void; duplicateReference: boolean; usingSnapshot: boolean; saving: boolean; dirty: boolean; reprice: () => void }) {
-  const savedStep = input.uiProgress?.builderStep as BuilderStep | undefined;
-  const initialStep = detailTab === "Grinding" || detailTab === "Screeding" || detailTab === "Repairs" ? detailTab : savedStep ?? "Services";
-  const [builderStep, setBuilderStep] = useState<BuilderStep>(initialStep);
-  const serviceCount = Number(input.includeGrinding) + Number(input.includeScreeding) + Number(input.includeRepairs);
-  const allSteps = [
-    { key: "Services", label: "Services", enabled: true },
-    { key: "Project", label: "Project", enabled: true },
-    { key: "Grinding", label: "Grinding", enabled: input.includeGrinding },
-    { key: "Screeding", label: "Screeding", enabled: input.includeScreeding },
-    { key: "Repairs", label: "Repairs", enabled: input.includeRepairs },
-    { key: "Phase Schedule", label: "Phase Programme", enabled: serviceCount > 1 },
-    { key: "Project Management", label: "Project Management", enabled: true },
-    { key: "Extras", label: "Extras", enabled: true },
-    { key: "Review", label: "Review", enabled: true }
-  ] satisfies Array<{ key: BuilderStep; label: string; enabled: boolean }>;
-  const steps = allSteps.filter((step) => step.enabled);
-  useEffect(() => {
-    const progressStep = input.uiProgress?.builderStep as BuilderStep | undefined;
-    const routedStep = detailTab === "Grinding" || detailTab === "Screeding" || detailTab === "Repairs" ? detailTab : progressStep ?? builderStep;
-    const nextStep = steps.some((step) => step.key === routedStep) ? routedStep : "Services";
-    if (builderStep !== nextStep) setBuilderStep(nextStep);
-    if (!tabIsAllowed(detailTab, input)) setDetailTab("Summary");
-  // The primitive service flags are the intentional routing dependencies.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detailTab, input.includeGrinding, input.includeScreeding, input.includeRepairs, input.grinding.enabled, input.screeding.enabled, input.repairs.enabled, input.uiProgress?.builderStep]);
+function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, onSave, duplicateReference, usingSnapshot, saving, dirty, reprice }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates; repairCatalog: RepairCatalog; calculations: ReturnType<typeof calculateProject>; onSave: (status?: ProjectStatus) => void; duplicateReference: boolean; usingSnapshot: boolean; saving: boolean; dirty: boolean; reprice: () => void }) {
+  const steps = visibleBuilderSteps(input).map((key) => ({ key, label: builderStepLabels[key] }));
+  const builderStep = resolveBuilderStep(input);
   const activeIndex = Math.max(0, steps.findIndex((step) => step.key === builderStep));
   const setStep = (step: typeof builderStep) => {
-    setBuilderStep(step);
     setInput({ ...input, uiProgress: { ...input.uiProgress, builderStep: step } });
-    if (step === "Grinding" || step === "Screeding" || step === "Repairs") setDetailTab(step);
-    if (step === "Review") setDetailTab("Commercial Review");
+    scrollToCostingSection();
   };
-  const nextStep = () => setStep(steps[Math.min(activeIndex + 1, steps.length - 1)].key);
-  const previousStep = () => setStep(steps[Math.max(activeIndex - 1, 0)].key);
+  const nextStep = () => setStep(adjacentBuilderStep(input, 1));
+  const previousStep = () => setStep(adjacentBuilderStep(input, -1));
   const readiness = repairReadiness(input, repairCatalog);
   const grindingChecks = grindingReadiness(input);
   const screedChecks = screedReadiness(input);
@@ -803,7 +829,7 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
 
   return (
     <div className="grid gap-5">
-      <div className="app-card p-3">
+      <div className="app-card p-3" id="costing-builder-navigation">
         <div className="flex flex-wrap items-center gap-2">
           <div className="mr-1 text-[11px] font-bold uppercase text-slate-500">Costing Builder</div>
           <div className="flex min-w-0 flex-1 flex-wrap gap-1.5">
@@ -833,7 +859,7 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
           <div className="mt-1">{approvalBlockers.length} item{approvalBlockers.length === 1 ? "" : "s"} to review. These checks do not block the costing.</div>
         </div>
       )}
-      <div className="app-card-strong">
+      <div className="app-card-strong" id="costing-builder-content">
         <div className="panel-heading flex flex-wrap items-center justify-between gap-3">
           <div><div className="flex flex-wrap items-center gap-2"><h2 className="text-xl font-semibold">New Project</h2>{dirty && <span className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-bold uppercase text-amber-800">Unsaved changes</span>}</div><p className="text-sm text-slate-500">Pick services first, then complete only the sections needed for this costing.</p></div>
           <div className="flex flex-wrap gap-2">
@@ -850,8 +876,7 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
           {builderStep === "Repairs" && <RepairsForm input={input} setInput={setInput} repairCatalog={repairCatalog} rates={rates} projectMaterialCalcs={calculations.repairMaterialCalcs} />}
           {builderStep === "Project Management" && <ProjectManagementStep input={input} setInput={setInput} rates={rates} />}
           {builderStep === "Extras" && <ExtrasStep input={input} setInput={setInput} />}
-          {builderStep === "Review" && detailTab !== "Audit" && <ReviewStep calculations={calculations} input={input} setInput={setInput} />}
-          {builderStep === "Review" && detailTab === "Audit" && <AuditPanel calculations={calculations} />}
+          {builderStep === "Review" && <ReviewStep calculations={calculations} input={input} setInput={setInput} />}
           {builderStep === "Review" && <div className={`mt-5 rounded-xl border p-4 ${approvalBlockers.length ? "border-amber-200 bg-amber-50" : "border-emerald-200 bg-emerald-50"}`}><div className="font-bold text-slate-950">Final Costing Sense Checks</div>{approvalBlockers.length ? <div className="mt-3 grid gap-2">{approvalBlockers.map((issue) => <button className="flex min-h-10 items-center justify-between rounded-lg bg-white px-3 py-2 text-left text-sm font-semibold text-amber-950 ring-1 ring-amber-200" onClick={() => setStep(issueStep(issue))} key={issue}><span>{issue}</span><span className="ml-3 text-xs uppercase">Open section</span></button>)}</div> : <div className="mt-2 text-sm font-semibold text-emerald-900">No costing checks are currently flagged.</div>}</div>}
         </div>
       </div>
@@ -924,8 +949,8 @@ function ProjectBasics({ input, setInput, duplicateReference }: { input: Project
         <Text label="Revision" value={input.revision} onChange={(v) => setInput({ ...input, revision: v })} />
         <Text label="Costed By" value={input.costedBy} onChange={(v) => setInput({ ...input, costedBy: v })} />
         <Select label="Costing Currency" value={input.quoteCurrency} options={currencies} onChange={(v) => setInput({ ...input, quoteCurrency: v as ProjectInput["quoteCurrency"], exchangeRateToCompanyCurrency: v === auth.activeCompany.defaultCurrency ? 1 : input.exchangeRateToCompanyCurrency, exchangeRateToGroupCurrency: v === auth.activeCompany.reportingCurrency ? 1 : input.exchangeRateToGroupCurrency, exchangeRateLockedAt: new Date().toISOString() })} />
-        <NumberInput label={`1 ${input.quoteCurrency} = Company ${auth.activeCompany.defaultCurrency}`} value={input.exchangeRateToCompanyCurrency} onChange={(v) => setInput({ ...input, exchangeRateToCompanyCurrency: v, exchangeRateLockedAt: new Date().toISOString() })} />
-        <NumberInput label={`1 ${input.quoteCurrency} = Group ${auth.activeCompany.reportingCurrency}`} value={input.exchangeRateToGroupCurrency} onChange={(v) => setInput({ ...input, exchangeRateToGroupCurrency: v, exchangeRateLockedAt: new Date().toISOString() })} />
+        <NumberInput label={`1 ${input.quoteCurrency} = Company ${auth.activeCompany.defaultCurrency}`} value={input.exchangeRateToCompanyCurrency} min={0.00000001} onChange={(v) => setInput({ ...input, exchangeRateToCompanyCurrency: v, exchangeRateLockedAt: new Date().toISOString() })} />
+        <NumberInput label={`1 ${input.quoteCurrency} = Group ${auth.activeCompany.reportingCurrency}`} value={input.exchangeRateToGroupCurrency} min={0.00000001} onChange={(v) => setInput({ ...input, exchangeRateToGroupCurrency: v, exchangeRateLockedAt: new Date().toISOString() })} />
       </div>
       {input.exchangeRateLockedAt && <div className="mt-4 text-xs text-slate-500">Exchange rate locked for this costing: {formatDateTime(input.exchangeRateLockedAt)}</div>}
     </div>
@@ -982,7 +1007,7 @@ function ProjectManagementStep({ input, setInput, rates }: { input: ProjectInput
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <Select label="Travel Mode" value={pm.travelMode} options={["None", "Drive", "Fly"]} onChange={(travelMode) => patch({ travelMode: travelMode as ProjectInput["projectManagement"]["travelMode"] })} />
           {pm.travelMode === "Drive" && <NumberInput label="One-Way Distance km" value={pm.oneWayKm} onChange={(oneWayKm) => patch({ oneWayKm })} />}
-          {pm.travelMode === "Drive" && <NumberInput label="Vehicles" value={pm.vehicles} onChange={(vehicles) => patch({ vehicles })} />}
+          {pm.travelMode === "Drive" && <NumberInput label="Vehicles" value={pm.vehicles} step={1} onChange={(vehicles) => patch({ vehicles })} />}
           {pm.travelMode === "Fly" && <NumberInput label="Return Flights" value={pm.returnFlights} onChange={(returnFlights) => patch({ returnFlights })} />}
           <NumberInput label="Hotel Nights" value={pm.hotelNights} onChange={(hotelNights) => patch({ hotelNights })} />
         </div>
@@ -1125,6 +1150,7 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
   const setGrindingPage = (page: GrindingPage) => {
     setGrindingPageState(page);
     setInput({ ...input, uiProgress: { ...input.uiProgress, grindingPage: page } });
+    scrollToCostingSection();
   };
   const estimatedDays = g.estimatedDays;
   const productionMode = g.productionLabourMode ?? "in_house";
@@ -1188,7 +1214,7 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
           <div className="panel-heading"><h2 className="text-xl font-semibold">Grinding Programme</h2><p className="text-sm text-slate-500">Set the expected site duration first. These days drive default labour, surveyor and equipment quantities.</p></div>
           <div className="grid gap-4 p-5 sm:grid-cols-2 xl:grid-cols-4">
             <NumberInput label="Estimated Grinding Days" value={g.estimatedDays} onChange={(v) => patch({ estimatedDays: v })} />
-            <NumberInput label="Weekend Days Worked Per Week" value={g.weekendDaysPerWeek} onChange={(v) => patch({ weekendDaysPerWeek: v, productionWeekendDays: v, surveyorWeekendDays: v })} />
+            <NumberInput label="Weekend Days Worked Per Week" value={g.weekendDaysPerWeek} max={2} step={1} onChange={(v) => patch({ weekendDaysPerWeek: v, productionWeekendDays: v, surveyorWeekendDays: v })} />
             <Toggle label="Night Shifts" checked={g.nightShiftRequired} onChange={(v) => patch({ nightShiftRequired: v })} />
             {g.nightShiftRequired && <NumberInput label="Number of Night Shifts" value={g.nightShifts} onChange={(v) => patch({ nightShifts: v, productionNightShifts: v, surveyorNightShifts: v })} />}
           </div>
@@ -1211,20 +1237,20 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Mini label="Estimated Days" value={`${estimatedDays}`} />
               <div className={productionDaysOverridden ? "rounded-lg border border-amber-200 bg-amber-50 p-3" : ""}><NumberInput label="Inputted Production Days" value={productionDays} onChange={(v) => patch({ productionLabourDays: v })} /></div>
-              <NumberInput label="Production Men" value={g.productionMen} onChange={(v) => patch({ productionMen: v, grindersOnSite: v })} />
+              <NumberInput label="Production Men" value={g.productionMen} step={1} onChange={(v) => patch({ productionMen: v, grindersOnSite: v })} />
               <Mini label="Production Labour Sell" value={money(productionLabourSell)} />
             </div>
             {productionDaysOverridden && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-950">Production labour days overridden from {estimatedDays} to {productionDays}.</div>}
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Mini label="Weekend Days On Project" value={`${calculatedProductionWeekendDays}`} />
-              <NumberInput label="Night Shifts" value={g.productionNightShifts || g.nightShifts} onChange={(v) => patch({ productionNightShifts: v })} />
+              <NumberInput label="Night Shifts" value={g.productionNightShifts} step={1} onChange={(v) => patch({ productionNightShifts: v })} />
               <Toggle label="Hotel / Subsistence" checked={g.productionHotelRequired} onChange={(v) => patch({ productionHotelRequired: v })} />
-              {g.productionHotelRequired && <div className={g.productionHotelNights > 0 && g.productionHotelNights !== calculatedProductionHotelNights ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Hotel Nights Per Team" value={productionHotelNights} onChange={(v) => patch({ productionHotelNights: v === calculatedProductionHotelNights ? 0 : v })} />{g.productionHotelNights > 0 && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => patch({ productionHotelNights: 0 })}>Reset to calculated {calculatedProductionHotelNights}</button>}</div>}
+              {g.productionHotelRequired && <div className={g.productionHotelNights > 0 && g.productionHotelNights !== calculatedProductionHotelNights ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Hotel Nights Per Team" value={productionHotelNights} step={1} onChange={(v) => patch({ productionHotelNights: v === calculatedProductionHotelNights ? 0 : v })} />{g.productionHotelNights > 0 && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => patch({ productionHotelNights: 0 })}>Reset to calculated {calculatedProductionHotelNights}</button>}</div>}
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <NumberInput label="Travel Days" value={g.productionTravelDays} onChange={(v) => patch({ productionTravelDays: v })} />
               <NumberInput label="One-Way Distance km" value={g.productionOneWayKm} onChange={(v) => patch({ productionOneWayKm: v })} />
-              <NumberInput label="Vehicles / Vans" value={g.productionVehicles} onChange={(v) => patch({ productionVehicles: v })} />
+              <NumberInput label="Vehicles / Vans" value={g.productionVehicles} step={1} onChange={(v) => patch({ productionVehicles: v })} />
               <Mini label="Calculated km" value={`${g.productionOneWayKm * 2 * Math.max(0, g.productionVehicles)}`} />
             </div>
           </div>
@@ -1244,13 +1270,13 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Mini label="Estimated Days" value={`${estimatedDays}`} />
               <div className={surveyorDaysOverridden ? "rounded-lg border border-amber-200 bg-amber-50 p-3" : ""}><NumberInput label="Inputted Surveyor Days" value={surveyorDays} onChange={(v) => patch({ surveyorDays: v })} /></div>
-              <NumberInput label="Surveyors" value={g.surveyorCount} onChange={(v) => patch({ surveyorCount: v, surveyorsOnSite: v })} />
+              <NumberInput label="Surveyors" value={g.surveyorCount} step={1} onChange={(v) => patch({ surveyorCount: v, surveyorsOnSite: v })} />
               <Mini label="Surveyor Labour Sell" value={money(surveyorLabourSell)} />
             </div>
             {surveyorDaysOverridden && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-950">Surveyor days overridden from {estimatedDays} to {surveyorDays}.</div>}
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Mini label="Weekend Days On Project" value={`${calculatedSurveyorWeekendDays}`} />
-              <NumberInput label="Night Shifts" value={g.surveyorNightShifts || g.nightShifts} onChange={(v) => patch({ surveyorNightShifts: v })} />
+              <NumberInput label="Night Shifts" value={g.surveyorNightShifts} step={1} onChange={(v) => patch({ surveyorNightShifts: v })} />
               <Toggle label="Engineering Report" checked={g.engineeringReport} onChange={(v) => patch({ engineeringReport: v })} />
               <Toggle label="Hotel / Subsistence" checked={g.surveyorHotelRequired} onChange={(v) => patch({ surveyorHotelRequired: v })} />
               {g.surveyorHotelRequired && <div className={g.surveyorHotelNights > 0 && g.surveyorHotelNights !== calculatedSurveyorHotelNights ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Hotel Nights Per Team" value={surveyorHotelNights} onChange={(v) => patch({ surveyorHotelNights: v === calculatedSurveyorHotelNights ? 0 : v })} />{g.surveyorHotelNights > 0 && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => patch({ surveyorHotelNights: 0 })}>Reset to calculated {calculatedSurveyorHotelNights}</button>}</div>}
@@ -1258,7 +1284,7 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <NumberInput label="Travel Days" value={g.surveyorTravelDays} onChange={(v) => patch({ surveyorTravelDays: v })} />
               <NumberInput label="One-Way Distance km" value={g.surveyorOneWayKm} onChange={(v) => patch({ surveyorOneWayKm: v })} />
-              <NumberInput label="Vehicles" value={g.surveyorVehicles} onChange={(v) => patch({ surveyorVehicles: v })} />
+              <NumberInput label="Vehicles" value={g.surveyorVehicles} step={1} onChange={(v) => patch({ surveyorVehicles: v })} />
               <Mini label="Calculated km" value={`${g.surveyorOneWayKm * 2 * Math.max(0, g.surveyorVehicles)}`} />
             </div>
           </div>
@@ -1278,7 +1304,7 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Toggle label="10000 watt generator" checked={g.generatorRequired} onChange={(v) => patch({ generatorRequired: v, generatorCount: v ? g.generatorCount || 1 : 0 })} />
-              {g.generatorRequired && <NumberInput label="10000 watt Generators On Site" value={g.generatorCount} onChange={(v) => patch({ generatorCount: v })} />}
+              {g.generatorRequired && <NumberInput label="10000 watt Generators On Site" value={g.generatorCount} step={1} onChange={(v) => patch({ generatorCount: v })} />}
               <Toggle label="Large Generator" checked={g.largeGeneratorRequired} onChange={(v) => patch({ largeGeneratorRequired: v })} />
               {g.largeGeneratorRequired && <NumberInput label="Large Generator Rate" value={g.largeGeneratorRate} onChange={(v) => patch({ largeGeneratorRate: v })} />}
               {g.largeGeneratorRequired && <NumberInput label="Delivery" value={g.largeGeneratorDelivery} onChange={(v) => patch({ largeGeneratorDelivery: v })} />}
@@ -1327,6 +1353,7 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
   const setScreedPage = (page: ScreedPage) => {
     setScreedPageState(page);
     setInput({ ...input, uiProgress: { ...input.uiProgress, screedPage: page } });
+    scrollToCostingSection();
   };
   const updateTeam = (index: number, next: Partial<ScreedTeam>) => patch({ teams: s.teams.map((team, i) => i === index ? { ...team, ...next } : team) });
   const removeTeam = (index: number) => patch({ teams: s.teams.filter((_, i) => i !== index) });
@@ -1402,7 +1429,7 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
             <NumberInput label="Screeding Days" value={s.screedingDays} onChange={(v) => patch({ screedingDays: v })} />
             <NumberInput label="Grinding Days" value={s.grindingDays} onChange={(v) => patch({ grindingDays: v })} />
             <Mini label="Total Site Days" value={String(screedDays)} />
-            <NumberInput label="Weekend Days Worked Per Week" value={s.weekendDaysPerWeek} onChange={(v) => patch({ weekendDaysPerWeek: v, productionWeekendDays: v, surveyorWeekendDays: v })} />
+            <NumberInput label="Weekend Days Worked Per Week" value={s.weekendDaysPerWeek} max={2} step={1} onChange={(v) => patch({ weekendDaysPerWeek: v, productionWeekendDays: v, surveyorWeekendDays: v })} />
             <Toggle label="Night Shifts" checked={s.nightShiftRequired} onChange={(v) => patch({ nightShiftRequired: v })} />
             {s.nightShiftRequired && <NumberInput label="Number of Night Shifts" value={s.nightShifts} onChange={(v) => patch({ nightShifts: v, productionNightShifts: v, surveyorNightShifts: v })} />}
           </div>
@@ -1467,20 +1494,20 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Mini label="Calculated Site Days" value={`${screedDays}`} />
               <div className={productionDaysOverridden ? "rounded-lg border border-amber-200 bg-amber-50 p-3" : ""}><NumberInput label="Inputted Production Days" value={productionDays} onChange={(v) => patch({ productionLabourDays: v })} /></div>
-              <NumberInput label="Production Men" value={s.productionMen} onChange={(v) => patch({ productionMen: v, propaneGrinders: v || s.propaneGrinders })} />
+              <NumberInput label="Production Men" value={s.productionMen} step={1} onChange={(v) => patch({ productionMen: v, propaneGrinders: v || s.propaneGrinders })} />
               <Mini label="Production Labour Sell" value={money(productionLabourSell)} />
             </div>
             {productionDaysOverridden && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-950">Production labour days overridden from {screedDays} to {productionDays}.</div>}
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Mini label="Weekend Days On Project" value={`${calculatedProductionWeekendDays}`} />
-              <NumberInput label="Night Shifts" value={s.productionNightShifts || s.nightShifts} onChange={(v) => patch({ productionNightShifts: v })} />
+              <NumberInput label="Night Shifts" value={s.productionNightShifts} step={1} onChange={(v) => patch({ productionNightShifts: v })} />
               <Toggle label="Hotel / Subsistence" checked={s.productionHotelRequired} onChange={(v) => patch({ productionHotelRequired: v })} />
               {s.productionHotelRequired && <div className={s.productionHotelNights > 0 && s.productionHotelNights !== calculatedProductionHotelNights ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Hotel Nights Per Team" value={productionHotelNights} onChange={(v) => patch({ productionHotelNights: v === calculatedProductionHotelNights ? 0 : v })} />{s.productionHotelNights > 0 && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => patch({ productionHotelNights: 0 })}>Reset to calculated {calculatedProductionHotelNights}</button>}</div>}
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <NumberInput label="Travel Days" value={s.productionTravelDays} onChange={(v) => patch({ productionTravelDays: v })} />
               <NumberInput label="One-Way Distance km" value={s.productionOneWayKm} onChange={(v) => patch({ productionOneWayKm: v })} />
-              <NumberInput label="Vehicles / Vans" value={s.productionVehicles} onChange={(v) => patch({ productionVehicles: v })} />
+              <NumberInput label="Vehicles / Vans" value={s.productionVehicles} step={1} onChange={(v) => patch({ productionVehicles: v })} />
               <Mini label="Calculated km" value={`${s.productionOneWayKm * 2 * Math.max(0, s.productionVehicles)}`} />
             </div>
           </div>
@@ -1500,13 +1527,13 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Mini label="Calculated Site Days" value={`${screedDays}`} />
               <div className={surveyorDaysOverridden ? "rounded-lg border border-amber-200 bg-amber-50 p-3" : ""}><NumberInput label="Inputted Surveyor Days" value={surveyorDays} onChange={(v) => patch({ surveyorDays: v })} /></div>
-              <NumberInput label="Surveyors" value={s.surveyors} onChange={(v) => patch({ surveyors: v })} />
+              <NumberInput label="Surveyors" value={s.surveyors} step={1} onChange={(v) => patch({ surveyors: v })} />
               <Mini label="Surveyor Labour Sell" value={money(surveyorLabourSell)} />
             </div>
             {surveyorDaysOverridden && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-950">Surveyor days overridden from {screedDays} to {surveyorDays}.</div>}
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Mini label="Weekend Days On Project" value={`${calculatedSurveyorWeekendDays}`} />
-              <NumberInput label="Night Shifts" value={s.surveyorNightShifts || s.nightShifts} onChange={(v) => patch({ surveyorNightShifts: v })} />
+              <NumberInput label="Night Shifts" value={s.surveyorNightShifts} step={1} onChange={(v) => patch({ surveyorNightShifts: v })} />
               <Toggle label="Engineering Report" checked={s.engineeringReport} onChange={(v) => patch({ engineeringReport: v })} />
               <Toggle label="Hotel / Subsistence" checked={s.surveyorHotelRequired || s.hotelRequired} onChange={(v) => patch({ surveyorHotelRequired: v, hotelRequired: v })} />
               {(s.surveyorHotelRequired || s.hotelRequired) && <div className={s.surveyorHotelNights > 0 && s.surveyorHotelNights !== calculatedSurveyorHotelNights ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Hotel Nights Per Team" value={surveyorHotelNights} onChange={(v) => patch({ surveyorHotelNights: v === calculatedSurveyorHotelNights ? 0 : v })} />{s.surveyorHotelNights > 0 && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => patch({ surveyorHotelNights: 0 })}>Reset to calculated {calculatedSurveyorHotelNights}</button>}</div>}
@@ -1514,7 +1541,7 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <NumberInput label="Travel Days" value={s.surveyorTravelDays} onChange={(v) => patch({ surveyorTravelDays: v })} />
               <NumberInput label="One-Way Distance km" value={s.surveyorOneWayKm} onChange={(v) => patch({ surveyorOneWayKm: v })} />
-              <NumberInput label="Vehicles" value={s.surveyorVehicles} onChange={(v) => patch({ surveyorVehicles: v })} />
+              <NumberInput label="Vehicles" value={s.surveyorVehicles} step={1} onChange={(v) => patch({ surveyorVehicles: v })} />
               <Mini label="Calculated km" value={`${s.surveyorOneWayKm * 2 * Math.max(0, s.surveyorVehicles)}`} />
             </div>
           </div>
@@ -1605,6 +1632,7 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
   const setRepairPage = (page: RepairPage) => {
     setRepairPageState(page);
     setInput({ ...input, uiProgress: { ...input.uiProgress, repairPage: page } });
+    scrollToCostingSection();
   };
   const updateRepairLine = (index: number, next: Partial<RepairLineItem>) => patch({ repairLines: r.repairLines.map((item, i) => i === index ? { ...item, ...next } : item) });
   const materialCost = (repairLine: RepairLineItem) => calculateRepairLineMaterials(repairLine, repairCatalog).reduce((sum, calc) => sum + calc.cost, 0);
@@ -1922,13 +1950,13 @@ function InHouseLabourPanel({ input, rates, calculatedDays, effectiveDays, mobil
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Mini label="Calculated Repair Days" value={`${calculatedDays}`} />
           <div className={overridden ? "rounded-lg border border-amber-200 bg-amber-50 p-3" : ""}><NumberInput label="Inputted Repair Days" value={inputtedDays} onChange={(v) => onChange({ labourDays: v })} /></div>
-          <NumberInput label="Men Per Team" value={input.labourMen} onChange={(v) => onChange({ labourMen: v })} />
+          <NumberInput label="Men Per Team" value={input.labourMen} step={1} onChange={(v) => onChange({ labourMen: v })} />
           <Mini label="Labour Sell" value={money(Math.max(0, input.labourMen) * effectiveDays * rates.productionLabourDayRate * (1 + adminRateMargin(rates, "productionLabourDayRate", rates.defaultMargin)))} />
         </div>
         {overridden && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-950">Repair days overridden from {calculatedDays} to {effectiveDays}.</div>}
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Toggle label="Weekend Days" checked={input.weekendRequired} onChange={(v) => onChange({ weekendRequired: v })} />
-          {input.weekendRequired && <NumberInput label="Weekend Days Per Week" value={input.weekendDays} onChange={(v) => onChange({ weekendDays: v })} />}
+          {input.weekendRequired && <NumberInput label="Weekend Days Per Week" value={input.weekendDays} max={2} step={1} onChange={(v) => onChange({ weekendDays: v })} />}
           <Toggle label="Night Shifts" checked={input.nightShiftRequired} onChange={(v) => onChange({ nightShiftRequired: v })} />
           {input.nightShiftRequired && <NumberInput label="Number of Night Shifts" value={input.nightShiftHours} onChange={(v) => onChange({ nightShiftHours: v })} />}
         </div>
@@ -1940,7 +1968,7 @@ function InHouseLabourPanel({ input, rates, calculatedDays, effectiveDays, mobil
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <NumberInput label="Travel Days" value={input.travelDays} onChange={(v) => onChange({ travelDays: v })} />
           <NumberInput label="One-Way Distance km" value={input.mobilisationOneWayKm} onChange={(v) => onChange({ mobilisationOneWayKm: v })} />
-          <NumberInput label="Vehicles / Vans" value={input.mobilisationVehicles} onChange={(v) => onChange({ mobilisationVehicles: v })} />
+          <NumberInput label="Vehicles / Vans" value={input.mobilisationVehicles} step={1} onChange={(v) => onChange({ mobilisationVehicles: v })} />
           <Mini label="Calculated Fuel km" value={`${mobilisationKm}`} />
         </div>
       </div>
@@ -1978,7 +2006,7 @@ function SubcontractLabourPanel({ items, calculatedDays, onChange, title = "Subc
               {daysOverridden && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-950">Subcontract days overridden from calculated {calculatedDays} to {item.days}.</div>}
               <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_160px_160px_140px]">
                 <NumberInput label="Mobilisation Cost" value={item.mobilisationCost} onChange={(v) => update(index, { mobilisationCost: v })} />
-                <NumberInput label="No. of Mobilisations" value={item.mobilisations} onChange={(v) => update(index, { mobilisations: v })} />
+                <NumberInput label="No. of Mobilisations" value={item.mobilisations} step={1} onChange={(v) => update(index, { mobilisations: v })} />
                 <NumberInput label="Mobilisation Markup %" value={item.mobilisationMargin * 100} onChange={(v) => update(index, { mobilisationMargin: v / 100 })} />
                 <Mini label="Subcontract Sell" value={money((labourCost * (1 + item.margin)) + (mobilisationCost * (1 + item.mobilisationMargin)))} />
               </div>
@@ -2201,17 +2229,15 @@ function PLActualsPanel({ project, actuals, setActuals, summary, saveActuals }: 
   const canEditActuals = hasPermission(auth.role, "pl.update");
   const calculatedWorkingDays = calculateWorkingDays(actuals.startDate, actuals.endDate, actuals.saturdayWorked, actuals.sundayWorked);
   const calculatedSiteDays = calculateActualSiteDays(actuals);
-  const inputSiteDays = actuals.daysTakenToComplete || calculatedSiteDays;
+  const inputSiteDays = actuals.siteDaysOverridden ? actuals.daysTakenToComplete : calculatedSiteDays;
   const patch = (next: Partial<typeof actuals>) => setActuals({ ...actuals, ...next });
   const setDatePatch = (next: Partial<typeof actuals>) => {
     const merged = { ...actuals, ...next };
     const siteDays = calculateActualSiteDays(merged);
-    const previousCalculatedDays = calculateActualSiteDays(actuals);
-    const wasUsingCalculatedDays = !actuals.daysTakenToComplete || actuals.daysTakenToComplete === previousCalculatedDays;
-    setActuals({ ...merged, daysTakenToComplete: wasUsingCalculatedDays ? siteDays : actuals.daysTakenToComplete });
+    setActuals({ ...merged, daysTakenToComplete: merged.siteDaysOverridden ? actuals.daysTakenToComplete : siteDays });
   };
   const actualRows: Array<{ key?: keyof typeof actuals; label: string; actual: number; budget: number; variance: number; readonly?: boolean; helper?: string; onChange?: (value: number) => void }> = summary.rows.map((row) => {
-    if (row.item === "Survey Days") return { label: row.item, actual: row.actual, budget: row.budget, variance: row.variance, helper: `${actuals.surveyDays || actuals.labourInternalDays} days x ${money(actuals.surveyDayRate || actuals.labourInternalRate)}`, onChange: undefined };
+    if (row.item === "Survey Days") return { label: row.item, actual: row.actual, budget: row.budget, variance: row.variance, helper: `${actuals.surveyDays} days x ${money(actuals.surveyDayRate)}`, onChange: undefined };
     if (row.item === "Survey Travel Days") return { label: row.item, actual: row.actual, budget: row.budget, variance: row.variance, helper: `${actuals.surveyTravelDays} days x ${money(actuals.surveyTravelRate)}`, onChange: undefined };
     if (row.item === "BDM Bonus") return { label: row.item, actual: row.actual, budget: row.budget, variance: row.variance, readonly: true, helper: project.inputs.bdmBonusRequired ? "Auto-calculated at 1% of actual price because the costing opted in." : "Not selected on this costing." };
     const key = plRowActualKey(row.item);
@@ -2234,7 +2260,7 @@ function PLActualsPanel({ project, actuals, setActuals, summary, saveActuals }: 
               <Toggle label="Saturday Worked" checked={actuals.saturdayWorked} onChange={(v) => setDatePatch({ saturdayWorked: v })} />
               <Toggle label="Sunday Worked" checked={actuals.sundayWorked} onChange={(v) => setDatePatch({ sundayWorked: v })} />
               <NumberInput label="Travel Days" value={actuals.travelDays} onChange={(v) => setDatePatch({ travelDays: v })} />
-              <div className={inputSiteDays !== calculatedSiteDays ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Site Days Inputted" value={inputSiteDays} onChange={(v) => patch({ daysTakenToComplete: v })} /></div>
+              <div className={actuals.siteDaysOverridden ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Site Days Inputted" value={inputSiteDays} step={1} onChange={(v) => patch({ daysTakenToComplete: v, siteDaysOverridden: v !== calculatedSiteDays })} />{actuals.siteDaysOverridden && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => patch({ daysTakenToComplete: calculatedSiteDays, siteDaysOverridden: false })}>Reset to calculated {calculatedSiteDays}</button>}</div>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <Mini label="Working Days" value={`${calculatedWorkingDays}`} />
@@ -2243,8 +2269,8 @@ function PLActualsPanel({ project, actuals, setActuals, summary, saveActuals }: 
               <Mini label="Programme Status" value={summary.programmeStatus.replace("PROJECT ", "")} />
             </div>
             <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2 xl:grid-cols-4">
-              <NumberInput label="Survey Days" value={actuals.surveyDays || actuals.labourInternalDays} onChange={(v) => patch({ surveyDays: v })} />
-              <NumberInput label="Survey Day Rate" value={actuals.surveyDayRate || actuals.labourInternalRate} onChange={(v) => patch({ surveyDayRate: v })} />
+              <NumberInput label="Survey Days" value={actuals.surveyDays} onChange={(v) => patch({ surveyDays: v })} />
+              <NumberInput label="Survey Day Rate" value={actuals.surveyDayRate} onChange={(v) => patch({ surveyDayRate: v })} />
               <NumberInput label="Survey Travel Days" value={actuals.surveyTravelDays} onChange={(v) => patch({ surveyTravelDays: v })} />
               <NumberInput label="Survey Travel Rate" value={actuals.surveyTravelRate} onChange={(v) => patch({ surveyTravelRate: v })} />
             </div>
@@ -2334,26 +2360,25 @@ function SearchView({ projects, open, edit }: { projects: ProjectRecord[]; open:
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("All");
   const [service, setService] = useState("All");
+  const [visibleCount, setVisibleCount] = useState(50);
   const filtered = projects.filter((p) => `${p.inputs.projectReference} ${p.inputs.client} ${p.inputs.location} ${p.calculations.serviceSummary} ${p.inputs.costedBy}`.toLowerCase().includes(q.toLowerCase()))
     .filter((project) => status === "All" || normaliseProjectStatus(project.status) === status)
     .filter((project) => service === "All" || project.calculations.serviceSummary.includes(service));
-  return <div className="app-card-strong"><div className="panel-heading"><h2 className="text-xl font-semibold"><Search className="mr-2 inline" />Project Search</h2><div className="mt-3 grid gap-3 md:grid-cols-[minmax(240px,1fr)_220px_180px]"><input placeholder="Reference, client, location or estimator" value={q} onChange={(e) => setQ(e.target.value)} /><Select label="Status" value={status} options={["All", "Draft", "Costing Complete", "Won", "Lost", "Handover Issued", "Completed", "Closed"]} onChange={setStatus} /><Select label="Service" value={service} options={["All", "Grinding", "Screeding", "Repairs"]} onChange={setService} /></div><div className="mt-3 text-sm text-slate-500">{filtered.length} project{filtered.length === 1 ? "" : "s"} found</div></div><ProjectTable projects={filtered.slice(0, 50)} open={open} edit={edit} /></div>;
+  return <div className="app-card-strong"><div className="panel-heading"><h2 className="text-xl font-semibold"><Search className="mr-2 inline" />Project Search</h2><div className="mt-3 grid gap-3 md:grid-cols-[minmax(240px,1fr)_220px_180px]"><input placeholder="Reference, client, location or estimator" value={q} onChange={(e) => { setQ(e.target.value); setVisibleCount(50); }} /><Select label="Status" value={status} options={["All", "Draft", "Costing Complete", "Won", "Lost", "Handover Issued", "Completed", "Closed"]} onChange={(value) => { setStatus(value); setVisibleCount(50); }} /><Select label="Service" value={service} options={["All", "Grinding", "Screeding", "Repairs"]} onChange={(value) => { setService(value); setVisibleCount(50); }} /></div><div className="mt-3 text-sm text-slate-500">Showing {Math.min(visibleCount, filtered.length)} of {filtered.length} project{filtered.length === 1 ? "" : "s"}</div></div><ProjectTable projects={filtered.slice(0, visibleCount)} open={open} edit={edit} />{visibleCount < filtered.length && <div className="flex justify-center border-t border-slate-200 p-4"><button className="secondary-button" onClick={() => setVisibleCount((count) => count + 50)}>Load 50 more</button></div>}</div>;
 }
 
 function ProjectTable({ projects, open, edit }: { projects: ProjectRecord[]; open: (project: ProjectRecord) => void; edit?: (project: ProjectRecord) => void }) {
   return <div className="table-shell border-0"><table><thead><tr><th>Project</th><th>Services</th><th>Status</th><th>Sell Value</th><th>Budget</th><th>Markup</th><th>Actions</th></tr></thead><tbody>{projects.map((p) => <tr key={p.id}><td><b>{p.inputs.projectReference || "Draft"}</b><div className="text-xs text-slate-500">{p.inputs.client} - {p.inputs.location}</div></td><td>{p.calculations.serviceSummary}</td><td>{normaliseProjectStatus(p.status)} / {p.accountsStatus}</td><td>{money(p.calculations.proposalTotal, p.inputs.quoteCurrency)}</td><td>{money(p.calculations.budgetCost, p.inputs.quoteCurrency)}</td><td>{percent(p.calculations.budgetMarkup ?? (p.calculations.budgetCost ? p.calculations.budgetProfit / p.calculations.budgetCost * 100 : 0))}</td><td><button className="secondary-button mr-2" onClick={() => open(p)}>Open</button>{edit && <button className="secondary-button" onClick={() => edit(p)}>{statusIsLocked(p.status) ? "Revise" : "Edit"}</button>}</td></tr>)}</tbody></table></div>;
 }
 
-function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, initialAdminTab, save }: { rates: AdminRates; setRates: (rates: AdminRates) => void; repairCatalog: RepairCatalog; setRepairCatalog: (catalog: RepairCatalog) => void; initialAdminTab: "Rates" | "Repair Types" | "Repair Materials"; save: () => void }) {
-  const [adminTab, setAdminTab] = useState<"Rates" | "Repair Types" | "Repair Materials">(initialAdminTab);
+function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, adminTab, setAdminTab, save }: { rates: AdminRates; setRates: (rates: AdminRates) => void; repairCatalog: RepairCatalog; setRepairCatalog: (catalog: RepairCatalog) => void; adminTab: "Rates" | "Repair Types" | "Repair Materials"; setAdminTab: (tab: "Rates" | "Repair Types" | "Repair Materials") => void; save: () => void }) {
   const [pendingRule, setPendingRule] = useState<Record<string, string>>({});
   const [adminSearch, setAdminSearch] = useState("");
   const search = adminSearch.trim().toLowerCase();
   const filteredRepairTypes = repairCatalog.types.filter((type) => `${type.code} ${type.name} ${type.description}`.toLowerCase().includes(search));
   const filteredMaterials = repairCatalog.materials.filter((material) => `${material.name} ${material.category} ${material.unitType} ${material.measuredUnitType} ${material.calcMethod} ${material.notes}`.toLowerCase().includes(search));
-  useEffect(() => setAdminTab(initialAdminTab), [initialAdminTab]);
   const updateMaterial = (id: string, next: Partial<RepairMaterial>) => setRepairCatalog({ ...repairCatalog, materials: repairCatalog.materials.map((material) => material.id === id ? { ...material, ...next } : material) });
-  const updateType = (code: string, next: Partial<RepairType>) => setRepairCatalog({ ...repairCatalog, types: repairCatalog.types.map((type) => type.code === code ? { ...type, ...next } : type) });
+  const updateType = (id: string, next: Partial<RepairType>) => setRepairCatalog({ ...repairCatalog, types: repairCatalog.types.map((type) => type.id === id ? { ...type, ...next } : type) });
   const addMaterial = () => {
     const id = `material-${Date.now()}`;
     setRepairCatalog({ ...repairCatalog, materials: [...repairCatalog.materials, { id, name: "New repair material", category: "Other", unitType: "kg", unitSize: 0, costPerUnit: 0, calcMethod: "volume_lwd", measuredUnitType: "litres", coveragePerUnit: 0, wasteFactor: 1.1, sourceNote: "Admin", active: false, notes: "Fill out in full before activating" }] });
@@ -2365,42 +2390,45 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, init
   };
   const addRepairType = () => {
     const code = `New Type ${repairCatalog.types.length + 1}`;
-    setRepairCatalog({ ...repairCatalog, types: [...repairCatalog.types, { code, name: "New repair type", measurementBasis: "linear", defaultWidthMm: 0, defaultDepthMm: 0, defaultThicknessMm: 0, defaultOutputPerDay: 0, description: "", materialRules: [], active: false }] });
+    setRepairCatalog({ ...repairCatalog, types: [...repairCatalog.types, { id: `repair-type-${Date.now()}`, code, name: "New repair type", measurementBasis: "linear", defaultWidthMm: 0, defaultDepthMm: 0, defaultThicknessMm: 0, defaultOutputPerDay: 0, description: "", materialRules: [], active: false }] });
     setAdminTab("Repair Types");
   };
   const duplicateRepairType = (type: RepairType) => {
     const code = `${type.code} copy`;
-    setRepairCatalog({ ...repairCatalog, types: [...repairCatalog.types, { ...type, code, name: `${type.name} copy`, active: false }] });
+    setRepairCatalog({ ...repairCatalog, types: [...repairCatalog.types, { ...type, id: `repair-type-${Date.now()}`, code, name: `${type.name} copy`, active: false }] });
   };
-  const setMaterialRule = (typeCode: string, materialId: string, role: "required" | "optional" | "none") => {
-    const type = repairCatalog.types.find((item) => item.code === typeCode);
+  const setMaterialRule = (typeId: string, materialId: string, role: "required" | "optional" | "none") => {
+    const type = repairCatalog.types.find((item) => item.id === typeId);
     if (!type) return;
     const without = type.materialRules.filter((rule) => rule.materialId !== materialId);
     const materialRules = role === "none" ? without : [...without, { materialId, role, defaultSelected: role === "required" }];
-    updateType(typeCode, { materialRules });
+    updateType(typeId, { materialRules });
   };
-  const setRuleDefault = (typeCode: string, materialId: string, defaultSelected: boolean) => {
-    const type = repairCatalog.types.find((item) => item.code === typeCode);
+  const setRuleDefault = (typeId: string, materialId: string, defaultSelected: boolean) => {
+    const type = repairCatalog.types.find((item) => item.id === typeId);
     if (!type) return;
-    updateType(typeCode, { materialRules: type.materialRules.map((rule) => rule.materialId === materialId ? { ...rule, defaultSelected } : rule) });
+    updateType(typeId, { materialRules: type.materialRules.map((rule) => rule.materialId === materialId ? { ...rule, defaultSelected } : rule) });
   };
-  const updateMaterialRule = (typeCode: string, materialId: string, next: Partial<RepairType["materialRules"][number]>) => {
-    const type = repairCatalog.types.find((item) => item.code === typeCode);
+  const updateMaterialRule = (typeId: string, materialId: string, next: Partial<RepairType["materialRules"][number]>) => {
+    const type = repairCatalog.types.find((item) => item.id === typeId);
     if (!type) return;
-    updateType(typeCode, { materialRules: type.materialRules.map((rule) => rule.materialId === materialId ? { ...rule, ...next } : rule) });
+    updateType(typeId, { materialRules: type.materialRules.map((rule) => rule.materialId === materialId ? { ...rule, ...next } : rule) });
   };
   const addMaterialRule = (type: RepairType, role: "required" | "optional") => {
-    const key = `${type.code}-${role}`;
-    const selectedId = pendingRule[key] || repairCatalog.materials.find((material) => !type.materialRules.some((rule) => rule.materialId === material.id))?.id || "";
+    const key = `${type.id}-${role}`;
+    const selectedId = pendingRule[key] || repairCatalog.materials.find((material) => material.active && !type.materialRules.some((rule) => rule.materialId === material.id))?.id || "";
     if (!selectedId) return;
-    setMaterialRule(type.code, selectedId, role);
+    setMaterialRule(type.id!, selectedId, role);
     setPendingRule({ ...pendingRule, [key]: "" });
   };
   const formulaHelp = (method: RepairMaterial["calcMethod"]) => method === "volume_lwd" ? "Volume: length x width x depth, add waste, divide by coverage per unit, round up" : method === "area_thickness" ? "Area/thickness: calculate requirement, add waste, divide by coverage per unit, round up" : method === "linear" ? "Linear: length, add waste, divide by coverage per unit, round up" : method === "each" ? "Each: quantity, add waste, divide by coverage per unit, round up" : "Manual: manual requirement, add waste, divide by coverage per unit, round up";
   const repairTypeStatus = (type: RepairType) => {
     if (!type.active) return { label: "Inactive", tone: "bg-slate-200 text-slate-700" };
     if (!type.materialRules.length) return { label: "Needs material", tone: "bg-amber-100 text-amber-900" };
-    if (type.materialRules.some((rule) => (repairCatalog.materials.find((material) => material.id === rule.materialId)?.costPerUnit ?? 0) <= 0)) return { label: "Has placeholder costs", tone: "bg-amber-100 text-amber-900" };
+    if (type.materialRules.some((rule) => {
+      const material = repairCatalog.materials.find((item) => item.id === rule.materialId);
+      return !material?.active || material.costPerUnit <= 0 || material.unitSize <= 0 || material.coveragePerUnit <= 0;
+    })) return { label: "Invalid material", tone: "bg-amber-100 text-amber-900" };
     return { label: "Ready", tone: "bg-emerald-100 text-emerald-900" };
   };
   const missingMaterialSetup = repairCatalog.materials.filter((material) => material.active && (material.costPerUnit <= 0 || material.unitSize <= 0 || material.coveragePerUnit <= 0));
@@ -2412,10 +2440,9 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, init
     if (window.confirm("Reset all admin rates back to the original defaults? Repair types and materials will not be changed.")) setRates(defaultRates);
   };
   const saveValidated = () => {
-    const invalidMaterials = repairCatalog.materials.filter((material) => material.active && (!material.name.trim() || material.costPerUnit <= 0 || material.unitSize <= 0 || material.coveragePerUnit <= 0));
-    const invalidTypes = repairCatalog.types.filter((type) => type.active && (!type.code.trim() || !type.name.trim() || type.defaultOutputPerDay <= 0 || !type.materialRules.length));
-    if (invalidMaterials.length || invalidTypes.length) {
-      alert(`Admin data cannot be saved with incomplete active records.\n\n${invalidMaterials.length} material(s) and ${invalidTypes.length} repair type(s) need completing or archiving.`);
+    const { invalidMaterials, invalidTypes, duplicateCodes } = validateRepairCatalog(repairCatalog);
+    if (invalidMaterials.length || invalidTypes.length || duplicateCodes.length) {
+      alert(`Admin data cannot be saved with incomplete or ambiguous records.\n\n${invalidMaterials.length} material(s) need completing or archiving.\n${invalidTypes.length} active repair type(s) have incomplete or inactive materials.\n${duplicateCodes.length} duplicate repair code(s) must be renamed.`);
       return;
     }
     save();
@@ -2428,10 +2455,7 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, init
           <button className="primary-button" onClick={saveValidated}>Validate & Save Admin Data</button>
         </div>
         <div className="flex flex-wrap gap-2 border-b border-slate-200 bg-white p-3">
-          {(["Rates", "Repair Types", "Repair Materials"] as const).map((tab) => {
-            const href = tab === "Rates" ? "/admin-rates" : tab === "Repair Types" ? "/admin-rates/repair-types" : "/admin-rates/repair-materials";
-            return <Link key={tab} href={href} className={adminTab === tab ? "primary-button" : "secondary-button"} onClick={() => setAdminTab(tab)}>{tab}</Link>;
-          })}
+          {(["Rates", "Repair Types", "Repair Materials"] as const).map((tab) => <button type="button" key={tab} className={adminTab === tab ? "primary-button" : "secondary-button"} onClick={() => setAdminTab(tab)}>{tab}</button>)}
         </div>
         {adminTab === "Rates" && (
           <div className="grid gap-5 p-5">
@@ -2597,7 +2621,7 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, init
             </div>
             <input placeholder="Search repair type, code or description" value={adminSearch} onChange={(event) => setAdminSearch(event.target.value)} />
             {filteredRepairTypes.map((type) => (
-              <details className="rounded-xl border border-slate-200 bg-slate-50 p-4" key={type.code}>
+              <details className="rounded-xl border border-slate-200 bg-slate-50 p-4" key={type.id}>
                 <summary className="cursor-pointer list-none">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="min-w-0">
@@ -2613,17 +2637,17 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, init
                 </summary>
                 {!type.materialRules.length && <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900">Add at least one required or optional material before using this repair type in a costing.</div>}
                 <div className="grid gap-4 lg:grid-cols-4">
-                  <Text label="Code" value={type.code} onChange={(v) => updateType(type.code, { code: v })} />
-                  <Text label="Repair Name" value={type.name} onChange={(v) => updateType(type.code, { name: v })} />
-                  <Select label="Measurement Basis" value={type.measurementBasis} options={["linear", "area", "each", "manual"]} onChange={(v) => updateType(type.code, { measurementBasis: v as RepairType["measurementBasis"] })} />
-                  <NumberInput label="Output Per Day" value={type.defaultOutputPerDay} onChange={(v) => updateType(type.code, { defaultOutputPerDay: v })} />
-                  <NumberInput label="Default Width mm" value={type.defaultWidthMm} onChange={(v) => updateType(type.code, { defaultWidthMm: v })} />
-                  <NumberInput label="Default Depth mm" value={type.defaultDepthMm} onChange={(v) => updateType(type.code, { defaultDepthMm: v })} />
-                  <NumberInput label="Default Thickness mm" value={type.defaultThicknessMm} onChange={(v) => updateType(type.code, { defaultThicknessMm: v })} />
-                  <Toggle label="Active" checked={type.active} onChange={(v) => updateType(type.code, { active: v })} />
+                  <Text label="Code" value={type.code} onChange={(v) => updateType(type.id!, { code: v })} />
+                  <Text label="Repair Name" value={type.name} onChange={(v) => updateType(type.id!, { name: v })} />
+                  <Select label="Measurement Basis" value={type.measurementBasis} options={["linear", "area", "each", "manual"]} onChange={(v) => updateType(type.id!, { measurementBasis: v as RepairType["measurementBasis"] })} />
+                  <NumberInput label="Output Per Day" value={type.defaultOutputPerDay} onChange={(v) => updateType(type.id!, { defaultOutputPerDay: v })} />
+                  <NumberInput label="Default Width mm" value={type.defaultWidthMm} onChange={(v) => updateType(type.id!, { defaultWidthMm: v })} />
+                  <NumberInput label="Default Depth mm" value={type.defaultDepthMm} onChange={(v) => updateType(type.id!, { defaultDepthMm: v })} />
+                  <NumberInput label="Default Thickness mm" value={type.defaultThicknessMm} onChange={(v) => updateType(type.id!, { defaultThicknessMm: v })} />
+                  <Toggle label="Active" checked={type.active} onChange={(v) => updateType(type.id!, { active: v })} />
                 </div>
                 <div className="mt-4">
-                  <Text label="Description" value={type.description} onChange={(v) => updateType(type.code, { description: v })} />
+                  <Text label="Description" value={type.description} onChange={(v) => updateType(type.id!, { description: v })} />
                 </div>
                 <div className="mt-4 rounded-lg bg-white p-3 ring-1 ring-slate-200">
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -2635,19 +2659,19 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, init
                       const assignedRules = type.materialRules.filter((rule) => rule.role === role);
                       const assignedIds = new Set(type.materialRules.map((rule) => rule.materialId));
                       const availableMaterials = repairCatalog.materials.filter((material) => material.active && !assignedIds.has(material.id));
-                      const selectKey = `${type.code}-${role}`;
+                      const selectKey = `${type.id}-${role}`;
                       const selectValue = pendingRule[selectKey] || availableMaterials[0]?.id || "";
                       return (
-                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3" key={`${type.code}-${role}`}>
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3" key={`${type.id}-${role}`}>
                           <div className="mb-2 text-xs font-bold uppercase text-slate-500">{role === "required" ? "Required materials" : "Optional materials"}</div>
                           <div className="flex flex-wrap gap-2">
                             {assignedRules.length ? assignedRules.map((rule) => {
                               const material = repairCatalog.materials.find((item) => item.id === rule.materialId);
                               return material ? (
-                                <span className={`inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1 text-xs font-bold ${role === "required" ? "bg-sky-700 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"}`} key={`${type.code}-${role}-${rule.materialId}`}>
+                                <span className={`inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1 text-xs font-bold ${role === "required" ? "bg-sky-700 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"}`} key={`${type.id}-${role}-${rule.materialId}`}>
                                   <span className="truncate">{material.name}</span>
-                                  {rule.role === "optional" && <button className="rounded-full bg-black/10 px-1.5 py-0.5" onClick={() => setRuleDefault(type.code, rule.materialId, !rule.defaultSelected)}>{rule.defaultSelected ? "Default" : "Set default"}</button>}
-                                  <button className="rounded-full bg-black/10 px-1.5 py-0.5" onClick={() => setMaterialRule(type.code, rule.materialId, "none")}>Remove</button>
+                                  {rule.role === "optional" && <button className="rounded-full bg-black/10 px-1.5 py-0.5" onClick={() => setRuleDefault(type.id!, rule.materialId, !rule.defaultSelected)}>{rule.defaultSelected ? "Default" : "Set default"}</button>}
+                                  <button className="rounded-full bg-black/10 px-1.5 py-0.5" onClick={() => setMaterialRule(type.id!, rule.materialId, "none")}>Remove</button>
                                 </span>
                               ) : null;
                             }) : <span className="text-sm text-slate-500">No {role} materials assigned.</span>}
@@ -2655,10 +2679,10 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, init
                           {assignedRules.map((rule) => {
                             const material = repairCatalog.materials.find((item) => item.id === rule.materialId);
                             if (!material || material.calcMethod !== "volume_lwd") return null;
-                            return <div className="mt-3 grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-3" key={`${type.code}-${rule.materialId}-dimensions`}>
-                              <Toggle label={`${material.name}: own dimensions`} checked={Boolean(rule.usesOwnDimensions)} onChange={(usesOwnDimensions) => updateMaterialRule(type.code, rule.materialId, { usesOwnDimensions, defaultWidthMm: usesOwnDimensions ? rule.defaultWidthMm || type.defaultWidthMm : undefined, defaultDepthMm: usesOwnDimensions ? rule.defaultDepthMm || type.defaultDepthMm : undefined })} />
-                              {rule.usesOwnDimensions && <NumberInput label="Default Width mm" value={rule.defaultWidthMm ?? type.defaultWidthMm} onChange={(defaultWidthMm) => updateMaterialRule(type.code, rule.materialId, { defaultWidthMm })} />}
-                              {rule.usesOwnDimensions && <NumberInput label="Default Depth mm" value={rule.defaultDepthMm ?? type.defaultDepthMm} onChange={(defaultDepthMm) => updateMaterialRule(type.code, rule.materialId, { defaultDepthMm })} />}
+                            return <div className="mt-3 grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-3" key={`${type.id}-${rule.materialId}-dimensions`}>
+                              <Toggle label={`${material.name}: own dimensions`} checked={Boolean(rule.usesOwnDimensions)} onChange={(usesOwnDimensions) => updateMaterialRule(type.id!, rule.materialId, { usesOwnDimensions, defaultWidthMm: usesOwnDimensions ? rule.defaultWidthMm || type.defaultWidthMm : undefined, defaultDepthMm: usesOwnDimensions ? rule.defaultDepthMm || type.defaultDepthMm : undefined })} />
+                              {rule.usesOwnDimensions && <NumberInput label="Default Width mm" value={rule.defaultWidthMm ?? type.defaultWidthMm} onChange={(defaultWidthMm) => updateMaterialRule(type.id!, rule.materialId, { defaultWidthMm })} />}
+                              {rule.usesOwnDimensions && <NumberInput label="Default Depth mm" value={rule.defaultDepthMm ?? type.defaultDepthMm} onChange={(defaultDepthMm) => updateMaterialRule(type.id!, rule.materialId, { defaultDepthMm })} />}
                             </div>;
                           })}
                           <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
@@ -2813,8 +2837,14 @@ function Text({ label, value, onChange }: { label: string; value: string; onChan
   return <div className="grid min-w-0 gap-1"><label>{label}</label><input value={value} onChange={(e) => onChange(e.target.value)} /></div>;
 }
 
-function NumberInput({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
-  return <div className="grid min-w-0 gap-1"><label>{label}</label><input type="number" min="0" step="any" value={Number.isFinite(value) ? value : 0} onChange={(e) => onChange(Math.max(0, Number(e.target.value)))} /></div>;
+function NumberInput({ label, value, onChange, min = 0, max, step = "any" }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number | "any" }) {
+  const update = (raw: string) => {
+    const parsed = Number(raw);
+    const lowerBounded = Math.max(min, Number.isFinite(parsed) ? parsed : min);
+    const bounded = max === undefined ? lowerBounded : Math.min(max, lowerBounded);
+    onChange(step === 1 ? Math.round(bounded) : bounded);
+  };
+  return <div className="grid min-w-0 gap-1"><label>{label}</label><input type="number" min={min} max={max} step={step} value={Number.isFinite(value) ? value : min} onChange={(e) => update(e.target.value)} /></div>;
 }
 
 function Select({ label, value, options, onChange, disabled = false }: { label: string; value: string; options: string[]; onChange: (v: string) => void; disabled?: boolean }) {

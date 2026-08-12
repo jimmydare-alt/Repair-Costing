@@ -233,14 +233,14 @@ function grindingLines(input: ProjectInput, rates: AdminRates) {
   const rows: Line[] = [
     line("Labour", "Surveyor labour", rates.surveyorDayRate, "surveyor day", useSurveyorInHouse ? surveyorCount * surveyorDays : 0, rateMargin(rates, "surveyorDayRate", 0), "Grinding surveyor labour"),
     line("Labour", "Surveyor weekend extra", rates.productionWeekendDayRate, "surveyor day", useSurveyorInHouse ? surveyorCount * weekendDaysForProgramme(surveyorDays, 5, g.weekendDaysPerWeek) : 0, rateMargin(rates, "productionWeekendDayRate", rates.defaultMargin), "Grinding surveyor weekend allowance"),
-    line("Labour", "Surveyor night-shift allowance", rates.productionNightShiftAllowance, "surveyor night", useSurveyorInHouse && g.nightShiftRequired ? surveyorCount * num(g.surveyorNightShifts || g.nightShifts) : 0, rateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin), "Grinding surveyor night shift allowance"),
+    line("Labour", "Surveyor night-shift allowance", rates.productionNightShiftAllowance, "surveyor night", useSurveyorInHouse && g.nightShiftRequired ? surveyorCount * num(g.surveyorNightShifts) : 0, rateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin), "Grinding surveyor night shift allowance"),
     line("Travel", "Surveyor travel", rates.surveyorTravelDayRate, "surveyor day", useSurveyorInHouse ? surveyorCount * num(g.surveyorTravelDays) : 0, rateMargin(rates, "surveyorTravelDayRate", 0), "Grinding surveyor travel days"),
     line("Travel", "Surveyor mileage", rates.mileagePerKm, "km", useSurveyorInHouse ? surveyorKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Grinding surveyor one-way km x 2 x vehicles"),
     line("Hotel", "Surveyor hotel", rates.hotel, "night", useSurveyorInHouse ? surveyorHotelNights : 0, rateMargin(rates, "hotel", rates.hotelMargin), "Grinding surveyor hotel nights x surveyors"),
     line("Subsistence", "Surveyor subsistence", rates.subsistence, "day", useSurveyorInHouse ? surveyorHotelNights : 0, rateMargin(rates, "subsistence", rates.subsistenceMargin), "Grinding surveyor subsistence follows hotel nights"),
     line("Labour", "Grinding production labour", rates.productionLabourDayRate, "man day", useProductionInHouse ? productionMen * productionDays : 0, rateMargin(rates, "productionLabourDayRate", rates.defaultMargin), "Grinding production labour"),
     line("Labour", "Grinding production weekend extra", rates.productionWeekendDayRate, "man day", useProductionInHouse ? productionMen * weekendDaysForProgramme(productionDays, 5, g.weekendDaysPerWeek) : 0, rateMargin(rates, "productionWeekendDayRate", rates.defaultMargin), "Grinding production weekend allowance"),
-    line("Labour", "Grinding production night-shift allowance", rates.productionNightShiftAllowance, "man night", useProductionInHouse && g.nightShiftRequired ? productionMen * num(g.productionNightShifts || g.nightShifts) : 0, rateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin), "Grinding production night shift allowance"),
+    line("Labour", "Grinding production night-shift allowance", rates.productionNightShiftAllowance, "man night", useProductionInHouse && g.nightShiftRequired ? productionMen * num(g.productionNightShifts) : 0, rateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin), "Grinding production night shift allowance"),
     line("Travel", "Grinding production travel", rates.productionLabourTravelDayRate, "man day", useProductionInHouse ? productionMen * num(g.productionTravelDays) : 0, rateMargin(rates, "productionLabourTravelDayRate", rates.travelMargin), "Grinding production travel days"),
     line("Travel", "Grinding production mileage", rates.mileagePerKm, "km", useProductionInHouse ? productionKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Grinding production one-way km x 2 x vehicles"),
     line("Hotel", "Grinding hotel production", rates.hotel, "night", useProductionInHouse ? productionHotelNights : 0, rateMargin(rates, "hotel", rates.hotelMargin), "Grinding production hotel nights x men"),
@@ -305,7 +305,7 @@ function screedLines(input: ProjectInput, rates: AdminRates) {
   const rows: Line[] = [
     line("Labour", "Screed surveyor labour", rates.surveyorDayRate, "surveyor day", useSurveyorInHouse ? surveyors * surveyorDays : 0, rateMargin(rates, "surveyorDayRate", 0), "Screed surveyor labour"),
     line("Labour", "Screed surveyor weekend extra", rates.productionWeekendDayRate, "surveyor day", useSurveyorInHouse ? surveyors * weekendDaysForProgramme(surveyorDays, 5, s.weekendDaysPerWeek) : 0, rateMargin(rates, "productionWeekendDayRate", rates.defaultMargin), "Screed surveyor weekend allowance"),
-    line("Labour", "Screed surveyor night-shift allowance", rates.productionNightShiftAllowance, "surveyor night", useSurveyorInHouse && s.nightShiftRequired ? surveyors * num(s.surveyorNightShifts || s.nightShifts) : 0, rateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin), "Screed surveyor night shift allowance"),
+    line("Labour", "Screed surveyor night-shift allowance", rates.productionNightShiftAllowance, "surveyor night", useSurveyorInHouse && s.nightShiftRequired ? surveyors * num(s.surveyorNightShifts) : 0, rateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin), "Screed surveyor night shift allowance"),
     line("Travel", "Screed surveyor travel", rates.surveyorTravelDayRate, "surveyor day", useSurveyorInHouse ? surveyors * num(s.surveyorTravelDays) : 0, rateMargin(rates, "surveyorTravelDayRate", 0), "Screed surveyor travel days"),
     line("Travel", "Screed surveyor mileage", rates.mileagePerKm, "km", useSurveyorInHouse ? surveyorKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Screed surveyor one-way km x 2 x vehicles"),
     line("Hotel", "Screed surveyor hotel", rates.hotel, "night", useSurveyorInHouse ? surveyorHotelNights : 0, rateMargin(rates, "hotel", rates.hotelMargin), "Screed surveyor hotel nights x surveyors"),
@@ -313,7 +313,7 @@ function screedLines(input: ProjectInput, rates: AdminRates) {
     line("Reports", "Screed engineering report", rates.engineeringReport, "item", useSurveyorInHouse && s.engineeringReport ? 1 : 0, rateMargin(rates, "engineeringReport", 0), "Screed engineering report"),
     line("Labour", "Screed production labour", rates.productionLabourDayRate, "man day", useProductionInHouse ? productionMen * productionDays : 0, rateMargin(rates, "productionLabourDayRate", rates.defaultMargin), "Screed production labour"),
     line("Labour", "Screed production weekend extra", rates.productionWeekendDayRate, "man day", useProductionInHouse ? productionMen * weekendDaysForProgramme(productionDays, 5, s.weekendDaysPerWeek) : 0, rateMargin(rates, "productionWeekendDayRate", rates.defaultMargin), "Screed production weekend allowance"),
-    line("Labour", "Screed production night-shift allowance", rates.productionNightShiftAllowance, "man night", useProductionInHouse && s.nightShiftRequired ? productionMen * num(s.productionNightShifts || s.nightShifts) : 0, rateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin), "Screed production night shift allowance"),
+    line("Labour", "Screed production night-shift allowance", rates.productionNightShiftAllowance, "man night", useProductionInHouse && s.nightShiftRequired ? productionMen * num(s.productionNightShifts) : 0, rateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin), "Screed production night shift allowance"),
     line("Travel", "Screed production travel", rates.productionLabourTravelDayRate, "man day", useProductionInHouse ? productionMen * num(s.productionTravelDays) : 0, rateMargin(rates, "productionLabourTravelDayRate", rates.travelMargin), "Screed production travel days"),
     line("Travel", "Screed production mileage", rates.mileagePerKm, "km", useProductionInHouse ? productionKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Screed production one-way km x 2 x vehicles"),
     line("Hotel", "Screed production hotel", rates.hotel, "night", useProductionInHouse ? productionHotelNights : 0, rateMargin(rates, "hotel", rates.hotelMargin), "Screed production hotel nights x men"),
@@ -408,8 +408,10 @@ function projectManagementLines(input: ProjectInput, rates: AdminRates) {
 }
 
 export function calculateProject(input: ProjectInput, rates: AdminRates, repairCatalog: RepairCatalog = defaultRepairCatalog): ProjectCalculations {
-  const quoteRates = ratesInQuoteCurrency(rates, input.exchangeRateToCompanyCurrency);
-  const fxDivisor = num(input.exchangeRateToCompanyCurrency) > 0 ? num(input.exchangeRateToCompanyCurrency) : 1;
+  const companyExchange = num(input.exchangeRateToCompanyCurrency) > 0 ? num(input.exchangeRateToCompanyCurrency) : 1;
+  const groupExchange = num(input.exchangeRateToGroupCurrency) > 0 ? num(input.exchangeRateToGroupCurrency) : 1;
+  const quoteRates = ratesInQuoteCurrency(rates, companyExchange);
+  const fxDivisor = companyExchange;
   const quoteCatalog: RepairCatalog = { ...repairCatalog, materials: repairCatalog.materials.map((material) => ({ ...material, costPerUnit: money(material.costPerUnit / fxDivisor) })) };
   const gDays = grindingDays(input);
   const sDays = screedDays(input);
@@ -463,10 +465,10 @@ export function calculateProject(input: ProjectInput, rates: AdminRates, repairC
     budgetMarkup,
     bdmBonusBudget,
     bdmBonusRate: Math.max(0, num(rates.bdmBonusRate)),
-    proposalCompanyCurrency: money(proposalTotal * Math.max(0, num(input.exchangeRateToCompanyCurrency))),
-    budgetCompanyCurrency: money(budgetCost * Math.max(0, num(input.exchangeRateToCompanyCurrency))),
-    proposalGroupCurrency: money(proposalTotal * Math.max(0, num(input.exchangeRateToGroupCurrency))),
-    budgetGroupCurrency: money(budgetCost * Math.max(0, num(input.exchangeRateToGroupCurrency))),
+    proposalCompanyCurrency: money(proposalTotal * companyExchange),
+    budgetCompanyCurrency: money(budgetCost * companyExchange),
+    proposalGroupCurrency: money(proposalTotal * groupExchange),
+    budgetGroupCurrency: money(budgetCost * groupExchange),
     dailyRate,
     mobilisationRate,
     standbyRate: money(quoteRates.hotel * (1 + rateMargin(quoteRates, "hotel", quoteRates.hotelMargin)) + quoteRates.subsistence * (1 + rateMargin(quoteRates, "subsistence", quoteRates.subsistenceMargin)))
@@ -482,7 +484,8 @@ export function defaultActuals(calculations: ProjectCalculations): PLActuals {
     saturdayWorked: false,
     sundayWorked: false,
     travelDays: 0,
-    daysTakenToComplete: calculations.siteDays,
+    daysTakenToComplete: 0,
+    siteDaysOverridden: false,
     labourInternalDays: 0,
     labourInternalRate: 0,
     surveyDays: 0,
@@ -536,7 +539,7 @@ export function calculatePL(calculations: ProjectCalculations, actuals: PLActual
   const bonusBudget = budgetWhere((row) => itemIncludes(row, "bdm bonus"));
   const rows = [
     { section: "Labour Internal", item: "Labour Internal", actual: money(num(actuals.labourInternal)), budget: labourInternalBudget },
-    { section: "Labour Internal", item: "Survey Days", actual: money(num(actuals.surveyDays || actuals.labourInternalDays) * num(actuals.surveyDayRate || actuals.labourInternalRate)), budget: surveyDayBudget },
+    { section: "Labour Internal", item: "Survey Days", actual: money(num(actuals.surveyDays) * num(actuals.surveyDayRate)), budget: surveyDayBudget },
     { section: "Labour Internal", item: "Survey Travel Days", actual: money(num(actuals.surveyTravelDays) * num(actuals.surveyTravelRate)), budget: surveyTravelBudget },
     { section: "Labour Internal", item: "BDM Bonus", actual: bonus, budget: bonusBudget },
     { section: "Labour Subcontract", item: "Labour Subcontract", actual: num(actuals.labourSubcontract), budget: budget("Subcontract") },
@@ -556,7 +559,9 @@ export function calculatePL(calculations: ProjectCalculations, actuals: PLActual
   const budgetProfit = money(actuals.actualPrice - calculations.budgetCost);
   const budgetMargin = actuals.actualPrice ? pct(budgetProfit / actuals.actualPrice) : 0;
   const budgetMarkup = calculations.budgetCost ? pct(budgetProfit / calculations.budgetCost) : 0;
-  const actualDays = num(actuals.daysTakenToComplete) || calculateActualSiteDays(actuals);
+  const calculatedActualDays = calculateActualSiteDays(actuals);
+  const enteredActualDays = num(actuals.daysTakenToComplete);
+  const actualDays = actuals.siteDaysOverridden || (enteredActualDays > 0 && enteredActualDays !== calculatedActualDays) ? enteredActualDays : calculatedActualDays;
   const programmeStatus = actualDays <= calculations.siteDays + 0.1 ? "PROJECT COMPLETED ON TIME" : "PROJECT RUN OVER TIME";
   return { rows, actualCost, actualProfit, actualMargin, actualMarkup, budgetProfit, budgetMargin, budgetMarkup, programmeStatus };
 }

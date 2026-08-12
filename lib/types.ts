@@ -224,6 +224,7 @@ export type RepairTypeMaterialRule = {
 };
 
 export type RepairType = {
+  id?: string;
   code: string;
   name: string;
   measurementBasis: RepairMeasurementBasis;
@@ -505,6 +506,7 @@ export type PLActuals = {
   sundayWorked: boolean;
   travelDays: number;
   daysTakenToComplete: number;
+  siteDaysOverridden: boolean;
   labourInternalDays: number;
   labourInternalRate: number;
   surveyDays: number;

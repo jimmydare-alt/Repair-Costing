@@ -45,7 +45,7 @@ function navLabel(item: NavItem) {
   return item.view;
 }
 
-export function ProductShell({ view, pathname, selectedContext, activeServices = { grinding: false, screeding: false, repairs: false }, onNewProject, canNavigate = () => true, children }: { view: View; pathname: string; selectedContext?: string; activeServices?: ActiveServices; onNewProject?: () => void; canNavigate?: (href: string) => boolean; children: ReactNode }) {
+export function ProductShell({ view, pathname, selectedContext, activeServices = { grinding: false, screeding: false, repairs: false }, activeBuilderStep, activeAdminTab, onNewProject, onBuilderStep, onAdminTab, canNavigate = () => true, children }: { view: View; pathname: string; selectedContext?: string; activeServices?: ActiveServices; activeBuilderStep?: string; activeAdminTab?: "Rates" | "Repair Types" | "Repair Materials"; onNewProject?: () => void; onBuilderStep?: (step: "Services" | "Grinding" | "Screeding" | "Repairs") => void; onAdminTab?: (tab: "Rates" | "Repair Types" | "Repair Materials") => void; canNavigate?: (href: string) => boolean; children: ReactNode }) {
   const auth = useAuth();
   const [open, setOpen] = useState(false);
   const configuredLogo = auth.activeCompany.branding.logoPath;
@@ -63,7 +63,7 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
   return (
     <main className={`app-shell ${open ? "nav-open" : ""}`}>
       <aside className="app-sidebar">
-        <Link href="/" className="app-brand" onClick={close}>
+        <Link href="/" className="app-brand" onClick={(event) => { if (!canNavigate("/")) { event.preventDefault(); return; } close(); }}>
           <Image src={logo} alt={auth.activeCompany.name} width={84} height={46} priority />
           <span><b>Repair Costing</b><small>CONTRACTING WORKSPACE</small></span>
         </Link>
@@ -72,8 +72,25 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
             const items = visible.filter((item) => item.group === group);
             if (!items.length) return null;
             return <div key={group} className="app-nav-group"><p className="app-nav-label">{group}</p><nav className="app-nav">{items.map((item, index) => {
-              const active = pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
-              return <Link key={`${item.href}-${index}`} href={item.href} className={active ? "active" : ""} onClick={(event) => { if (!canNavigate(item.href)) { event.preventDefault(); return; } if (item.href === "/new-project") onNewProject?.(); close(); }}>{item.icon}<span>{navLabel(item)}</span>{group === "Costing Builder" && <small>{String(index + 1).padStart(2, "0")}</small>}</Link>;
+              const builderStep = item.href === "/new-project" ? "Services" : item.href === "/grinding" ? "Grinding" : item.href === "/screeding" ? "Screeding" : item.href === "/repairs" ? "Repairs" : undefined;
+              const adminTab = item.href === "/admin-rates" ? "Rates" : item.href.includes("repair-types") ? "Repair Types" : item.href.includes("repair-materials") ? "Repair Materials" : undefined;
+              const active = builderStep && view === "New Project" ? activeBuilderStep === builderStep : adminTab && view === "Admin Rates" ? activeAdminTab === adminTab : pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
+              return <Link key={`${item.href}-${index}`} href={item.href} className={active ? "active" : ""} onClick={(event) => {
+                if (builderStep && onBuilderStep) {
+                  event.preventDefault();
+                  onBuilderStep(builderStep);
+                  close();
+                  return;
+                }
+                if (adminTab && view === "Admin Rates" && onAdminTab) {
+                  event.preventDefault();
+                  onAdminTab(adminTab);
+                  close();
+                  return;
+                }
+                if (!canNavigate(item.href)) { event.preventDefault(); return; }
+                close();
+              }}>{item.icon}<span>{navLabel(item)}</span>{group === "Costing Builder" && <small>{String(index + 1).padStart(2, "0")}</small>}</Link>;
             })}</nav></div>;
           })}
         </div>
@@ -85,9 +102,9 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
           <button className="mobile-menu" onClick={() => setOpen((value) => !value)} aria-label="Open navigation"><span /><span /><span /></button>
           <div className="command-context"><span>{auth.activeCompany.name} / {auth.activeCompany.defaultCurrency}</span><b>{view}</b>{selectedContext && <small>{selectedContext}</small>}</div>
           <div className="command-actions">
-            {auth.companies.length > 1 && <select value={auth.activeCompany.id} onChange={(event) => auth.switchCompany(event.target.value)} className="command-select">{auth.companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select>}
+            {auth.companies.length > 1 && <select value={auth.activeCompany.id} onChange={(event) => { if (canNavigate("company-switch")) auth.switchCompany(event.target.value); }} className="command-select">{auth.companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select>}
             <Link href="/new-project" className="command-new" onClick={(event) => { if (!canNavigate("/new-project")) { event.preventDefault(); return; } onNewProject?.(); }}><Plus size={16} />New Project</Link>
-            {auth.session && <button className="command-chip" onClick={() => void auth.signOut()}><span className="system-dot" />Sign out</button>}
+            {auth.session && <button className="command-chip" onClick={() => { if (canNavigate("sign-out")) void auth.signOut(); }}><span className="system-dot" />Sign out</button>}
           </div>
         </header>
         <div className="app-content">{children}</div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import { approvedBrandVariables } from "./branding";
 import { createBrowserSupabaseClient, isSupabaseConfigured } from "./supabaseClient";
@@ -105,6 +105,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [activeCompanyId, setActiveCompanyId] = useState(defaultCompanies[1].id);
   const [role, setRole] = useState<MembershipRole>("super_admin");
   const [enabledModules, setEnabledModules] = useState<AppModuleKey[]>(defaultModulesForRole("super_admin"));
+  const companySwitchToken = useRef(0);
 
   async function refreshCompanies() {
     if (!client || !session?.user) return;
@@ -203,11 +204,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (client) await client.auth.signOut();
     },
     switchCompany: (companyId: string) => {
+      const switchToken = ++companySwitchToken.current;
       setActiveCompanyId(companyId);
       if (typeof document !== "undefined") document.cookie = `active_company_id=${companyId}; path=/; SameSite=Lax`;
       if (client && session?.user) void loadRoleForCompany(client, session.user.id, companyId, role).then(async (nextRole) => {
+        const nextModules = await loadCompanyModules(client, companyId, nextRole);
+        if (switchToken !== companySwitchToken.current) return;
         setRole(nextRole);
-        setEnabledModules(await loadCompanyModules(client, companyId, nextRole));
+        setEnabledModules(nextModules);
       });
     },
     refreshCompanies

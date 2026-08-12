@@ -1,6 +1,6 @@
 "use client";
 
-import { calculateProject } from "./calculations";
+import { calculateActualSiteDays, calculateProject } from "./calculations";
 import { defaultRates, emptyInput } from "./rates";
 import { createRepairLine, defaultRepairCatalog } from "./repairCatalog";
 import { allowedStatusTransitions, normaliseProjectStatus } from "./workflow";
@@ -161,15 +161,15 @@ function mergeCatalog(saved: Partial<RepairCatalog>): RepairCatalog {
   const savedTypes = saved.types ?? [];
   const materials = savedMaterials.length ? savedMaterials.map((material) => ({ ...material, active: material.active && material.costPerUnit > 0 && material.unitSize > 0 && material.coveragePerUnit > 0 })) : defaultRepairCatalog.materials;
   const materialMap = new Map(materials.map((material) => [material.id, material]));
-  const types = savedTypes.length ? savedTypes.map((type) => {
+  const types = (savedTypes.length ? savedTypes : defaultRepairCatalog.types).map((type, index) => {
     const defaultType = defaultRepairCatalog.types.find((item) => item.code === type.code);
     const materialRules = (type.materialRules ?? []).map((rule) => ({
       ...defaultType?.materialRules.find((item) => item.materialId === rule.materialId),
       ...rule
     }));
     const usableRules = materialRules.filter((rule) => materialMap.get(rule.materialId)?.active);
-    return { ...type, materialRules, active: type.active && type.defaultOutputPerDay > 0 && usableRules.length > 0 };
-  }) : defaultRepairCatalog.types;
+    return { ...type, id: type.id ?? `repair-type-${index + 1}`, materialRules, active: type.active && type.defaultOutputPerDay > 0 && usableRules.length > 0 };
+  });
   return {
     materials: materials.length ? materials : defaultRepairCatalog.materials,
     types: types.length ? types : defaultRepairCatalog.types
@@ -182,7 +182,7 @@ export async function loadRepairCatalog(): Promise<RepairCatalog> {
     const { data, error } = await supabase.client.from("repair_catalogs").select("repair_types,repair_materials").eq("company_id", supabase.companyId).maybeSingle();
     if (error) throw new Error(`Could not load repair catalogue: ${error.message}`);
     if (data) return mergeCatalog({ types: data.repair_types as RepairCatalog["types"], materials: data.repair_materials as RepairCatalog["materials"] });
-    return defaultRepairCatalog;
+    return mergeCatalog(defaultRepairCatalog);
   }
   if (isSupabaseConfigured()) requireCloudContext("Loading repair catalogue");
   return mergeCatalog(readJson<Partial<RepairCatalog>>(REPAIR_CATALOG_KEY, {}));
@@ -294,7 +294,8 @@ function normaliseActuals(actuals: PLActuals | undefined, calculations: ProjectR
     saturdayWorked: false,
     sundayWorked: false,
     travelDays: 0,
-    daysTakenToComplete: calculations.siteDays,
+    daysTakenToComplete: 0,
+    siteDaysOverridden: false,
     labourInternalDays: 0,
     labourInternalRate: 0,
     surveyDays: 0,
@@ -315,6 +316,9 @@ function normaliseActuals(actuals: PLActuals | undefined, calculations: ProjectR
     other: 0,
     completedAt: undefined
   };
+  const normalisedDays = asNumber(actuals.daysTakenToComplete, 0);
+  const calculatedDays = calculateActualSiteDays({ ...defaults, ...actuals, daysTakenToComplete: normalisedDays } as PLActuals);
+  const siteDaysOverridden = actuals.siteDaysOverridden ?? Boolean(actuals.startDate && actuals.endDate && normalisedDays !== calculatedDays);
   return {
     ...defaults,
     ...actuals,
@@ -325,7 +329,8 @@ function normaliseActuals(actuals: PLActuals | undefined, calculations: ProjectR
     saturdayWorked: Boolean(actuals.saturdayWorked),
     sundayWorked: Boolean(actuals.sundayWorked),
     travelDays: asNumber(actuals.travelDays, 0),
-    daysTakenToComplete: asNumber(actuals.daysTakenToComplete, calculations.siteDays),
+    daysTakenToComplete: siteDaysOverridden ? normalisedDays : calculatedDays,
+    siteDaysOverridden,
     labourInternalDays: asNumber(actuals.labourInternalDays, 0),
     labourInternalRate: asNumber(actuals.labourInternalRate, 0),
     surveyDays: asNumber(actuals.surveyDays ?? actuals.labourInternalDays, 0),
@@ -374,8 +379,8 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
     ...emptyInput,
     ...(input ?? {}),
     quoteCurrency: input?.quoteCurrency ?? emptyInput.quoteCurrency,
-    exchangeRateToCompanyCurrency: asNumber(input?.exchangeRateToCompanyCurrency, 1),
-    exchangeRateToGroupCurrency: asNumber(input?.exchangeRateToGroupCurrency, 1),
+    exchangeRateToCompanyCurrency: asNumber(input?.exchangeRateToCompanyCurrency, 1) > 0 ? asNumber(input?.exchangeRateToCompanyCurrency, 1) : 1,
+    exchangeRateToGroupCurrency: asNumber(input?.exchangeRateToGroupCurrency, 1) > 0 ? asNumber(input?.exchangeRateToGroupCurrency, 1) : 1,
     projectTravelPeople: asNumber(input?.projectTravelPeople, emptyInput.projectTravelPeople),
     projectTravelProductionPeople: asNumber(input?.projectTravelProductionPeople, input?.projectTravelPeople ?? emptyInput.projectTravelProductionPeople),
     projectTravelSurveyorPeople: asNumber(input?.projectTravelSurveyorPeople, emptyInput.projectTravelSurveyorPeople),
@@ -399,7 +404,9 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
       generatorCount: Number(savedGrinding.generatorCount ?? (savedGrinding.generatorRequired ? 1 : 0)),
       additionalTools: Array.isArray(savedGrinding.additionalTools) ? savedGrinding.additionalTools.map((item) => ({ ...item, unit: "item", quantity: 1, plCategory: "Equipment" as const })) : [],
       productionMen,
+      productionNightShifts: Number(savedGrinding.productionNightShifts ?? savedGrinding.nightShifts ?? 0),
       surveyorCount,
+      surveyorNightShifts: Number(savedGrinding.surveyorNightShifts ?? savedGrinding.nightShifts ?? 0),
       productionLabourMode: savedGrinding.productionLabourMode ?? (savedGrinding.subcontractRate || savedGrinding.subcontractMobilisation ? "subcontract" : emptyInput.grinding.productionLabourMode),
       productionSubcontractors: normaliseSubcontractors(savedGrinding.productionSubcontractors, "Grinding subcontractor"),
       surveyorLabourMode: savedGrinding.surveyorLabourMode ?? emptyInput.grinding.surveyorLabourMode,
@@ -414,9 +421,11 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
       totalDaysOnSite: screedDays,
       productionLabourMode: savedScreeding.productionLabourMode ?? "subcontract",
       productionLabourDays: Number(savedScreeding.productionLabourDays ?? 0),
+      productionNightShifts: Number(savedScreeding.productionNightShifts ?? savedScreeding.nightShifts ?? 0),
       productionVehicles: Number(savedScreeding.productionVehicles ?? emptyInput.screeding.productionVehicles),
       surveyorLabourMode: savedScreeding.surveyorLabourMode ?? "in_house",
       surveyorDays: Number(savedScreeding.surveyorDays ?? screedDays),
+      surveyorNightShifts: Number(savedScreeding.surveyorNightShifts ?? savedScreeding.nightShifts ?? 0),
       surveyorVehicles: Number(savedScreeding.surveyorVehicles ?? emptyInput.screeding.surveyorVehicles),
       surveyorSubcontractors: normaliseSubcontractors(savedScreeding.surveyorSubcontractors, "Screed surveyor subcontractor"),
       teams: normalisedTeams
@@ -589,8 +598,18 @@ export async function addProjectNote(projectId: string, note: Omit<ProjectNote, 
   return saved;
 }
 
-function rowToProject(row: Record<string, unknown>, actuals?: PLActuals): ProjectRecord {
-  const inputs = normaliseInput(row.inputs as Partial<ProjectInput>);
+type StoredProjectInput = Partial<ProjectInput> & {
+  __costingSnapshot?: {
+    rates?: AdminRates;
+    repairCatalog?: RepairCatalog;
+    calculationVersion?: string;
+  };
+};
+
+export function rowToProject(row: Record<string, unknown>, actuals?: PLActuals): ProjectRecord {
+  const storedInputs = (row.inputs ?? {}) as StoredProjectInput;
+  const { __costingSnapshot, ...inputValues } = storedInputs;
+  const inputs = normaliseInput(inputValues);
   const calculations = row.calculations as ProjectRecord["calculations"];
   const revisions = Array.isArray(row.revisions) ? row.revisions as QuoteRevision[] : [];
   const latestRevision = revisions[revisions.length - 1];
@@ -605,9 +624,9 @@ function rowToProject(row: Record<string, unknown>, actuals?: PLActuals): Projec
     inputs,
     calculations,
     actuals: normaliseActuals(actuals ?? row.actuals as PLActuals | undefined, calculations),
-    rateSnapshot: latestRevision?.rates,
-    repairCatalogSnapshot: latestRevision?.repairCatalog,
-    calculationVersion: latestRevision?.calculationVersion,
+    rateSnapshot: __costingSnapshot?.rates ?? latestRevision?.rates,
+    repairCatalogSnapshot: __costingSnapshot?.repairCatalog ?? latestRevision?.repairCatalog,
+    calculationVersion: __costingSnapshot?.calculationVersion ?? latestRevision?.calculationVersion,
     markupApprovedBy: latestRevision?.markupApprovedBy,
     markupApprovedAt: latestRevision?.markupApprovedAt,
     revisions,
@@ -616,7 +635,7 @@ function rowToProject(row: Record<string, unknown>, actuals?: PLActuals): Projec
   };
 }
 
-function projectToRow(project: ProjectRecord, userId: string) {
+export function projectToRow(project: ProjectRecord, userId: string) {
   return {
     id: project.id,
     company_id: project.companyId,
@@ -632,7 +651,14 @@ function projectToRow(project: ProjectRecord, userId: string) {
     exchange_rate_to_company_currency: project.inputs.exchangeRateToCompanyCurrency,
     exchange_rate_to_group_currency: project.inputs.exchangeRateToGroupCurrency,
     exchange_rate_locked_at: project.inputs.exchangeRateLockedAt || null,
-    inputs: project.inputs,
+    inputs: {
+      ...project.inputs,
+      __costingSnapshot: {
+        rates: project.rateSnapshot,
+        repairCatalog: project.repairCatalogSnapshot,
+        calculationVersion: project.calculationVersion
+      }
+    },
     calculations: project.calculations,
     actuals: project.actuals ?? {},
     notes: project.notes ?? [],

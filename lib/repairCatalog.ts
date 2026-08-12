@@ -77,7 +77,18 @@ export function repairTypeByCode(code: string, catalog: RepairCatalog = defaultR
 }
 
 export function materialById(id: string, catalog: RepairCatalog = defaultRepairCatalog) {
-  return catalog.materials.find((material) => material.id === id);
+  return catalog.materials.find((material) => material.id === id && material.active);
+}
+
+export function validateRepairCatalog(catalog: RepairCatalog) {
+  const invalidMaterials = catalog.materials.filter((material) => material.active && (!material.name.trim() || material.costPerUnit <= 0 || material.unitSize <= 0 || material.coveragePerUnit <= 0));
+  const normalisedCodes = catalog.types.map((type) => type.code.trim().toLowerCase()).filter(Boolean);
+  const duplicateCodes = [...new Set(normalisedCodes.filter((code, index) => normalisedCodes.indexOf(code) !== index))];
+  const invalidTypes = catalog.types.filter((type) => type.active && (!type.code.trim() || !type.name.trim() || type.defaultOutputPerDay <= 0 || !type.materialRules.length || type.materialRules.some((rule) => {
+    const material = catalog.materials.find((item) => item.id === rule.materialId);
+    return !material?.active || material.costPerUnit <= 0 || material.unitSize <= 0 || material.coveragePerUnit <= 0;
+  })));
+  return { invalidMaterials, invalidTypes, duplicateCodes };
 }
 
 export function materialByName(name: string, catalog: RepairCatalog = defaultRepairCatalog) {
