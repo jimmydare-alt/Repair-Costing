@@ -93,6 +93,8 @@ function normaliseRates(saved: Partial<AdminRates>): AdminRates {
   const productionWeekendDayRate = Number(saved.productionWeekendDayRate ?? saved.repairWeekendDayRate ?? saved.weekendDayRate ?? defaultRates.productionWeekendDayRate);
   const productionNightShiftAllowance = Number(saved.productionNightShiftAllowance ?? saved.repairNightShiftAllowance ?? defaultRates.productionNightShiftAllowance);
   const surveyorTravelDayRate = Number(saved.surveyorTravelDayRate ?? saved.travelDayRate ?? defaultRates.surveyorTravelDayRate);
+  const surveyorWeekendDayRate = Number(saved.surveyorWeekendDayRate ?? saved.surveyorDayRate ?? defaultRates.surveyorWeekendDayRate);
+  const surveyorNightShiftAllowance = Number(saved.surveyorNightShiftAllowance ?? saved.productionNightShiftAllowance ?? defaultRates.surveyorNightShiftAllowance);
   const grindingGrinderDayRate = Number(saved.grindingGrinderDayRate ?? saved.grindingPropaneGrinderDayRate ?? saved.grindingElectricGrinderDayRate ?? defaultRates.grindingGrinderDayRate);
   const grindingPlanerDayRate = Number(saved.grindingPlanerDayRate ?? saved.grindingConcretePlanerGasDayRate ?? defaultRates.grindingPlanerDayRate);
   const savedMargins = saved.rateMargins ?? {};
@@ -104,6 +106,8 @@ function normaliseRates(saved: Partial<AdminRates>): AdminRates {
     productionWeekendDayRate: savedMargins.productionWeekendDayRate ?? savedMargins.repairWeekendDayRate ?? savedMargins.weekendDayRate ?? defaultRates.rateMargins?.productionWeekendDayRate,
     productionNightShiftAllowance: savedMargins.productionNightShiftAllowance ?? savedMargins.repairNightShiftAllowance ?? defaultRates.rateMargins?.productionNightShiftAllowance,
     surveyorTravelDayRate: savedMargins.surveyorTravelDayRate ?? savedMargins.travelDayRate ?? defaultRates.rateMargins?.surveyorTravelDayRate,
+    surveyorWeekendDayRate: savedMargins.surveyorWeekendDayRate ?? savedMargins.surveyorDayRate ?? defaultRates.rateMargins?.surveyorWeekendDayRate,
+    surveyorNightShiftAllowance: savedMargins.surveyorNightShiftAllowance ?? savedMargins.productionNightShiftAllowance ?? defaultRates.rateMargins?.surveyorNightShiftAllowance,
     grindingGrinderDayRate: savedMargins.grindingGrinderDayRate ?? savedMargins.grindingPropaneGrinderDayRate ?? savedMargins.grindingElectricGrinderDayRate ?? defaultRates.rateMargins?.grindingGrinderDayRate,
     grindingPlanerDayRate: savedMargins.grindingPlanerDayRate ?? savedMargins.grindingConcretePlanerGasDayRate ?? defaultRates.rateMargins?.grindingPlanerDayRate
   };
@@ -115,6 +119,8 @@ function normaliseRates(saved: Partial<AdminRates>): AdminRates {
     productionWeekendDayRate,
     productionNightShiftAllowance,
     surveyorTravelDayRate,
+    surveyorWeekendDayRate,
+    surveyorNightShiftAllowance,
     grindingGrinderDayRate,
     grindingPlanerDayRate,
     materialMargin: saved.materialMargin === undefined || saved.materialMargin === 0.2 ? defaultRates.materialMargin : saved.materialMargin,
@@ -401,6 +407,7 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
       ...emptyInput.grinding,
       ...savedGrinding,
       estimatedDays: estimatedGrindingDays,
+      equipmentShippingMargin: asNumber(savedGrinding.equipmentShippingMargin, emptyInput.grinding.equipmentShippingMargin),
       generatorCount: Number(savedGrinding.generatorCount ?? (savedGrinding.generatorRequired ? 1 : 0)),
       additionalTools: Array.isArray(savedGrinding.additionalTools) ? savedGrinding.additionalTools.map((item) => ({ ...item, unit: "item", quantity: 1, plCategory: "Equipment" as const })) : [],
       productionMen,
@@ -419,6 +426,8 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
       screedingDays,
       grindingDays,
       totalDaysOnSite: screedDays,
+      materialShippingMargin: asNumber(savedScreeding.materialShippingMargin, emptyInput.screeding.materialShippingMargin),
+      equipmentShippingMargin: asNumber(savedScreeding.equipmentShippingMargin, emptyInput.screeding.equipmentShippingMargin),
       productionLabourMode: savedScreeding.productionLabourMode ?? "subcontract",
       productionLabourDays: Number(savedScreeding.productionLabourDays ?? 0),
       productionNightShifts: Number(savedScreeding.productionNightShifts ?? savedScreeding.nightShifts ?? 0),
@@ -497,6 +506,20 @@ export async function saveProject(input: ProjectInput, rates: AdminRates, existi
   if (isSupabaseConfigured()) requireCloudContext("Saving a project");
   writeJson(PROJECTS_KEY, existing ? projects.map((project) => project.id === record.id ? record : project) : [record, ...projects]);
   return record;
+}
+
+export async function deleteProject(projectId: string) {
+  const projects = await loadProjects();
+  const current = projects.find((project) => project.id === projectId);
+  if (!current) throw new Error("The selected project no longer exists.");
+  const supabase = await supabaseContext();
+  if (supabase) {
+    const { error } = await supabase.client.rpc("delete_project_transaction", { target_project_id: projectId });
+    if (error) throw new Error(`Could not delete project: ${error.message}`);
+    return;
+  }
+  if (isSupabaseConfigured()) requireCloudContext("Deleting a project");
+  writeJson(PROJECTS_KEY, projects.filter((project) => project.id !== projectId));
 }
 
 export async function updateProjectWorkflow(projectId: string, status: ProjectStatus, accountsStatus?: ProjectRecord["accountsStatus"], actor = "System") {

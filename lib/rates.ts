@@ -26,6 +26,8 @@ export const defaultRateMargins: Partial<Record<keyof AdminRates, number>> = {
   productionNightShiftAllowance: 0.2,
   surveyorDayRate: 0,
   surveyorTravelDayRate: 0,
+  surveyorWeekendDayRate: 0,
+  surveyorNightShiftAllowance: 0,
   otherInternalTravelDayRate: 0.2,
   labourerDayRate: 0.2,
   weekendDayRate: 0,
@@ -100,6 +102,8 @@ export const defaultRates: AdminRates = {
   productionNightShiftAllowance: 15,
   surveyorDayRate: 1000,
   surveyorTravelDayRate: 950,
+  surveyorWeekendDayRate: 1500,
+  surveyorNightShiftAllowance: 15,
   otherInternalTravelDayRate: 575,
   labourerDayRate: 400,
   weekendDayRate: 500,
@@ -127,6 +131,7 @@ export const defaultRates: AdminRates = {
   flightMargin: 0.2,
   equipmentMargin: 0.3,
   materialMargin: 0.3,
+  shippingMargin: 0.3,
   grindingSmallGeneratorDayRate: 60,
   grindingGrinderDayRate: 50,
   grindingPlanerDayRate: 15,
@@ -278,6 +283,7 @@ export const emptyInput: ProjectInput = {
     grindingSegmentsRequired: false,
     consumablesRequired: false,
     equipmentShipping: 0,
+    equipmentShippingMargin: 0.3,
     additionalTools: []
   },
   screeding: {
@@ -330,6 +336,7 @@ export const emptyInput: ProjectInput = {
     sandRate: 0,
     sandMargin: 0.2,
     materialShipping: 0,
+    materialShippingMargin: 0.3,
     teams: [],
     generatorDays: 0,
     largeGeneratorRequired: false,
@@ -343,7 +350,8 @@ export const emptyInput: ProjectInput = {
     extensionCordSets: 0,
     grindingSegmentsRequired: false,
     consumablesRequired: false,
-    equipmentShipping: 0
+    equipmentShipping: 0,
+    equipmentShippingMargin: 0.3
   },
   repairs: {
     enabled: false,

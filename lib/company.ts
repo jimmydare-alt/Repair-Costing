@@ -26,6 +26,7 @@ export type Permission =
   | "projects.create"
   | "projects.read"
   | "projects.update"
+  | "projects.delete"
   | "projects.review"
   | "pl.update"
   | "rates.update"
@@ -72,8 +73,8 @@ export const defaultModules: Array<{ key: AppModuleKey; name: string; href: stri
 ];
 
 const rolePermissions: Record<MembershipRole, Permission[]> = {
-  super_admin: ["company.create", "company.manage", "company.switch", "company.branding.update", "modules.manage", "users.invite", "users.read", "users.role.update", "projects.create", "projects.read", "projects.update", "projects.review", "pl.update", "rates.update", "audit.read"],
-  company_admin: ["company.manage", "company.branding.update", "users.invite", "users.read", "users.role.update", "projects.create", "projects.read", "projects.update", "projects.review", "pl.update", "rates.update", "audit.read"],
+  super_admin: ["company.create", "company.manage", "company.switch", "company.branding.update", "modules.manage", "users.invite", "users.read", "users.role.update", "projects.create", "projects.read", "projects.update", "projects.delete", "projects.review", "pl.update", "rates.update", "audit.read"],
+  company_admin: ["company.manage", "company.branding.update", "users.invite", "users.read", "users.role.update", "projects.create", "projects.read", "projects.update", "projects.delete", "projects.review", "pl.update", "rates.update", "audit.read"],
   manager_editor: ["projects.create", "projects.read", "projects.update", "projects.review", "pl.update"],
   accounts: ["projects.read", "pl.update"],
   reviewer: ["projects.read", "projects.review"],

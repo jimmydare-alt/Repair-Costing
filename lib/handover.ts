@@ -42,10 +42,22 @@ function aggregate(lines: Line[]) {
   return Array.from(rows.values());
 }
 
+function aggregateSubcontractors(lines: Line[]) {
+  const rows = new Map<string, HandoverRow>();
+  lines.filter((line) => line.quantity || line.cost).forEach((line) => {
+    const description = line.item.replace(/ mobilisation$/i, "").replace(/ price on site$/i, "");
+    const key = description.toLowerCase();
+    const current = rows.get(key) ?? { description, quantity: 1, unit: "package", budget: 0 };
+    current.budget += line.cost;
+    rows.set(key, current);
+  });
+  return Array.from(rows.values());
+}
+
 export function buildHandoverSummary(project: ProjectRecord): HandoverSummary {
   const lines = project.calculations.budgetLines;
   const materials = aggregate(lines.filter((line) => lineCategory(line) === "Materials"));
-  const subcontractors = aggregate(lines.filter((line) => lineCategory(line) === "Subcontract"));
+  const subcontractors = aggregateSubcontractors(lines.filter((line) => lineCategory(line) === "Subcontract"));
   const labour = aggregate(lines.filter((line) => lineCategory(line) === "Labour"));
   const equipment = aggregate(lines.filter((line) => lineCategory(line) === "Equipment"));
   const logistics = aggregate(lines.filter((line) => ["Travel", "Hotel/Subsistence", "Haulage"].includes(lineCategory(line))));
@@ -55,7 +67,7 @@ export function buildHandoverSummary(project: ProjectRecord): HandoverSummary {
   })).filter((row) => row.budget > 0);
   const actions: string[] = [];
   if (materials.length) actions.push(`Order and confirm ${materials.length} material type${materials.length === 1 ? "" : "s"}.`);
-  if (subcontractors.length) actions.push(`Appoint and confirm ${new Set(subcontractors.map((row) => row.description.replace(/ mobilisation$/i, ""))).size} subcontract work package${subcontractors.length === 1 ? "" : "s"}.`);
+  if (subcontractors.length) actions.push(`Appoint and confirm ${subcontractors.length} subcontract work package${subcontractors.length === 1 ? "" : "s"}.`);
   if (project.calculations.siteDays > 0) actions.push(`Confirm the ${project.calculations.siteDays}-day project programme and service sequence.`);
   if (lines.some((line) => line.section === "Hotel" && line.cost > 0)) actions.push("Confirm accommodation bookings before mobilisation.");
   if (lines.some((line) => line.plCategory === "Haulage" && line.cost > 0)) actions.push("Confirm haulage and delivery dates with the site programme.");

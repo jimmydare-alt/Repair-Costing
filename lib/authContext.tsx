@@ -48,13 +48,14 @@ function companyFromRow(row: Record<string, unknown>): Company {
 }
 
 async function loadCompanies(client: SupabaseClient, userId: string) {
-  const { data: profile } = await client.from("profiles").select("is_super_admin,status").eq("id", userId).maybeSingle();
-  if (profile?.status && profile.status !== "active") return { companies: [], role: "viewer" as MembershipRole, modules: [] as AppModuleKey[] };
+  const { data: profile } = await client.from("profiles").select("is_super_admin,status,default_company_id").eq("id", userId).maybeSingle();
+  const defaultCompanyId = profile?.default_company_id ? String(profile.default_company_id) : "";
+  if (profile?.status && profile.status !== "active") return { companies: [], role: "viewer" as MembershipRole, modules: [] as AppModuleKey[], defaultCompanyId };
   const superAdmin = Boolean(profile?.is_super_admin);
   if (superAdmin) {
     const { data: companies } = await client.from("companies").select("*").eq("status", "active").order("name");
     const parsed = (companies ?? []).map((row) => companyFromRow(row as Record<string, unknown>));
-    return { companies: parsed, role: "super_admin" as MembershipRole, modules: defaultModulesForRole("super_admin") };
+    return { companies: parsed, role: "super_admin" as MembershipRole, modules: defaultModulesForRole("super_admin"), defaultCompanyId };
   }
   const { data: memberships } = await client
     .from("company_memberships")
@@ -62,9 +63,16 @@ async function loadCompanies(client: SupabaseClient, userId: string) {
     .eq("user_id", userId)
     .eq("status", "active");
   const rows = memberships ?? [];
-  const companies = rows.map((row: any) => companyFromRow(row.companies)).filter((company) => company.status === "active");
+  const accessibleCompanies = rows.map((row: any) => companyFromRow(row.companies)).filter((company) => company.status === "active");
+  const defaultCompany = accessibleCompanies.find((company) => company.id === defaultCompanyId) ?? accessibleCompanies[0];
+  const companies = defaultCompany ? [defaultCompany] : [];
   const role = (rows[0]?.role ?? "viewer") as MembershipRole;
-  return { companies, role, modules: defaultModulesForRole(role) };
+  return { companies, role, modules: defaultModulesForRole(role), defaultCompanyId };
+}
+
+function preferredCompanyId(loaded: Awaited<ReturnType<typeof loadCompanies>>, requestedCompanyId = "") {
+  const requested = loaded.role === "super_admin" ? requestedCompanyId : loaded.defaultCompanyId;
+  return loaded.companies.some((company) => company.id === requested) ? requested : loaded.companies[0]?.id ?? defaultCompanies[1].id;
 }
 
 async function loadRoleForCompany(client: SupabaseClient, userId: string, companyId: string, fallback: MembershipRole) {
@@ -111,7 +119,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!client || !session?.user) return;
     const loaded = await loadCompanies(client, session.user.id);
     setCompanies(loaded.companies);
-    const nextActive = loaded.companies.some((company) => company.id === activeCompanyId) ? activeCompanyId : loaded.companies[0]?.id ?? defaultCompanies[1].id;
+    const nextActive = preferredCompanyId(loaded, activeCompanyId);
     const nextRole = await loadRoleForCompany(client, session.user.id, nextActive, loaded.role);
     setActiveCompanyId(nextActive);
     setRole(nextRole);
@@ -138,7 +146,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setCompanies(loaded.companies);
         const cookieCompany = typeof document !== "undefined" ? document.cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)?.[1] : undefined;
         const requestedCompany = cookieCompany ? decodeURIComponent(cookieCompany) : "";
-        const nextActive = loaded.companies.some((company) => company.id === requestedCompany) ? requestedCompany : loaded.companies[0]?.id ?? defaultCompanies[1].id;
+        const nextActive = preferredCompanyId(loaded, requestedCompany);
         const nextRole = await loadRoleForCompany(client, data.session.user.id, nextActive, loaded.role);
         setRole(nextRole);
         setEnabledModules(await loadCompanyModules(client, nextActive, nextRole));
@@ -163,7 +171,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setCompanies(loaded.companies);
           const cookieCompany = typeof document !== "undefined" ? document.cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)?.[1] : undefined;
           const requestedCompany = cookieCompany ? decodeURIComponent(cookieCompany) : "";
-          const nextActive = loaded.companies.some((company) => company.id === requestedCompany) ? requestedCompany : loaded.companies[0]?.id ?? defaultCompanies[1].id;
+          const nextActive = preferredCompanyId(loaded, requestedCompany);
           const nextRole = await loadRoleForCompany(client, nextSession.user.id, nextActive, loaded.role);
           if (!live) return;
           setActiveCompanyId(nextActive);
@@ -207,6 +215,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const switchToken = ++companySwitchToken.current;
       setActiveCompanyId(companyId);
       if (typeof document !== "undefined") document.cookie = `active_company_id=${companyId}; path=/; SameSite=Lax`;
+      if (client && session?.user && role !== "super_admin") void client.rpc("set_default_company", { target_company_id: companyId });
       if (client && session?.user) void loadRoleForCompany(client, session.user.id, companyId, role).then(async (nextRole) => {
         const nextModules = await loadCompanyModules(client, companyId, nextRole);
         if (switchToken !== companySwitchToken.current) return;

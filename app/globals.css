@@ -429,6 +429,7 @@ button:disabled, .ds-button:disabled, .primary-button:disabled, .secondary-butto
 .sidebar-footer > div { display: grid; gap: 3px; }
 .sidebar-footer b { font-size: 11px; }
 .sidebar-footer small { color: #7f8882; font-size: 9px; }
+.sidebar-account { display: none; }
 .system-dot { width: 8px; height: 8px; display: inline-block; flex: none; border-radius: 50%; background: #43ce83; box-shadow: 0 0 0 4px rgba(67,206,131,.12); }
 .app-main { min-height: 100vh; margin-left: var(--sidebar); }
 .app-commandbar {
@@ -514,6 +515,9 @@ button:disabled, .ds-button:disabled, .primary-button:disabled, .secondary-butto
   .command-context span { display: none; }
   .command-select { display: none; }
   .command-chip { display: none; }
+  .sidebar-account { display: grid; gap: 9px; margin: 0 12px 10px; padding: 12px; border: 1px solid rgba(255,255,255,.08); border-radius: 12px; background: rgba(255,255,255,.04); }
+  .sidebar-account label { display: grid; gap: 5px; color: #aeb5b0; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+  .sidebar-account select, .sidebar-account button { min-height: 40px; width: 100%; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; background: #252a27; color: #fff; font-size: 12px; }
   .workspace-page { width: calc(100% - 24px); padding-top: 18px; }
 }
 

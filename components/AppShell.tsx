@@ -94,6 +94,10 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
             })}</nav></div>;
           })}
         </div>
+        <div className="sidebar-account">
+          {auth.companies.length > 1 && <label><span>Company</span><select value={auth.activeCompany.id} onChange={(event) => { auth.switchCompany(event.target.value); close(); }}>{auth.companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label>}
+          {auth.session && <button onClick={() => { void auth.signOut(); close(); }}>Sign out</button>}
+        </div>
         <div className="sidebar-footer"><span className="system-dot" /><div><b>Cloud workspace</b><small>Secure / Synced</small></div></div>
       </aside>
       <button className="sidebar-scrim" aria-label="Close navigation" onClick={close} />

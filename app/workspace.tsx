@@ -2,14 +2,14 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Calculator, Download, FileSpreadsheet, History, Printer, Save, Search, Send, Settings } from "lucide-react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { Calculator, Download, FileSpreadsheet, History, Printer, Save, Search, Send, Settings, Trash2 } from "lucide-react";
 import { calculatedHotelNights, calculateActualSiteDays, calculatePhaseSchedule, calculatePL, calculateProject, calculateProjectRepairMaterials, calculateRepairLineMaterials, calculateWorkingDays, defaultActuals, weekendDaysForProgramme } from "@/lib/calculations";
 import { money, percent, formatDateTime, setMoneyCurrency } from "@/lib/format";
 import { projectCsv } from "@/lib/export";
 import { defaultRates, emptyInput } from "@/lib/rates";
 import { createRepairLine, defaultRepairCatalog, repairTypeByCode, validateRepairCatalog } from "@/lib/repairCatalog";
-import { addProjectNote, loadProjects, loadRates, loadRepairCatalog, recordProjectHandover, saveActuals, saveAdminData, saveProject, setStorageContext, updateProjectWorkflow } from "@/lib/storage";
+import { addProjectNote, deleteProject, loadProjects, loadRates, loadRepairCatalog, recordProjectHandover, saveActuals, saveAdminData, saveProject, setStorageContext, updateProjectWorkflow } from "@/lib/storage";
 import { useAuth } from "@/lib/authContext";
 import { hasPermission } from "@/lib/company";
 import { createBrowserSupabaseClient } from "@/lib/supabaseClient";
@@ -130,7 +130,7 @@ function repairReadiness(input: ProjectInput, repairCatalog: RepairCatalog): Rep
       const hasHoleVolume = Boolean(repairLine.eachQty && repairLine.holeDiameterMm && repairLine.holeDepthMm);
       if (material.calcMethod === "volume_lwd" && !hasLinearVolume && !hasAreaVolume && !hasHoleVolume) blockers.push(`${line}: ${material.name} needs length/width/depth, area/thickness, or each/diameter/depth.`);
       if (material.calcMethod === "area_thickness" && material.id !== "bondcoat-rbp" && material.id !== "fastprime-5" && !hasAreaVolume && !hasHoleVolume) blockers.push(`${line}: ${material.name} needs area/thickness or each/diameter/depth.`);
-      if (material.calcMethod === "area_thickness" && material.id === "fastprime-5" && !repairLine.areaM2) blockers.push(`${line}: ${material.name} needs an area.`);
+      if (material.calcMethod === "area_thickness" && material.id === "fastprime-5" && !repairLine.areaM2 && !hasHoleVolume) blockers.push(`${line}: ${material.name} needs an area or each/hole dimensions.`);
       if (material.calcMethod === "manual" && repairLine.manualMaterialQty <= 0) blockers.push(`${line}: ${material.name} needs a manual material quantity.`);
     });
   });
@@ -303,6 +303,9 @@ export default function Workspace() {
       setProjects(loadedProjects);
       const companyBlank = cloneInput(emptyInput);
       companyBlank.quoteCurrency = auth.activeCompany.defaultCurrency;
+      companyBlank.grinding.equipmentShippingMargin = loadedRates.shippingMargin;
+      companyBlank.screeding.materialShippingMargin = loadedRates.shippingMargin;
+      companyBlank.screeding.equipmentShippingMargin = loadedRates.shippingMargin;
       setInput(companyBlank);
       setBaselineInput(cloneInput(companyBlank));
       setEditingId("");
@@ -355,6 +358,9 @@ export default function Workspace() {
     blank.quoteCurrency = auth.activeCompany.defaultCurrency;
     blank.exchangeRateToCompanyCurrency = 1;
     blank.exchangeRateToGroupCurrency = auth.activeCompany.defaultCurrency === auth.activeCompany.reportingCurrency ? 1 : blank.exchangeRateToGroupCurrency;
+    blank.grinding.equipmentShippingMargin = rates.shippingMargin;
+    blank.screeding.materialShippingMargin = rates.shippingMargin;
+    blank.screeding.equipmentShippingMargin = rates.shippingMargin;
     setInput(blank);
     setBaselineInput(cloneInput(blank));
     setPricingRates(rates);
@@ -469,6 +475,18 @@ export default function Workspace() {
             setNote={setNote}
             edit={() => editProject(selected)}
             updateStatus={async (status) => { try { await updateProjectWorkflow(selected.id, status, undefined, auth.session?.user.email ?? "James Dare"); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "Project status could not be updated."); } }}
+            deleteProjectRecord={async () => {
+              try {
+                await deleteProject(selected.id);
+                setSelectedId("");
+                setEditingId("");
+                await refresh();
+                router.push("/");
+              } catch (error) {
+                setWorkspaceError(error instanceof Error ? error.message : "The project could not be deleted.");
+                throw error;
+              }
+            }}
           />
         )}
         {view === "Project Detail" && workspaceLoaded && routeProjectId && !selected && <div className="app-card-strong p-6"><h2 className="text-xl font-semibold">Project not found</h2><p className="mt-2 text-sm text-slate-600">This project does not exist or is not available in the active company.</p><button className="secondary-button mt-4" onClick={() => router.push("/project-search")}>Open Project Search</button></div>}
@@ -864,7 +882,7 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
           <div><div className="flex flex-wrap items-center gap-2"><h2 className="text-xl font-semibold">New Project</h2>{dirty && <span className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-bold uppercase text-amber-800">Unsaved changes</span>}</div><p className="text-sm text-slate-500">Pick services first, then complete only the sections needed for this costing.</p></div>
           <div className="flex flex-wrap gap-2">
             <button className="secondary-button" onClick={() => onSave("Draft")} disabled={saving}><Save size={16} /> {saving ? "Saving..." : "Save Draft"}</button>
-            <button className="primary-button" onClick={() => onSave("Costing Complete")} disabled={saving}><Save size={16} /> {saving ? "Saving..." : "Complete Costing"}</button>
+            {builderStep === "Review" && <button className="primary-button" onClick={() => onSave("Costing Complete")} disabled={saving}><Save size={16} /> {saving ? "Saving..." : "Complete Costing"}</button>}
           </div>
         </div>
         <div className="p-5">
@@ -1082,11 +1100,12 @@ function ReviewStep({ calculations, input, setInput }: { calculations: ReturnTyp
           <h4 className="mb-3 font-bold">Proposal by Section</h4>
           {Object.entries(grouped).map(([section, total]) => <div className="flex justify-between border-b py-2" key={section}><span>{section}</span><b>{money(total)}</b></div>)}
         </div>
-        <div className="app-card p-4">
-          <h4 className="mb-3 font-bold">Final Adjustments</h4>
-          <NumberInput label="Discount %" value={input.discountPercentage} onChange={(v) => setInput({ ...input, discountPercentage: v })} />
-          <div className="mt-4"><Toggle label={`Include 1% BDM Bonus (${money(calculations.bdmBonusBudget)} budget cost)`} checked={input.bdmBonusRequired} onChange={(bdmBonusRequired) => setInput({ ...input, bdmBonusRequired })} /></div>
-          <div className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-600">Discount is applied across proposal lines. Budget cost is not discounted.</div>
+          <div className="app-card p-4">
+            <h4 className="mb-3 font-bold">Final Adjustments</h4>
+            <NumberInput label="Discount %" value={input.discountPercentage} onChange={(v) => setInput({ ...input, discountPercentage: v })} />
+            <div className="mt-4"><Toggle label={`Include 1% BDM Bonus (${money(calculations.bdmBonusBudget)} budget cost)`} checked={input.bdmBonusRequired} onChange={(bdmBonusRequired) => setInput({ ...input, bdmBonusRequired })} /></div>
+            {(markupWarnings.length > 0 || input.discountPercentage > 0) && <div className="mt-4"><Text label="Reason for low markup or discount" value={input.markupOverrideReason} onChange={(markupOverrideReason) => setInput({ ...input, markupOverrideReason })} /></div>}
+            <div className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-600">Discount is applied across proposal lines. Budget cost is not discounted.</div>
         </div>
       </div>
       <div className="app-card p-4">
@@ -1125,10 +1144,11 @@ function QuoteSummary({ calculations }: { calculations: ReturnType<typeof calcul
       <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
         <SummaryRow label="Proposal" value={money(calculations.proposalTotal)} strong />
         <SummaryRow label="Budget" value={money(calculations.budgetCost)} />
-        <SummaryRow label={lowMarkup ? "Markup - Approval" : "Markup"} value={percent(calculations.budgetMarkup)} alert={lowMarkup} />
+        <SummaryRow label={lowMarkup ? "Markup - Review" : "Markup"} value={percent(calculations.budgetMarkup)} alert={lowMarkup} />
         <SummaryRow label="Site Days" value={String(calculations.siteDays)} />
         <SummaryRow label="Daily Rate" value={money(calculations.dailyRate)} />
-        <SummaryRow label="Mobilisation" value={money(calculations.mobilisationRate)} />
+        <SummaryRow label="Travel" value={money(calculations.travelTotal ?? calculations.mobilisationRate)} />
+        <SummaryRow label="Haulage" value={money(calculations.haulageTotal ?? 0)} />
       </div>
     </div>
   );
@@ -1172,7 +1192,11 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
   const productionSubcontractSell = repairSubcontractorSell(g.productionSubcontractors);
   const surveyorSubcontractSell = repairSubcontractorSell(g.surveyorSubcontractors);
   const productionLabourSell = usesProductionInHouse ? g.productionMen * productionDays * rates.productionLabourDayRate * (1 + adminRateMargin(rates, "productionLabourDayRate", rates.defaultMargin)) : 0;
-  const surveyorLabourSell = usesSurveyorInHouse ? g.surveyorCount * surveyorDays * rates.surveyorDayRate * (1 + adminRateMargin(rates, "surveyorDayRate", 0)) : 0;
+  const surveyorLabourSell = usesSurveyorInHouse ? (
+    g.surveyorCount * surveyorDays * rates.surveyorDayRate * (1 + adminRateMargin(rates, "surveyorDayRate", 0)) +
+    g.surveyorCount * calculatedSurveyorWeekendDays * rates.surveyorWeekendDayRate * (1 + adminRateMargin(rates, "surveyorWeekendDayRate", rates.defaultMargin)) +
+    (g.nightShiftRequired ? g.surveyorCount * g.surveyorNightShifts * rates.surveyorNightShiftAllowance * (1 + adminRateMargin(rates, "surveyorNightShiftAllowance", rates.defaultMargin)) : 0)
+  ) : 0;
   const toolDays = usesProductionInHouse ? productionDays : 0;
   const grinderDays = g.productionMen * toolDays;
   const planerDays = g.gasPlaners * toolDays;
@@ -1187,7 +1211,7 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
     (g.grindingSegmentsRequired ? grinderDays * rates.grindingSegmentsDayRate * (1 + adminRateMargin(rates, "grindingSegmentsDayRate", rates.equipmentMargin)) : 0) +
     (g.extensionCordsRequired ? toolDays * rates.grindingExtensionCordsDayRate * (1 + adminRateMargin(rates, "grindingExtensionCordsDayRate", rates.equipmentMargin)) : 0) +
     (g.consumablesRequired ? grinderDays * rates.grindingConsumablesDayRate * (1 + adminRateMargin(rates, "grindingConsumablesDayRate", rates.equipmentMargin)) : 0) +
-    (g.equipmentShipping ? g.equipmentShipping * (1 + rates.equipmentMargin) : 0) +
+    (g.equipmentShipping ? g.equipmentShipping * (1 + g.equipmentShippingMargin) : 0) +
     g.additionalTools.reduce((sum, item) => sum + item.rate * (1 + item.margin), 0)
   ) : 0;
   const readiness = grindingReadiness(input);
@@ -1316,6 +1340,7 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
               <Toggle label="Grinding Segments" checked={g.grindingSegmentsRequired} onChange={(v) => patch({ grindingSegmentsRequired: v })} />
               <Toggle label="Consumables" checked={g.consumablesRequired} onChange={(v) => patch({ consumablesRequired: v })} />
               <NumberInput label="Equipment Shipping" value={g.equipmentShipping} onChange={(v) => patch({ equipmentShipping: v })} />
+              <NumberInput label="Shipping Markup %" value={g.equipmentShippingMargin * 100} onChange={(v) => patch({ equipmentShippingMargin: v / 100 })} />
             </div>
             <AdditionalTools items={g.additionalTools} onChange={(additionalTools) => patch({ additionalTools })} />
           </div>}
@@ -1382,8 +1407,12 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
   }, 0);
   const surveyorSubcontractSell = repairSubcontractorSell(s.surveyorSubcontractors);
   const productionLabourSell = usesProductionInHouse ? s.productionMen * productionDays * rates.productionLabourDayRate * (1 + adminRateMargin(rates, "productionLabourDayRate", rates.defaultMargin)) : 0;
-  const surveyorLabourSell = usesSurveyorInHouse ? s.surveyors * surveyorDays * rates.surveyorDayRate * (1 + adminRateMargin(rates, "surveyorDayRate", 0)) : 0;
-  const materialSell = (s.screedMaterialBags * s.screedMaterialRate * (1 + s.screedMaterialMargin)) + (s.primerUnits * s.primerRate * (1 + s.primerMargin)) + (s.sandBags * s.sandRate * (1 + s.sandMargin)) + (s.materialShipping ? s.materialShipping * (1 + rates.materialMargin) : 0);
+  const surveyorLabourSell = usesSurveyorInHouse ? (
+    s.surveyors * surveyorDays * rates.surveyorDayRate * (1 + adminRateMargin(rates, "surveyorDayRate", 0)) +
+    s.surveyors * calculatedSurveyorWeekendDays * rates.surveyorWeekendDayRate * (1 + adminRateMargin(rates, "surveyorWeekendDayRate", rates.defaultMargin)) +
+    (s.nightShiftRequired ? s.surveyors * s.surveyorNightShifts * rates.surveyorNightShiftAllowance * (1 + adminRateMargin(rates, "surveyorNightShiftAllowance", rates.defaultMargin)) : 0)
+  ) : 0;
+  const materialSell = (s.screedMaterialBags * s.screedMaterialRate * (1 + s.screedMaterialMargin)) + (s.primerUnits * s.primerRate * (1 + s.primerMargin)) + (s.sandBags * s.sandRate * (1 + s.sandMargin)) + (s.materialShipping ? s.materialShipping * (1 + s.materialShippingMargin) : 0);
   const toolDays = usesProductionInHouse ? productionDays : 0;
   const grinderCount = Math.max(0, s.propaneGrinders || s.productionMen);
   const grinderDays = grinderCount * toolDays;
@@ -1399,7 +1428,7 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
     (s.extensionCordSets * toolDays * rates.screedExtensionCordSetDayRate * (1 + adminRateMargin(rates, "screedExtensionCordSetDayRate", rates.equipmentMargin))) +
     (s.grindingSegmentsRequired ? grinderDays * rates.screedGrindingSegmentsDayRate * (1 + adminRateMargin(rates, "screedGrindingSegmentsDayRate", rates.equipmentMargin)) : 0) +
     (s.consumablesRequired ? Math.max(1, grinderCount) * toolDays * rates.screedConsumablesDayRate * (1 + adminRateMargin(rates, "screedConsumablesDayRate", rates.equipmentMargin)) : 0) +
-    (s.equipmentShipping ? s.equipmentShipping * (1 + rates.equipmentMargin) : 0)
+    (s.equipmentShipping ? s.equipmentShipping * (1 + s.equipmentShippingMargin) : 0)
   ) : 0;
   const readiness = screedReadiness(input);
   const labourModeButton = (label: string, value: LabourMode, current: LabourMode, onChange: (value: LabourMode) => void) => (
@@ -1565,6 +1594,8 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
               <NumberInput label="Sand Markup %" value={s.sandMargin * 100} onChange={(v) => patch({ sandMargin: v / 100 })} />
             <Mini label="Sand Proposal Cost" value={money(s.sandBags * s.sandRate * (1 + s.sandMargin))} />
             <NumberInput label="Material Shipping" value={s.materialShipping} onChange={(v) => patch({ materialShipping: v })} />
+            <NumberInput label="Shipping Markup %" value={s.materialShippingMargin * 100} onChange={(v) => patch({ materialShippingMargin: v / 100 })} />
+            <Mini label="Shipping Proposal Cost" value={money(s.materialShipping * (1 + s.materialShippingMargin))} />
             <Mini label="Total Material Sell" value={money(materialSell)} />
           </div>
         </div>
@@ -1594,6 +1625,7 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
               <Toggle label="Grinding Segments" checked={s.grindingSegmentsRequired} onChange={(v) => patch({ grindingSegmentsRequired: v })} />
               <Toggle label="Consumables" checked={s.consumablesRequired} onChange={(v) => patch({ consumablesRequired: v })} />
               <NumberInput label="Equipment Shipping" value={s.equipmentShipping} onChange={(v) => patch({ equipmentShipping: v })} />
+              <NumberInput label="Shipping Markup %" value={s.equipmentShippingMargin * 100} onChange={(v) => patch({ equipmentShippingMargin: v / 100 })} />
             </div>
           </div>}
         </div>
@@ -1683,8 +1715,11 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
   };
   const changeRepairType = (index: number, code: string) => {
     const current = r.repairLines[index];
+    if (current.repairTypeCode === code) return;
+    const populated = Boolean(current.lengthM || current.areaM2 || current.eachQty || current.manualMaterialQty || current.holeDiameterMm || current.holeDepthMm);
+    if (populated && !confirm("Changing the repair type resets its quantity, dimensions and material selections to the new company defaults. Continue?")) return;
     const next = createRepairLine(code, repairCatalog);
-    patch({ repairLines: r.repairLines.map((item, i) => i === index ? { ...next, id: current.id, lengthM: current.lengthM || next.lengthM, areaM2: current.areaM2 || next.areaM2, eachQty: current.eachQty || next.eachQty } : item) });
+    patch({ repairLines: r.repairLines.map((item, i) => i === index ? { ...next, id: current.id } : item) });
   };
   const toggleMaterial = (lineIndex: number, materialId: string, selected: boolean) => {
     const line = r.repairLines[lineIndex];
@@ -2078,9 +2113,13 @@ function AdditionalTools({ items, onChange }: { items: AdditionalItem[]; onChang
   </div>;
 }
 
-function ProjectDetail({ project, tab, setTab, actuals, setActuals, saveActuals, recordHandover: recordHandoverEvent, note, setNote, addNote, edit, updateStatus }: { project: ProjectRecord; tab: DetailTab; setTab: (tab: DetailTab) => void; actuals: ReturnType<typeof defaultActuals>; setActuals: (a: ReturnType<typeof defaultActuals>) => void; saveActuals: (finalise?: boolean) => void; recordHandover: (issued: boolean) => Promise<void>; note: string; setNote: (v: string) => void; addNote: () => void; edit: () => void; updateStatus: (status: ProjectStatus) => void }) {
+function ProjectDetail({ project, tab, setTab, actuals, setActuals, saveActuals, recordHandover: recordHandoverEvent, note, setNote, addNote, edit, updateStatus, deleteProjectRecord }: { project: ProjectRecord; tab: DetailTab; setTab: (tab: DetailTab) => void; actuals: ReturnType<typeof defaultActuals>; setActuals: (a: ReturnType<typeof defaultActuals>) => void; saveActuals: (finalise?: boolean) => void; recordHandover: (issued: boolean) => Promise<void>; note: string; setNote: (v: string) => void; addNote: () => void; edit: () => void; updateStatus: (status: ProjectStatus) => void; deleteProjectRecord: () => Promise<void> }) {
   const auth = useAuth();
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deleting, setDeleting] = useState(false);
   const canEdit = hasPermission(auth.role, "projects.update");
+  const canDelete = hasPermission(auth.role, "projects.delete");
   const summary = calculatePL(project.calculations, actuals);
   const projectStatus = normaliseProjectStatus(project.status);
   const terminalCosting = ["Lost", "Completed", "Closed"].includes(projectStatus);
@@ -2103,6 +2142,16 @@ function ProjectDetail({ project, tab, setTab, actuals, setActuals, saveActuals,
       {tab === "PM Handover" && <ProjectHandover project={project} recordHandover={recordHandoverEvent} />}
       {tab === "Actual P&L" && <PLActualsPanel project={project} actuals={actuals} setActuals={setActuals} summary={summary} saveActuals={saveActuals} />}
       {tab === "Activity" && <ActivityPanel project={project} note={note} setNote={setNote} addNote={addNote} />}
+      {canDelete && <div className="flex justify-end border-t border-slate-200 pt-5"><button className="secondary-button border-red-200 text-red-700 hover:bg-red-50" onClick={() => { setDeleteConfirmation(""); setDeleteOpen(true); }}><Trash2 size={16} />Delete Project</button></div>}
+      {deleteOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-labelledby="delete-project-title">
+        <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
+          <h2 className="text-xl font-bold text-slate-950" id="delete-project-title">Permanently delete project?</h2>
+          <p className="mt-2 text-sm text-slate-600">This removes the costing, saved actuals, notes and history. It cannot be undone.</p>
+          <div className="mt-4 rounded-lg border border-red-100 bg-red-50 p-3 text-sm text-red-900">Type <b>{project.inputs.projectReference || project.id}</b> to confirm.</div>
+          <div className="mt-4"><Text label="Project reference" value={deleteConfirmation} onChange={setDeleteConfirmation} /></div>
+          <div className="mt-5 flex flex-wrap justify-end gap-2"><button className="secondary-button" onClick={() => setDeleteOpen(false)} disabled={deleting}>Cancel</button><button className="primary-button bg-red-700 hover:bg-red-800" disabled={deleting || deleteConfirmation.trim() !== (project.inputs.projectReference || project.id)} onClick={async () => { try { setDeleting(true); await deleteProjectRecord(); setDeleteOpen(false); } catch { /* The workspace error banner explains the failure. */ } finally { setDeleting(false); } }}><Trash2 size={16} />{deleting ? "Deleting..." : "Delete permanently"}</button></div>
+        </div>
+      </div>}
     </div>
   );
 }
@@ -2145,8 +2194,11 @@ function SavedCommercialReview({ project }: { project: ProjectRecord }) {
   return <div className="grid gap-5"><div className={`rounded-xl border p-4 ${calculations.budgetMarkup < 25 ? "border-amber-200 bg-amber-50 text-amber-950" : "border-emerald-200 bg-emerald-50 text-emerald-950"}`}><b>{calculations.budgetMarkup < 25 ? `Markup check: ${percent(calculations.budgetMarkup)}, below 25%` : `Commercial check passed: ${percent(calculations.budgetMarkup)} markup`}</b>{calculations.budgetMarkup < 25 && <div className="mt-2 text-sm">This is a warning only and does not block the costing.</div>}</div><div className="table-shell"><table><thead><tr><th>Category</th><th>Budget</th><th>Proposal</th><th>Profit</th><th>Markup</th></tr></thead><tbody>{rows.map((row) => <tr key={row.category}><td className="font-bold">{row.category}</td><td>{money(row.budget)}</td><td>{money(row.proposal)}</td><td>{money(row.profit)}</td><td className={row.markup < 25 ? "font-bold text-red-700" : "font-bold text-emerald-700"}>{percent(row.markup)}</td></tr>)}</tbody></table></div></div>;
 }
 
-async function handoverPdf(project: ProjectRecord, companyName: string, primaryColour: string) {
-  const response = await fetch("/api/projects/handover", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ project, companyName, primaryColour }) });
+async function handoverPdf(project: ProjectRecord) {
+  const client = createBrowserSupabaseClient();
+  const token = client ? (await client.auth.getSession()).data.session?.access_token : "";
+  if (!token) throw new Error("Your secure session has expired. Sign in again before generating a handover.");
+  const response = await fetch("/api/projects/handover", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ projectId: project.id }) });
   if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? "The handover PDF could not be generated.");
   return response.blob();
 }
@@ -2171,7 +2223,7 @@ function ProjectHandover({ project, recordHandover: record }: { project: Project
   const savePdf = async () => {
     try {
       setBusy("save");
-      const blob = await handoverPdf(project, auth.activeCompany.name, auth.activeCompany.branding.primaryColour);
+      const blob = await handoverPdf(project);
       downloadBlob(blob, filename);
       await record(false);
     } catch (error) {
@@ -2181,7 +2233,7 @@ function ProjectHandover({ project, recordHandover: record }: { project: Project
   const sendPdf = async () => {
     try {
       setBusy("send");
-      const blob = await handoverPdf(project, auth.activeCompany.name, auth.activeCompany.branding.primaryColour);
+      const blob = await handoverPdf(project);
       const file = new File([blob], filename, { type: "application/pdf" });
       if (navigator.share && navigator.canShare?.({ files: [file] })) {
         await navigator.share({ title: `${project.inputs.projectReference} Project Cost & Delivery Summary`, text: `Internal project handover for ${project.inputs.client}.`, files: [file] });
@@ -2243,6 +2295,13 @@ function PLActualsPanel({ project, actuals, setActuals, summary, saveActuals }: 
     const key = plRowActualKey(row.item);
     return { key, label: row.item, actual: row.actual, budget: row.budget, variance: row.variance, onChange: key ? (value) => patch({ [key]: value } as Partial<typeof actuals>) : undefined };
   });
+  const categoryWarnings = plCategories.map((category) => {
+    const proposal = project.calculations.proposalLines.filter((line) => linePLCategory(line) === category).reduce((sum, line) => sum + line.total, 0);
+    const budget = project.calculations.budgetLines.filter((line) => linePLCategory(line) === category).reduce((sum, line) => sum + line.total, 0);
+    const markup = budget ? (proposal - budget) / budget * 100 : 0;
+    return { category, proposal, budget, markup };
+  }).filter((row) => row.budget > 0 && row.markup < 25);
+  const lowActualMarkup = summary.started && summary.actualCost > 0 && summary.actualMarkup < 25;
   return (
     <div className="grid gap-5">
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1.25fr)_420px]">
@@ -2293,17 +2352,20 @@ function PLActualsPanel({ project, actuals, setActuals, summary, saveActuals }: 
           </div>
         </div>
         <div className="grid content-start gap-4">
+          {(lowActualMarkup || categoryWarnings.length > 0) && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"><div className="font-bold uppercase">Markup review</div>{lowActualMarkup && <div className="mt-1">Overall actual markup is {percent(summary.actualMarkup)}, below 25%.</div>}{categoryWarnings.map((row) => <div className="mt-1" key={row.category}>{row.category} budget markup is {percent(row.markup)}, below 25%.</div>)}</div>}
           <div className="app-card-strong">
             <div className="panel-heading"><h2 className="text-xl font-semibold">P&L Summary</h2><p className="text-sm text-slate-500">Live from actuals typed on the left.</p></div>
             <div className="grid gap-3 p-5 sm:grid-cols-2">
-              <Mini label="Actual Cost" value={money(summary.actualCost)} />
-              <Mini label="Actual Profit" value={money(summary.actualProfit)} />
-              <Mini label="Actual Margin" value={percent(summary.actualMargin)} />
-              <Mini label="Actual Markup" value={percent(summary.actualMarkup)} />
+              <Mini label="P&L Status" value={summary.started ? "In progress" : "Not started"} />
+              <Mini label="Actual Cost" value={summary.started ? money(summary.actualCost) : "-"} />
+              <Mini label="Actual Profit" value={summary.started ? money(summary.actualProfit) : "-"} />
+              <Mini label="Actual Margin" value={summary.started ? percent(summary.actualMargin) : "-"} />
+              <Mini label="Actual Markup" value={summary.started ? percent(summary.actualMarkup) : "-"} />
               <Mini label="Budget Cost" value={money(project.calculations.budgetCost)} />
-              <Mini label="Budget Profit" value={money(summary.budgetProfit)} />
-              <Mini label="Budget Margin" value={percent(summary.budgetMargin)} />
-              <Mini label="Budget Markup" value={percent(summary.budgetMarkup)} />
+              <Mini label="Original Budget Profit" value={money(summary.originalBudgetProfit)} />
+              <Mini label="Original Budget Markup" value={percent(summary.originalBudgetMarkup)} />
+              <Mini label="Invoice vs Budget Profit" value={money(summary.budgetProfit)} />
+              <Mini label="Invoice vs Budget Markup" value={percent(summary.budgetMarkup)} />
             </div>
           </div>
           <div className="app-card-strong">
@@ -2353,7 +2415,10 @@ function Overview({ calculations, rates }: { calculations: ReturnType<typeof cal
 }
 
 function LineTable({ lines }: { lines: Line[] }) {
-  return <div className="table-shell"><table><thead><tr><th>Section</th><th>Item</th><th>Rate</th><th>Qty</th><th>Cost</th><th>Markup</th><th>Discount</th><th>Total</th></tr></thead><tbody>{lines.filter((l) => l.quantity || l.total).map((line, index) => <tr key={`${line.item}-${index}`}><td>{line.section}</td><td className="min-w-[220px] font-semibold">{line.item}</td><td>{money(line.rate)} / {line.unit}</td><td>{line.quantity}</td><td>{money(line.cost)}</td><td>{percent(line.margin * 100)}</td><td>{money(line.discount)}</td><td className="font-bold">{money(line.total)}</td></tr>)}</tbody></table></div>;
+  return <div className="table-shell"><table><thead><tr><th>Section</th><th>Item</th><th>Rate</th><th>Qty</th><th>Cost</th><th>Markup</th><th>Discount</th><th>Total</th></tr></thead><tbody>{lines.filter((l) => l.quantity || l.total).map((line, index) => {
+    const markup = line.cost ? line.margin / line.cost * 100 : 0;
+    return <tr key={`${line.item}-${index}`}><td>{line.section}</td><td className="min-w-[220px] font-semibold">{line.item}</td><td>{money(line.rate)} / {line.unit}</td><td>{line.quantity}</td><td>{money(line.cost)}</td><td>{percent(markup)}</td><td>{money(line.discount)}</td><td className="font-bold">{money(line.total)}</td></tr>;
+  })}</tbody></table></div>;
 }
 
 function SearchView({ projects, open, edit }: { projects: ProjectRecord[]; open: (project: ProjectRecord) => void; edit: (project: ProjectRecord) => void }) {
@@ -2491,7 +2556,9 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, admi
               onItemMarginChange={updateItemMargin}
               fields={[
                 { key: "surveyorDayRate", label: "Surveyor Day Rate", suffix: "/ day" },
-                { key: "surveyorTravelDayRate", label: "Surveyor Travel Day Rate", suffix: "/ day" }
+                { key: "surveyorTravelDayRate", label: "Surveyor Travel Day Rate", suffix: "/ day" },
+                { key: "surveyorWeekendDayRate", label: "Surveyor Weekend Extra", suffix: "/ surveyor day" },
+                { key: "surveyorNightShiftAllowance", label: "Surveyor Night Shift Extra", suffix: "/ surveyor night" }
               ]}
             />
             <RateSection
@@ -2553,6 +2620,7 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, admi
                 { key: "subcontractMargin", label: "Subcontract Default Markup", margin: true, helper: "Used when subcontract costs are entered inside a costing." },
                 { key: "materialMargin", label: "Material Default Markup", margin: true, helper: "Used for repair materials and project-entered materials." },
                 { key: "equipmentMargin", label: "Equipment Default Markup", margin: true, helper: "Used when equipment costs are entered inside a costing." },
+                { key: "shippingMargin", label: "Shipping Default Markup", margin: true, helper: "Initial markup for new material and equipment shipping inputs. It remains overridable per costing." },
                 { key: "engineeringReport", label: "Engineering Report", suffix: "/ report" }
               ]}
             />
@@ -2834,25 +2902,29 @@ function AuditPanel({ calculations }: { calculations: ReturnType<typeof calculat
 }
 
 function Text({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
-  return <div className="grid min-w-0 gap-1"><label>{label}</label><input value={value} onChange={(e) => onChange(e.target.value)} /></div>;
+  const id = useId();
+  return <div className="grid min-w-0 gap-1"><label htmlFor={id}>{label}</label><input id={id} value={value} onChange={(e) => onChange(e.target.value)} /></div>;
 }
 
 function NumberInput({ label, value, onChange, min = 0, max, step = "any" }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number | "any" }) {
+  const id = useId();
   const update = (raw: string) => {
     const parsed = Number(raw);
     const lowerBounded = Math.max(min, Number.isFinite(parsed) ? parsed : min);
     const bounded = max === undefined ? lowerBounded : Math.min(max, lowerBounded);
     onChange(step === 1 ? Math.round(bounded) : bounded);
   };
-  return <div className="grid min-w-0 gap-1"><label>{label}</label><input type="number" min={min} max={max} step={step} value={Number.isFinite(value) ? value : min} onChange={(e) => update(e.target.value)} /></div>;
+  return <div className="grid min-w-0 gap-1">{label && <label htmlFor={id}>{label}</label>}<input id={id} aria-label={label || "Value"} type="number" min={min} max={max} step={step} value={Number.isFinite(value) ? value : min} onChange={(e) => update(e.target.value)} /></div>;
 }
 
 function Select({ label, value, options, onChange, disabled = false }: { label: string; value: string; options: string[]; onChange: (v: string) => void; disabled?: boolean }) {
-  return <div className="grid min-w-0 gap-1"><label>{label}</label><select value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)}>{options.map((o) => <option key={o}>{o}</option>)}</select></div>;
+  const id = useId();
+  return <div className="grid min-w-0 gap-1"><label htmlFor={id}>{label}</label><select id={id} value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)}>{options.map((o) => <option key={o}>{o}</option>)}</select></div>;
 }
 
 function DateInput({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
-  return <div className="grid min-w-0 gap-1"><label>{label}</label><input type="date" value={value} onChange={(e) => onChange(e.target.value)} /></div>;
+  const id = useId();
+  return <div className="grid min-w-0 gap-1"><label htmlFor={id}>{label}</label><input id={id} type="date" value={value} onChange={(e) => onChange(e.target.value)} /></div>;
 }
 
 function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {

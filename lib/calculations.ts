@@ -27,7 +27,7 @@ function rateMargin(rates: AdminRates, key: keyof AdminRates, fallback: number) 
   return num(rates.rateMargins?.[String(key)] ?? fallback);
 }
 
-const nonCurrencyRateKeys = new Set(["hotelMargin", "subsistenceMargin", "subcontractMargin", "defaultMargin", "travelMargin", "flightMargin", "equipmentMargin", "materialMargin", "bdmBonusRate"]);
+const nonCurrencyRateKeys = new Set(["hotelMargin", "subsistenceMargin", "subcontractMargin", "defaultMargin", "travelMargin", "flightMargin", "equipmentMargin", "materialMargin", "shippingMargin", "bdmBonusRate"]);
 
 export function ratesInQuoteCurrency(rates: AdminRates, companyCurrencyPerQuoteCurrency: number): AdminRates {
   const divisor = num(companyCurrencyPerQuoteCurrency) > 0 ? num(companyCurrencyPerQuoteCurrency) : 1;
@@ -48,6 +48,16 @@ function holeVolumeLitres(repairLine: RepairLineItem) {
   const each = num(repairLine.eachQty);
   if (!diameter || !depth || !each) return 0;
   return (Math.PI * Math.pow(diameter / 2, 2) * depth * each) / 1000000;
+}
+
+function holeInternalAreaM2(repairLine: RepairLineItem) {
+  const diameter = num(repairLine.holeDiameterMm);
+  const depth = num(repairLine.holeDepthMm);
+  const each = num(repairLine.eachQty);
+  if (!diameter || !depth || !each) return 0;
+  const sideAreaMm2 = Math.PI * diameter * depth;
+  const bottomAreaMm2 = Math.PI * Math.pow(diameter / 2, 2);
+  return ((sideAreaMm2 + bottomAreaMm2) * each) / 1000000;
 }
 
 export function grindingDays(input: ProjectInput) {
@@ -132,6 +142,7 @@ function calculateCatalogueRequirement(repairLine: RepairLineItem, material: Rep
   const thickness = num(repairLine.thicknessMm);
   const each = num(repairLine.eachQty);
   const holeVolume = holeVolumeLitres(repairLine);
+  const holeInternalArea = holeInternalAreaM2(repairLine);
   const coverage = Math.max(num(material.coveragePerUnit), 0.0001);
   const waste = Math.max(num(material.wasteFactor), 0);
   let requiredUnits = 0;
@@ -143,11 +154,17 @@ function calculateCatalogueRequirement(repairLine: RepairLineItem, material: Rep
     formula = length && width && depth ? `${repairLine.repairTypeCode}: ROUNDUP(((Length*Width*Depth)/1000*Waste)/Coverage per unit,0)` : area && thickness ? `${repairLine.repairTypeCode}: ROUNDUP((Area*Thickness*Waste)/Coverage per unit,0)` : `${repairLine.repairTypeCode}: ROUNDUP((Each*PI*(Hole diameter/2)^2*Hole depth/1000000*Waste)/Coverage per unit,0)`;
   } else if (material.calcMethod === "area_thickness") {
     if (material.id === "fastprime-5") {
-      requiredUnits = (((0.14 * area) / 2) * waste) / coverage;
-      formula = `${repairLine.repairTypeCode}: ROUNDUP((((0.14*Area)/2)*Waste)/Coverage per unit,0)`;
+      const primedArea = area || holeInternalArea;
+      requiredUnits = (((0.14 * primedArea) / 2) * waste) / coverage;
+      formula = area
+        ? `${repairLine.repairTypeCode}: ROUNDUP((((0.14*Area)/2)*Waste)/Coverage per unit,0)`
+        : `${repairLine.repairTypeCode}: ROUNDUP((((0.14*Each*(PI*Diameter*Depth+PI*(Diameter/2)^2)/1000000)/2)*Waste)/Coverage per unit,0)`;
     } else if (material.id === "bondcoat-rbp") {
-      requiredUnits = ((width / 100 * depth / 100 * length) * waste) / coverage;
-      formula = `${repairLine.repairTypeCode}: ROUNDUP(((Width/100*Depth/100*Length)*Waste)/Coverage per unit,0)`;
+      const bondArea = area || (length && width ? length * width / 1000 : 0);
+      requiredUnits = (bondArea * waste) / coverage;
+      formula = area
+        ? `${repairLine.repairTypeCode}: ROUNDUP((Area*Waste)/Coverage per unit,0)`
+        : `${repairLine.repairTypeCode}: ROUNDUP(((Length*Width/1000)*Waste)/Coverage per unit,0)`;
     } else {
       const density = material.densityKgPerL ?? 1;
       const areaVolumeLitres = area && thickness ? area * thickness : holeVolume;
@@ -232,8 +249,8 @@ function grindingLines(input: ProjectInput, rates: AdminRates) {
   const surveyorKm = num(g.surveyorOneWayKm) * 2 * Math.max(0, num(g.surveyorVehicles));
   const rows: Line[] = [
     line("Labour", "Surveyor labour", rates.surveyorDayRate, "surveyor day", useSurveyorInHouse ? surveyorCount * surveyorDays : 0, rateMargin(rates, "surveyorDayRate", 0), "Grinding surveyor labour"),
-    line("Labour", "Surveyor weekend extra", rates.productionWeekendDayRate, "surveyor day", useSurveyorInHouse ? surveyorCount * weekendDaysForProgramme(surveyorDays, 5, g.weekendDaysPerWeek) : 0, rateMargin(rates, "productionWeekendDayRate", rates.defaultMargin), "Grinding surveyor weekend allowance"),
-    line("Labour", "Surveyor night-shift allowance", rates.productionNightShiftAllowance, "surveyor night", useSurveyorInHouse && g.nightShiftRequired ? surveyorCount * num(g.surveyorNightShifts) : 0, rateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin), "Grinding surveyor night shift allowance"),
+    line("Labour", "Surveyor weekend extra", rates.surveyorWeekendDayRate, "surveyor day", useSurveyorInHouse ? surveyorCount * weekendDaysForProgramme(surveyorDays, 5, g.weekendDaysPerWeek) : 0, rateMargin(rates, "surveyorWeekendDayRate", rates.defaultMargin), "Grinding surveyor weekend allowance"),
+    line("Labour", "Surveyor night-shift allowance", rates.surveyorNightShiftAllowance, "surveyor night", useSurveyorInHouse && g.nightShiftRequired ? surveyorCount * num(g.surveyorNightShifts) : 0, rateMargin(rates, "surveyorNightShiftAllowance", rates.defaultMargin), "Grinding surveyor night shift allowance"),
     line("Travel", "Surveyor travel", rates.surveyorTravelDayRate, "surveyor day", useSurveyorInHouse ? surveyorCount * num(g.surveyorTravelDays) : 0, rateMargin(rates, "surveyorTravelDayRate", 0), "Grinding surveyor travel days"),
     line("Travel", "Surveyor mileage", rates.mileagePerKm, "km", useSurveyorInHouse ? surveyorKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Grinding surveyor one-way km x 2 x vehicles"),
     line("Hotel", "Surveyor hotel", rates.hotel, "night", useSurveyorInHouse ? surveyorHotelNights : 0, rateMargin(rates, "hotel", rates.hotelMargin), "Grinding surveyor hotel nights x surveyors"),
@@ -274,7 +291,7 @@ function grindingLines(input: ProjectInput, rates: AdminRates) {
     line("Equipment", "Extension cords", rates.grindingExtensionCordsDayRate, "day", useProductionInHouse && g.extensionCordsRequired ? productionDays : 0, rateMargin(rates, "grindingExtensionCordsDayRate", rates.equipmentMargin), "Grinding production days"),
     line("Materials", "Grinding segments", rates.grindingSegmentsDayRate, "grinder day", useProductionInHouse && g.grindingSegmentsRequired ? productionMen * productionDays : 0, rateMargin(rates, "grindingSegmentsDayRate", rates.equipmentMargin), "Grinding production days x men"),
     line("Materials", "Grinding consumables", rates.grindingConsumablesDayRate, "grinder day", useProductionInHouse && g.consumablesRequired ? productionMen * productionDays : 0, rateMargin(rates, "grindingConsumablesDayRate", rates.equipmentMargin), "Grinding production days x men"),
-    line("Equipment", "Grinding equipment shipping", g.equipmentShipping, "round trip", useProductionInHouse && g.equipmentShipping ? 1 : 0, rates.equipmentMargin, "Grinding equipment shipping")
+    line("Equipment", "Grinding equipment shipping", g.equipmentShipping, "round trip", useProductionInHouse && g.equipmentShipping ? 1 : 0, num(g.equipmentShippingMargin ?? rates.shippingMargin), "Grinding equipment shipping")
   );
   if (useProductionInHouse) g.additionalTools.forEach((item) => rows.push(line("Equipment", item.name || "Additional grinding tool", item.rate, "item", item.rate ? 1 : 0, item.margin, "Grinding additional tool", "Equipment")));
   return rows;
@@ -304,8 +321,8 @@ function screedLines(input: ProjectInput, rates: AdminRates) {
   const grinderCount = Math.max(0, num(s.propaneGrinders));
   const rows: Line[] = [
     line("Labour", "Screed surveyor labour", rates.surveyorDayRate, "surveyor day", useSurveyorInHouse ? surveyors * surveyorDays : 0, rateMargin(rates, "surveyorDayRate", 0), "Screed surveyor labour"),
-    line("Labour", "Screed surveyor weekend extra", rates.productionWeekendDayRate, "surveyor day", useSurveyorInHouse ? surveyors * weekendDaysForProgramme(surveyorDays, 5, s.weekendDaysPerWeek) : 0, rateMargin(rates, "productionWeekendDayRate", rates.defaultMargin), "Screed surveyor weekend allowance"),
-    line("Labour", "Screed surveyor night-shift allowance", rates.productionNightShiftAllowance, "surveyor night", useSurveyorInHouse && s.nightShiftRequired ? surveyors * num(s.surveyorNightShifts) : 0, rateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin), "Screed surveyor night shift allowance"),
+    line("Labour", "Screed surveyor weekend extra", rates.surveyorWeekendDayRate, "surveyor day", useSurveyorInHouse ? surveyors * weekendDaysForProgramme(surveyorDays, 5, s.weekendDaysPerWeek) : 0, rateMargin(rates, "surveyorWeekendDayRate", rates.defaultMargin), "Screed surveyor weekend allowance"),
+    line("Labour", "Screed surveyor night-shift allowance", rates.surveyorNightShiftAllowance, "surveyor night", useSurveyorInHouse && s.nightShiftRequired ? surveyors * num(s.surveyorNightShifts) : 0, rateMargin(rates, "surveyorNightShiftAllowance", rates.defaultMargin), "Screed surveyor night shift allowance"),
     line("Travel", "Screed surveyor travel", rates.surveyorTravelDayRate, "surveyor day", useSurveyorInHouse ? surveyors * num(s.surveyorTravelDays) : 0, rateMargin(rates, "surveyorTravelDayRate", 0), "Screed surveyor travel days"),
     line("Travel", "Screed surveyor mileage", rates.mileagePerKm, "km", useSurveyorInHouse ? surveyorKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Screed surveyor one-way km x 2 x vehicles"),
     line("Hotel", "Screed surveyor hotel", rates.hotel, "night", useSurveyorInHouse ? surveyorHotelNights : 0, rateMargin(rates, "hotel", rates.hotelMargin), "Screed surveyor hotel nights x surveyors"),
@@ -342,7 +359,7 @@ function screedLines(input: ProjectInput, rates: AdminRates) {
     line("Materials", "Screed material", s.screedMaterialRate, "bags", s.screedMaterialBags, s.screedMaterialMargin, "Screed material input"),
     line("Materials", "Primer", s.primerRate, "units", s.primerUnits, s.primerMargin, "Screed primer input"),
     line("Materials", "Sand", s.sandRate, "bags", s.sandBags, s.sandMargin, "Screed sand input"),
-    line("Materials", "Shipping of materials", s.materialShipping, "return", s.materialShipping ? 1 : 0, rates.materialMargin, "Screed material shipping"),
+    line("Materials", "Shipping of materials", s.materialShipping, "return", s.materialShipping ? 1 : 0, num(s.materialShippingMargin ?? rates.shippingMargin), "Screed material shipping"),
     line("Equipment", "Screed generator", rates.screedSmallGeneratorDayRate, "day", useProductionInHouse ? s.generatorDays : 0, rateMargin(rates, "screedSmallGeneratorDayRate", rates.equipmentMargin), "Screed generator"),
     line("Equipment", "Screed large generator rental", s.largeGeneratorRate, "day", useProductionInHouse && s.largeGeneratorRequired ? Math.ceil(productionDays) : 0, rates.equipmentMargin, "Screed large generator"),
     line("Equipment", "Screed large generator delivery", s.largeGeneratorDelivery, "item", useProductionInHouse && s.largeGeneratorRequired ? 1 : 0, rates.equipmentMargin, "Screed large generator delivery"),
@@ -353,7 +370,7 @@ function screedLines(input: ProjectInput, rates: AdminRates) {
     line("Equipment", "Screed extension cords", rates.screedExtensionCordSetDayRate, "set day", useProductionInHouse ? s.extensionCordSets * toolDays : 0, rateMargin(rates, "screedExtensionCordSetDayRate", rates.equipmentMargin), "Screed extension cords"),
     line("Materials", "Screed grinding segments", rates.screedGrindingSegmentsDayRate, "grinder day", useProductionInHouse && s.grindingSegmentsRequired ? grinderCount * toolDays : 0, rateMargin(rates, "screedGrindingSegmentsDayRate", rates.equipmentMargin), "Screed grinding segments"),
     line("Materials", "Screed consumables", rates.screedConsumablesDayRate, "grinder day", useProductionInHouse && s.consumablesRequired ? Math.max(1, grinderCount) * toolDays : 0, rateMargin(rates, "screedConsumablesDayRate", rates.equipmentMargin), "Screed consumables"),
-    line("Equipment", "Screed equipment shipping", s.equipmentShipping, "round trip", useProductionInHouse && s.equipmentShipping ? 1 : 0, rates.equipmentMargin, "Screed equipment shipping")
+    line("Equipment", "Screed equipment shipping", s.equipmentShipping, "round trip", useProductionInHouse && s.equipmentShipping ? 1 : 0, num(s.equipmentShippingMargin ?? rates.shippingMargin), "Screed equipment shipping")
   );
   return rows;
 }
@@ -428,8 +445,14 @@ export function calculateProject(input: ProjectInput, rates: AdminRates, repairC
   input.additionalItems.forEach((item) => serviceLines.push(line("Additional items", item.name, item.rate, item.unit, item.quantity, item.margin, "Additional item", item.plCategory ?? "Equipment")));
   const originalProposalTotal = money(serviceLines.reduce((sum, row) => sum + row.total, 0));
   const discountAmount = money(originalProposalTotal * Math.min(Math.max(input.discountPercentage, 0), 100) / 100);
+  let allocatedDiscount = 0;
+  const discountableRows = serviceLines.filter((row) => row.originalTotal !== 0);
+  const finalDiscountableRow = discountableRows[discountableRows.length - 1];
   const proposalLines = serviceLines.map((row) => {
-    const discount = originalProposalTotal ? money(discountAmount * (row.originalTotal / originalProposalTotal)) : 0;
+    const discount = row === finalDiscountableRow
+      ? money(discountAmount - allocatedDiscount)
+      : originalProposalTotal ? money(discountAmount * (row.originalTotal / originalProposalTotal)) : 0;
+    allocatedDiscount = money(allocatedDiscount + discount);
     return { ...row, discount, total: money(row.originalTotal - discount) };
   });
   const proposalTotal = money(proposalLines.reduce((sum, row) => sum + row.total, 0));
@@ -442,7 +465,9 @@ export function calculateProject(input: ProjectInput, rates: AdminRates, repairC
   const budgetMarkup = budgetCost ? pct(budgetProfit / budgetCost) : 0;
   const services = [input.includeGrinding && input.grinding.enabled && "Grinding", input.includeScreeding && input.screeding.enabled && "Screeding", input.includeRepairs && input.repairs.enabled && "Repairs"].filter(Boolean).join(" + ") || "Draft";
   const dailyRate = money(proposalLines.filter((row) => !["Travel", "Subcontract", "Haulage", "Reports", "Additional items"].includes(row.section)).reduce((sum, row) => sum + row.total, 0) / Math.max(1, siteDays));
-  const mobilisationRate = money(proposalLines.filter((row) => ["Travel", "Subcontract", "Haulage", "Reports"].includes(row.section)).reduce((sum, row) => sum + row.total, 0));
+  const travelTotal = money(proposalLines.filter((row) => row.plCategory === "Travel").reduce((sum, row) => sum + row.total, 0));
+  const haulageTotal = money(proposalLines.filter((row) => row.plCategory === "Haulage").reduce((sum, row) => sum + row.total, 0));
+  const mobilisationRate = travelTotal;
   return {
     projectReference: input.projectReference,
     client: input.client,
@@ -471,6 +496,8 @@ export function calculateProject(input: ProjectInput, rates: AdminRates, repairC
     budgetGroupCurrency: money(budgetCost * groupExchange),
     dailyRate,
     mobilisationRate,
+    travelTotal,
+    haulageTotal,
     standbyRate: money(quoteRates.hotel * (1 + rateMargin(quoteRates, "hotel", quoteRates.hotelMargin)) + quoteRates.subsistence * (1 + rateMargin(quoteRates, "subsistence", quoteRates.subsistenceMargin)))
   };
 }
@@ -556,14 +583,18 @@ export function calculatePL(calculations: ProjectCalculations, actuals: PLActual
   const actualProfit = money(actuals.actualPrice - actualCost);
   const actualMargin = actuals.actualPrice ? pct(actualProfit / actuals.actualPrice) : 0;
   const actualMarkup = actualCost ? pct(actualProfit / actualCost) : 0;
+  const originalBudgetProfit = money(calculations.proposalTotal - calculations.budgetCost);
+  const originalBudgetMargin = calculations.proposalTotal ? pct(originalBudgetProfit / calculations.proposalTotal) : 0;
+  const originalBudgetMarkup = calculations.budgetCost ? pct(originalBudgetProfit / calculations.budgetCost) : 0;
   const budgetProfit = money(actuals.actualPrice - calculations.budgetCost);
   const budgetMargin = actuals.actualPrice ? pct(budgetProfit / actuals.actualPrice) : 0;
   const budgetMarkup = calculations.budgetCost ? pct(budgetProfit / calculations.budgetCost) : 0;
   const calculatedActualDays = calculateActualSiteDays(actuals);
   const enteredActualDays = num(actuals.daysTakenToComplete);
   const actualDays = actuals.siteDaysOverridden || (enteredActualDays > 0 && enteredActualDays !== calculatedActualDays) ? enteredActualDays : calculatedActualDays;
-  const programmeStatus = actualDays <= calculations.siteDays + 0.1 ? "PROJECT COMPLETED ON TIME" : "PROJECT RUN OVER TIME";
-  return { rows, actualCost, actualProfit, actualMargin, actualMarkup, budgetProfit, budgetMargin, budgetMarkup, programmeStatus };
+  const started = Boolean(actuals.completedAt || actuals.startDate || actuals.endDate || actuals.datesRequired || actuals.travelDays || actuals.daysTakenToComplete || rows.some((row) => row.actual !== 0) || actuals.actualPrice !== calculations.proposalTotal);
+  const programmeStatus = !started ? "P&L NOT STARTED" : actualDays <= calculations.siteDays + 0.1 ? "PROJECT COMPLETED ON TIME" : "PROJECT RUN OVER TIME";
+  return { rows, actualCost, actualProfit, actualMargin, actualMarkup, originalBudgetProfit, originalBudgetMargin, originalBudgetMarkup, budgetProfit, budgetMargin, budgetMarkup, programmeStatus, started };
 }
 
 export function searchRowTone(record: { accountsStatus: string; actuals?: PLActuals; calculations: ProjectCalculations }) {

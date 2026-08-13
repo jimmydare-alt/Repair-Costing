@@ -15,6 +15,8 @@ describe("multi-company security helpers", () => {
     expect(hasPermission("company_admin", "company.manage")).toBe(true);
     expect(hasPermission("company_admin", "company.create")).toBe(false);
     expect(hasPermission("super_admin", "company.create")).toBe(true);
+    expect(hasPermission("company_admin", "projects.delete")).toBe(true);
+    expect(hasPermission("manager_editor", "projects.delete")).toBe(false);
   });
 
   it("filters navigation by enabled modules and role permissions", () => {

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import PDFDocument from "pdfkit";
+import { createClient } from "@supabase/supabase-js";
 import type { ProjectRecord } from "@/lib/types";
 import { buildHandoverSummary, type HandoverRow } from "@/lib/handover";
 import { normaliseProjectStatus } from "@/lib/workflow";
@@ -38,19 +39,43 @@ export async function POST(request: Request) {
   if (contentLength > 2_000_000) return NextResponse.json({ error: "The handover request is too large." }, { status: 413 });
   const rawBody = await request.text();
   if (rawBody.length > 2_000_000) return NextResponse.json({ error: "The handover request is too large." }, { status: 413 });
-  let body: { project?: ProjectRecord; companyName?: string; primaryColour?: string };
+  let body: { projectId?: string };
   try {
     body = JSON.parse(rawBody) as typeof body;
   } catch {
     return NextResponse.json({ error: "The handover request is not valid JSON." }, { status: 400 });
   }
-  if (!body.project?.id || !Array.isArray(body.project.calculations?.budgetLines) || !Number.isFinite(body.project.calculations?.budgetCost)) return NextResponse.json({ error: "A valid saved project is required." }, { status: 400 });
-  const project = body.project;
+  if (!body.projectId || body.projectId.length > 200) return NextResponse.json({ error: "A valid saved project is required." }, { status: 400 });
+  const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  if (!token || !url || !key) return NextResponse.json({ error: "An authenticated company session is required." }, { status: 401 });
+  const client = createClient(url, key, { global: { headers: { Authorization: `Bearer ${token}` } }, auth: { persistSession: false, autoRefreshToken: false } });
+  const { data: userData, error: userError } = await client.auth.getUser(token);
+  if (userError || !userData.user) return NextResponse.json({ error: "Your secure session is no longer valid." }, { status: 401 });
+  const { data: projectRow, error: projectError } = await client.from("projects").select("*").eq("id", body.projectId).maybeSingle();
+  if (projectError || !projectRow) return NextResponse.json({ error: "The project was not found or is not available to your company account." }, { status: 404 });
+  const project = {
+    id: String(projectRow.id),
+    companyId: String(projectRow.company_id),
+    createdAt: String(projectRow.created_at),
+    status: projectRow.status,
+    accountsStatus: projectRow.accounts_status,
+    inputs: projectRow.inputs,
+    calculations: projectRow.calculations,
+    actuals: projectRow.actuals,
+    revisions: projectRow.revisions,
+    notes: projectRow.notes,
+    changeLog: projectRow.change_log
+  } as ProjectRecord;
+  if (!Array.isArray(project.calculations?.budgetLines) || !Number.isFinite(project.calculations?.budgetCost)) return NextResponse.json({ error: "The saved project costing is incomplete." }, { status: 409 });
+  const { data: companyRow } = await client.from("companies").select("name,primary_colour").eq("id", project.companyId).maybeSingle();
+  const companyName = String(companyRow?.name ?? "CoGri Group");
   if (!["Costing Complete", "Won", "Handover Issued"].includes(normaliseProjectStatus(project.status))) return NextResponse.json({ error: "Complete the costing before generating a handover." }, { status: 409 });
   const summary = buildHandoverSummary(project);
   const code = project.inputs.quoteCurrency;
-  const primaryColour = /^#[0-9a-f]{6}$/i.test(body.primaryColour ?? "") ? body.primaryColour! : "#b91c1c";
-  const doc = new PDFDocument({ size: "A4", margin: 48, info: { Title: `${project.inputs.projectReference} Project Cost & Delivery Summary`, Author: body.companyName || "CoGri Group" } });
+  const primaryColour = /^#[0-9a-f]{6}$/i.test(String(companyRow?.primary_colour ?? "")) ? String(companyRow?.primary_colour) : "#b91c1c";
+  const doc = new PDFDocument({ size: "A4", margin: 48, info: { Title: `${project.inputs.projectReference} Project Cost & Delivery Summary`, Author: companyName } });
   const chunks: Buffer[] = [];
   doc.on("data", (chunk: Buffer) => chunks.push(chunk));
   const complete = new Promise<Buffer>((resolve, reject) => {
@@ -60,7 +85,7 @@ export async function POST(request: Request) {
 
   doc.rect(0, 0, 595, 86).fill("#181b1a");
   doc.rect(0, 82, 595, 4).fill(primaryColour);
-  doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(18).text(body.companyName || "CoGri Group", 48, 28);
+  doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(18).text(companyName, 48, 28);
   doc.font("Helvetica").fontSize(9).fillColor("#d8ddda").text("PROJECT COST & DELIVERY SUMMARY", 48, 54);
   doc.fillColor("#172033").font("Helvetica-Bold").fontSize(20).text(project.inputs.projectReference || "Unreferenced project", 48, 112);
   doc.font("Helvetica").fontSize(10).fillColor("#536176").text(`${project.inputs.client} | ${project.inputs.location}`);

@@ -491,6 +491,80 @@ describe("FACE GmbH v2 contracting calculations", () => {
     const summary = buildHandoverSummary({ id: "handover", createdAt: "2026-08-09", status: "Costing Complete", accountsStatus: "Not Required", inputs: validationInput, calculations });
     expect(summary.materials.length).toBeGreaterThan(0);
     expect(summary.subcontractors.length).toBeGreaterThan(0);
+    expect(summary.subcontractors.some((row) => /mobilisation$/i.test(row.description))).toBe(false);
     expect(summary.categories.reduce((sum, row) => sum + row.budget, 0)).toBeCloseTo(calculations.budgetCost, 2);
+  });
+
+  it("calculates Type 3 Bondcoat from the repair bottom area only", () => {
+    const base = createRepairLine("Type 3", defaultRepairCatalog);
+    const selected = base.materialSelections.map((item) => item.materialId === "bondcoat-rbp" ? { ...item, selected: true } : item);
+    const standard = calculateRepairLineMaterials({ ...base, lengthM: 60, widthMm: 50, depthMm: 50, materialSelections: selected }, defaultRepairCatalog).find((row) => row.product.includes("Bondcoat"));
+    const wider = calculateRepairLineMaterials({ ...base, lengthM: 60, widthMm: 100, depthMm: 200, materialSelections: selected }, defaultRepairCatalog).find((row) => row.product.includes("Bondcoat"));
+    expect(standard?.unroundedUnits).toBeCloseTo(0.66, 5);
+    expect(wider?.unroundedUnits).toBeCloseTo(1.32, 5);
+    expect(wider?.quantity).toBe(2);
+  });
+
+  it("calculates Type 4 Bondcoat from entered surface area", () => {
+    const base = createRepairLine("Type 4a", defaultRepairCatalog);
+    const selected = base.materialSelections.map((item) => item.materialId === "bondcoat-rbp" ? { ...item, selected: true } : item);
+    const bondcoat = calculateRepairLineMaterials({ ...base, areaM2: 8, thicknessMm: 15, materialSelections: selected }, defaultRepairCatalog).find((row) => row.product.includes("Bondcoat"));
+    expect(bondcoat?.unroundedUnits).toBeCloseTo(1.76, 5);
+    expect(bondcoat?.quantity).toBe(2);
+  });
+
+  it("calculates Type 5b primer over the complete inside of each hole", () => {
+    const base = createRepairLine("Type 5b", defaultRepairCatalog);
+    const selected = base.materialSelections.map((item) => item.materialId === "fastprime-5" ? { ...item, selected: true } : item);
+    const primer = calculateRepairLineMaterials({ ...base, eachQty: 1000, holeDiameterMm: 50, holeDepthMm: 50, materialSelections: selected }, defaultRepairCatalog).find((row) => row.product.includes("FastPrime"));
+    const internalArea = 1000 * (Math.PI * 50 * 50 + Math.PI * 25 * 25) / 1000000;
+    expect(primer?.unroundedUnits).toBeCloseTo (((0.14 * internalArea) / 2) * 1.155 / 5, 5);
+    expect(primer?.quantity).toBe(1);
+  });
+
+  it("uses independent surveyor weekend and night rates", () => {
+    const rates = { ...defaultRates, surveyorWeekendDayRate: 1234, surveyorNightShiftAllowance: 77 };
+    const result = calculateProject({ ...emptyInput, includeGrinding: true, grinding: { ...emptyInput.grinding, enabled: true, estimatedDays: 6, weekendDaysPerWeek: 1, nightShiftRequired: true, surveyorLabourMode: "in_house", surveyorCount: 1, surveyorNightShifts: 2, productionLabourMode: "subcontract", productionSubcontractors: [] } }, rates);
+    expect(result.budgetLines.find((row) => row.item === "Surveyor weekend extra")?.rate).toBe(1234);
+    expect(result.budgetLines.find((row) => row.item === "Surveyor night-shift allowance")?.rate).toBe(77);
+  });
+
+  it("uses per-project shipping markup and reconciles discounts exactly", () => {
+    const result = calculateProject({ ...emptyInput, includeScreeding: true, discountPercentage: 7.25, screeding: { ...emptyInput.screeding, enabled: true, preparationDays: 1, productionLabourMode: "subcontract", surveyorLabourMode: "subcontract", surveyorSubcontractors: [], materialShipping: 100, materialShippingMargin: 0.1, teams: [] }, additionalItems: [{ name: "Extra", rate: 19.99, unit: "item", quantity: 3, margin: 0.27, plCategory: "Equipment" }] }, defaultRates);
+    expect(result.proposalLines.find((row) => row.item === "Shipping of materials")?.originalTotal).toBe(110);
+    expect(result.proposalLines.reduce((sum, row) => sum + row.discount, 0)).toBe(result.discountAmount);
+    expect(result.originalProposalTotal - result.proposalTotal).toBe(result.discountAmount);
+  });
+
+  it("distinguishes an untouched P&L from an in-progress result and preserves both profit views", () => {
+    const calculations = calculateProject(validationInput, defaultRates);
+    const untouched = calculatePL(calculations, defaultActuals(calculations));
+    expect(untouched.started).toBe(false);
+    expect(untouched.programmeStatus).toBe("P&L NOT STARTED");
+    const changed = calculatePL(calculations, { ...defaultActuals(calculations), actualPrice: calculations.proposalTotal + 1000, materials: 500 });
+    expect(changed.started).toBe(true);
+    expect(changed.originalBudgetProfit).toBeCloseTo(calculations.proposalTotal - calculations.budgetCost, 2);
+    expect(changed.budgetProfit).toBeCloseTo(calculations.proposalTotal + 1000 - calculations.budgetCost, 2);
+  });
+
+  it("reconciles line, project and P&L totals across representative rollout projects", () => {
+    const repairLine = { ...createRepairLine("Type 3", defaultRepairCatalog), lengthM: 80, widthMm: 75, depthMm: 60 };
+    const projects = [
+      { ...emptyInput, discountPercentage: 3.75, includeGrinding: true, grinding: { ...emptyInput.grinding, enabled: true, estimatedDays: 5, productionLabourMode: "subcontract" as const, productionSubcontractors: [{ name: "Grinding contractor", priceType: "day" as const, rate: 1800, days: 5, margin: 0.3, mobilisationCost: 500, mobilisations: 1, mobilisationMargin: 0.3 }], surveyorLabourMode: "in_house" as const, surveyorCount: 1, surveyorDays: 5 } },
+      { ...emptyInput, discountPercentage: 6.2, includeScreeding: true, screeding: { ...emptyInput.screeding, enabled: true, preparationDays: 2, screedingDays: 4, grindingDays: 1, productionLabourMode: "both" as const, productionMen: 2, productionLabourDays: 7, surveyorLabourMode: "in_house" as const, surveyors: 1, surveyorDays: 7, screedMaterialBags: 100, screedMaterialRate: 18, materialShipping: 650, materialShippingMargin: 0.18, teams: [{ enabled: true, contractorName: "Screed contractor", scabble: false, prep: true, screed: true, grind: false, mobilisation: 400, mobilisationMargin: 0.3, priceType: "day" as const, daysProgrammed: 6, preparationDays: 2, screedingDays: 4, grindingDays: 0, rate: 1400, margin: 0.3 }] } },
+      { ...emptyInput, discountPercentage: 2.4, includeRepairs: true, repairs: { ...emptyInput.repairs, enabled: true, labourMode: "subcontract" as const, labourDays: 4, repairLines: [repairLine], repairSubcontractors: [{ name: "Repair contractor", priceType: "lump sum" as const, rate: 6200, days: 4, margin: 0.3, mobilisationCost: 0, mobilisations: 0, mobilisationMargin: 0.3 }], haulageItems: [{ name: "Material delivery", rate: 180, unit: "item", quantity: 2, margin: 0.3 }] } }
+    ];
+    projects.forEach((input) => {
+      const calculations = calculateProject(input, defaultRates);
+      expect(calculations.proposalLines.reduce((sum, row) => sum + row.discount, 0)).toBe(calculations.discountAmount);
+      expect(calculations.proposalLines.reduce((sum, row) => sum + row.total, 0)).toBeCloseTo(calculations.proposalTotal, 2);
+      expect(calculations.budgetLines.reduce((sum, row) => sum + row.total, 0)).toBeCloseTo(calculations.budgetCost, 2);
+      calculations.proposalLines.forEach((row) => {
+        expect(row.cost + row.margin).toBeCloseTo(row.originalTotal, 2);
+        expect(row.originalTotal - row.discount).toBeCloseTo(row.total, 2);
+      });
+      const summary = calculatePL(calculations, defaultActuals(calculations));
+      expect(summary.rows.reduce((sum, row) => sum + row.budget, 0)).toBeCloseTo(calculations.budgetCost, 2);
+    });
   });
 });

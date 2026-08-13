@@ -94,6 +94,7 @@ export type GrindingScope = {
   grindingSegmentsRequired: boolean;
   consumablesRequired: boolean;
   equipmentShipping: number;
+  equipmentShippingMargin: number;
   additionalTools: AdditionalItem[];
 };
 
@@ -165,6 +166,7 @@ export type ScreedScope = {
   sandRate: number;
   sandMargin: number;
   materialShipping: number;
+  materialShippingMargin: number;
   teams: ScreedTeam[];
   generatorDays: number;
   largeGeneratorRequired: boolean;
@@ -179,6 +181,7 @@ export type ScreedScope = {
   grindingSegmentsRequired: boolean;
   consumablesRequired: boolean;
   equipmentShipping: number;
+  equipmentShippingMargin: number;
 };
 
 export type RepairMaterialInput = {
@@ -364,6 +367,8 @@ export type AdminRates = {
   productionNightShiftAllowance: number;
   surveyorDayRate: number;
   surveyorTravelDayRate: number;
+  surveyorWeekendDayRate: number;
+  surveyorNightShiftAllowance: number;
   otherInternalTravelDayRate: number;
   labourerDayRate: number;
   weekendDayRate: number;
@@ -391,6 +396,7 @@ export type AdminRates = {
   flightMargin: number;
   equipmentMargin: number;
   materialMargin: number;
+  shippingMargin: number;
   grindingSmallGeneratorDayRate: number;
   grindingGrinderDayRate: number;
   grindingPlanerDayRate: number;
@@ -494,6 +500,8 @@ export type ProjectCalculations = {
   budgetGroupCurrency: number;
   dailyRate: number;
   mobilisationRate: number;
+  travelTotal: number;
+  haulageTotal: number;
   standbyRate: number;
 };
 
@@ -534,10 +542,14 @@ export type PLSummary = {
   actualProfit: number;
   actualMargin: number;
   actualMarkup: number;
+  originalBudgetProfit: number;
+  originalBudgetMargin: number;
+  originalBudgetMarkup: number;
   budgetProfit: number;
   budgetMargin: number;
   budgetMarkup: number;
   programmeStatus: string;
+  started: boolean;
 };
 
 export type QuoteRevision = {

@@ -1,8 +1,11 @@
 # Supabase Setup
 
-Run the SQL files in `supabase/migrations` in filename order. If migrations 001 through 005 have already been run, only run the newest migration:
+Run the SQL files in `supabase/migrations` in filename order. If migrations 001 through 005 have already been run, run both remaining migrations in order:
 
 - `006_rollout_workflow_and_accounts.sql`
+- `007_rollout_defaults_and_project_deletion.sql`
+
+Migration 006 restores transactional P&L/admin saves. Migration 007 assigns each ordinary user a permanent company, retains all-company access for super admins and adds administrator-only project deletion.
 
 Supabase project supplied for this app:
 
