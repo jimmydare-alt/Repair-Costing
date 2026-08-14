@@ -48,8 +48,13 @@ function companyFromRow(row: Record<string, unknown>): Company {
 }
 
 async function loadCompanies(client: SupabaseClient, userId: string) {
-  const { data: profile } = await client.from("profiles").select("is_super_admin,status,default_company_id").eq("id", userId).maybeSingle();
-  const defaultCompanyId = profile?.default_company_id ? String(profile.default_company_id) : "";
+  const profileResult = await client.from("profiles").select("is_super_admin,status,default_company_id").eq("id", userId).maybeSingle();
+  // Keep existing accounts usable while the default-company migration is being rolled out.
+  const legacyProfileResult = profileResult.error
+    ? await client.from("profiles").select("is_super_admin,status").eq("id", userId).maybeSingle()
+    : null;
+  const profile = profileResult.data ?? legacyProfileResult?.data;
+  const defaultCompanyId = profileResult.data?.default_company_id ? String(profileResult.data.default_company_id) : "";
   if (profile?.status && profile.status !== "active") return { companies: [], role: "viewer" as MembershipRole, modules: [] as AppModuleKey[], defaultCompanyId };
   const superAdmin = Boolean(profile?.is_super_admin);
   if (superAdmin) {
