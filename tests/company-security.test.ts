@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { approvedBrandVariables, contrastRatio, isWcagAaText, validateLogoFile } from "@/lib/branding";
-import { convertCurrency, enabledNavigation, hasPermission, normaliseCurrency } from "@/lib/company";
+import { canSelectCompany, convertCurrency, enabledNavigation, hasPermission, normaliseCurrency } from "@/lib/company";
 import { allowedStatusTransitions, normaliseProjectStatus, statusIsLocked } from "@/lib/workflow";
 import { resolveEnabledModuleKeys } from "@/lib/authContext";
 
@@ -59,6 +60,19 @@ describe("multi-company security helpers", () => {
     expect(hasPermission("accounts", "pl.update")).toBe(true);
     expect(hasPermission("accounts", "projects.update")).toBe(false);
     expect(hasPermission("accounts", "rates.update")).toBe(false);
+  });
+
+  it("refuses a company switch to an ID that secure company loading did not return", () => {
+    expect(canSelectCompany(["company-a"], "company-a")).toBe(true);
+    expect(canSelectCompany(["company-a"], "company-b")).toBe(false);
+  });
+
+  it("keeps the live tenant-isolation migration fail closed", () => {
+    const migration = readFileSync("supabase/migrations/009_company_distance_and_tenant_isolation.sql", "utf8");
+    expect(migration).toContain("profile.default_company_id = target_company_id");
+    expect(migration).toContain("revoke execute on function public.bootstrap_super_admin(text) from anon, authenticated");
+    expect(migration).toContain("foreign key (project_id, company_id) references public.projects(id, company_id)");
+    expect(migration).toContain("Only a super admin can change a permanent company assignment");
   });
 
   it("normalises legacy quotes and locks completed costings", () => {

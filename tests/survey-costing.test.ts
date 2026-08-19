@@ -3,7 +3,7 @@ import { calculatePL, defaultActuals } from "@/lib/calculations";
 import { calculateSurveyDayRequirement, calculateSurveyProject, calculateSurveySiteDays } from "@/lib/costing/survey/calculations";
 import { createEmptySurveyInput, defaultSurveyRates } from "@/lib/costing/survey/defaults";
 import { createSurveyProjectInput } from "@/lib/costing/survey/project";
-import { defaultCompanies } from "@/lib/company";
+import { defaultCompanies, distanceRateUnit, distanceUnitCopy } from "@/lib/company";
 import { projectToRow, rowToProject } from "@/lib/storage";
 import { defaultRates } from "@/lib/rates";
 import type { ProjectRecord } from "@/lib/types";
@@ -134,7 +134,9 @@ describe("separate Survey costing module", () => {
     const result = calculateSurveyProject(projectInput.survey!, defaultSurveyRates);
     expect(projectInput.distanceUnit).toBe("miles");
     expect(projectInput.survey?.distanceUnit).toBe("miles");
-    expect(result.proposalLines.find((line) => line.item === "Mileage")?.unit).toBe("miles");
+    expect(result.proposalLines.find((line) => line.item === "Mileage")?.unit).toBe("mile");
+    expect(distanceRateUnit("km")).toBe("km");
+    expect(distanceUnitCopy("miles").plural).toBe("miles");
   });
 
   it("keeps Survey and Remedial defaults separate", () => {

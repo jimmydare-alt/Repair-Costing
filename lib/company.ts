@@ -4,6 +4,20 @@ export type MembershipStatus = "invited" | "active" | "suspended" | "archived";
 export type CurrencyCode = "EUR" | "GBP" | "PLN" | "USD";
 export type DistanceUnit = "km" | "miles";
 
+export function distanceUnitCopy(unit: DistanceUnit) {
+  return unit === "miles"
+    ? { short: "miles", singular: "mile", plural: "miles" }
+    : { short: "km", singular: "kilometre", plural: "kilometres" };
+}
+
+export function distanceRateUnit(unit: DistanceUnit) {
+  return unit === "miles" ? "mile" : "km";
+}
+
+export function canSelectCompany(companyIds: string[], companyId: string) {
+  return companyIds.includes(companyId);
+}
+
 export type AppModuleKey =
   | "dashboard"
   | "projects"

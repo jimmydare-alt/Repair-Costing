@@ -11,7 +11,7 @@ import { defaultRates, emptyInput } from "@/lib/rates";
 import { createRepairLine, defaultRepairCatalog, repairTypeByCode, validateRepairCatalog } from "@/lib/repairCatalog";
 import { addProjectNote, addProjectTimeEntry, deleteProject, loadProjects, loadRates, loadRepairCatalog, recordProjectHandover, saveActuals, saveAdminData, saveProject, setStorageContext, updateProjectWorkflow } from "@/lib/storage";
 import { useAuth } from "@/lib/authContext";
-import { hasPermission } from "@/lib/company";
+import { distanceUnitCopy, hasPermission } from "@/lib/company";
 import { createBrowserSupabaseClient } from "@/lib/supabaseClient";
 import { allowedStatusTransitions, normaliseProjectStatus, statusIsLocked } from "@/lib/workflow";
 import { buildHandoverSummary } from "@/lib/handover";
@@ -661,7 +661,9 @@ function CompanyAdminView() {
       branding_updated_at: new Date().toISOString()
     }).eq("id", auth.activeCompany.id);
     if (error) {
-      setMessage(error.message);
+      setMessage(error.message.includes("distance_unit")
+        ? "Distance units are not enabled in the live database yet. Apply Supabase migrations 008 and 009, then save again."
+        : error.message);
       return;
     }
     await auth.refreshCompanies();
@@ -758,6 +760,9 @@ function CompanyAdminView() {
           <Select label="Default Currency" value={defaultCurrency} options={["EUR", "GBP", "PLN", "USD"]} onChange={(value) => setDefaultCurrency(value as CurrencyCode)} />
           <Select label="Reporting Currency" value={reportingCurrency} options={["EUR", "GBP", "PLN", "USD"]} onChange={(value) => setReportingCurrency(value as CurrencyCode)} />
           <Select label="Distance Unit" value={distanceUnit} options={["km", "miles"]} onChange={(value) => setDistanceUnit(value as DistanceUnit)} disabled={!canManageModules} />
+          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600 lg:col-span-2">
+            New costings will use {distanceUnitCopy(distanceUnit).plural}. Per-distance rate labels will change to &quot;per {distanceUnitCopy(distanceUnit).singular}&quot;. Existing saved costings retain their recorded unit and pricing snapshot; rate values are not converted automatically.
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <Text label="Primary Colour" value={primaryColour} onChange={setPrimaryColour} />
             <Text label="Accent Colour" value={accentColour} onChange={setAccentColour} />
@@ -2515,6 +2520,7 @@ function ProjectTable({ projects, open, edit }: { projects: ProjectRecord[]; ope
 
 function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, adminTab, setAdminTab, save }: { rates: AdminRates; setRates: (rates: AdminRates) => void; repairCatalog: RepairCatalog; setRepairCatalog: (catalog: RepairCatalog) => void; adminTab: AdminTab; setAdminTab: (tab: AdminTab) => void; save: () => void }) {
   const auth = useAuth();
+  const distanceCopy = distanceUnitCopy(auth.activeCompany.distanceUnit);
   const [pendingRule, setPendingRule] = useState<Record<string, string>>({});
   const [adminSearch, setAdminSearch] = useState("");
   if (adminTab === "Survey Rates") return <SurveyRatesAdmin rates={normaliseSurveyRates(rates.surveyRates)} distanceUnit={auth.activeCompany.distanceUnit} onChange={(surveyRates) => setRates({ ...rates, surveyRates })} onSave={save} />;
@@ -2670,14 +2676,14 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, admi
             </div>
             <RateSection
               title="Travel, Hotel & Subsistence"
-              description="Shared movement, accommodation and daily allowance rates for workers and surveyors. Distance rates are in kilometres."
+              description={`Shared movement, accommodation and daily allowance rates for workers and surveyors. Distance rates are per ${distanceCopy.singular}.`}
               badges={["Shared", "Travel"]}
               rates={rates}
               onRateChange={updateRate}
               onMarginChange={updateMarginRate}
               onItemMarginChange={updateItemMargin}
               fields={[
-                { key: "mileagePerKm", label: "Mileage / km", suffix: "/ km" },
+                { key: "mileagePerKm", label: `Mileage / ${distanceCopy.singular}`, suffix: `/ ${distanceCopy.singular}` },
                 { key: "returnFlight", label: "Return Flight", suffix: "/ flight" },
                 { key: "hotel", label: "Hotel", suffix: "/ night" },
                 { key: "subsistence", label: "Subsistence", suffix: "/ day" },
@@ -2748,7 +2754,7 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, admi
               onMarginChange={updateMarginRate}
               onItemMarginChange={updateItemMargin}
               fields={[
-                { key: "repairFuelPerKm", label: "Repair Fuel / km", suffix: "/ km" }
+                { key: "repairFuelPerKm", label: `Repair Fuel / ${distanceCopy.singular}`, suffix: `/ ${distanceCopy.singular}` }
               ]}
             />
           </div>

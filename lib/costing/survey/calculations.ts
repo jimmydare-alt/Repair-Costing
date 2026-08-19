@@ -1,4 +1,5 @@
 import type { Line, PLCategory, ProjectCalculations, Section } from "../../types";
+import { distanceRateUnit } from "../../company";
 import { defaultSurveyRates, normaliseSurveyRates } from "./defaults";
 import type { SurveyAdminRates, SurveyCalculationResult, SurveyInput } from "./types";
 import { isSurveyQuantityActive } from "./rules";
@@ -94,7 +95,7 @@ export function calculateSurveyProject(input: SurveyInput, savedRates?: Partial<
     proposalLine("Labour", "Surveyor Travel", rates.surveyorTravelBudgetDayRate, "day", surveyorTravelDays, rates.surveyorTravelMarkup, "Labour"),
     proposalLine("Labour", "Labourer Travel", rates.labourerTravelBudgetDayRate, "day", labourerTravelDays, rates.labourerTravelMarkup, "Labour"),
     proposalLine("Labour", "Project Manager Travel", rates.projectManagerTravelBudgetDayRate, "day", pmTravelDays, rates.projectManagerTravelMarkup, "Labour"),
-    proposalLine("Travel", input.distanceUnit === "miles" ? "Mileage" : "Kilometres", rates.distanceBudgetRate, input.distanceUnit, distance, rates.distanceMarkup, "Travel"),
+    proposalLine("Travel", input.distanceUnit === "miles" ? "Mileage" : "Kilometres", rates.distanceBudgetRate, distanceRateUnit(input.distanceUnit), distance, rates.distanceMarkup, "Travel"),
     proposalLine("Travel", "Return Flight", rates.returnFlightBudgetRate, "flight", flights, rates.returnFlightMarkup, "Travel"),
     proposalLine("Travel", "Return Airport Transfer", rates.airportUberBudgetRate, "return", airportReturns, rates.airportTransportMarkup, "Travel"),
     proposalLine("Travel", "Airport Parking", rates.airportParkingBudgetDayRate, "day", airportDays, rates.airportTransportMarkup, "Travel"),

@@ -2,7 +2,7 @@ alter table public.companies
 add column if not exists distance_unit text not null default 'km'
 check (distance_unit in ('km', 'miles'));
 
-update public.companies set distance_unit = 'miles' where lower(name) = 'cogri group';
+update public.companies set distance_unit = 'miles' where lower(name) in ('cogri group', 'cogri usa');
 update public.companies set distance_unit = 'km' where lower(name) = 'face gmbh';
 
 insert into public.app_modules (module_key, name, description)

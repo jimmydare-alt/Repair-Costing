@@ -1,4 +1,5 @@
 import { defaultRepairCatalog, materialById, repairTypeByCode } from "./repairCatalog";
+import { distanceRateUnit } from "./company";
 import type { AdminRates, Line, MaterialCalc, PLActuals, PLCategory, PLSummary, ProjectCalculations, ProjectInput, ProjectServiceKey, RepairCatalog, RepairLineItem, RepairMaterial, RepairTypeMaterialRule, Section } from "./types";
 
 const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
@@ -252,14 +253,14 @@ function grindingLines(input: ProjectInput, rates: AdminRates) {
     line("Labour", "Surveyor weekend extra", rates.surveyorWeekendDayRate, "surveyor day", useSurveyorInHouse ? surveyorCount * weekendDaysForProgramme(surveyorDays, 5, g.weekendDaysPerWeek) : 0, rateMargin(rates, "surveyorWeekendDayRate", rates.defaultMargin), "Grinding surveyor weekend allowance"),
     line("Labour", "Surveyor night-shift allowance", rates.surveyorNightShiftAllowance, "surveyor night", useSurveyorInHouse && g.nightShiftRequired ? surveyorCount * num(g.surveyorNightShifts) : 0, rateMargin(rates, "surveyorNightShiftAllowance", rates.defaultMargin), "Grinding surveyor night shift allowance"),
     line("Travel", "Surveyor travel", rates.surveyorTravelDayRate, "surveyor day", useSurveyorInHouse ? surveyorCount * num(g.surveyorTravelDays) : 0, rateMargin(rates, "surveyorTravelDayRate", 0), "Grinding surveyor travel days"),
-    line("Travel", "Surveyor mileage", rates.mileagePerKm, input.distanceUnit, useSurveyorInHouse ? surveyorKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Grinding surveyor one-way distance x 2 x vehicles"),
+    line("Travel", "Surveyor mileage", rates.mileagePerKm, distanceRateUnit(input.distanceUnit), useSurveyorInHouse ? surveyorKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Grinding surveyor one-way distance x 2 x vehicles"),
     line("Hotel", "Surveyor hotel", rates.hotel, "night", useSurveyorInHouse ? surveyorHotelNights : 0, rateMargin(rates, "hotel", rates.hotelMargin), "Grinding surveyor hotel nights x surveyors"),
     line("Subsistence", "Surveyor subsistence", rates.subsistence, "day", useSurveyorInHouse ? surveyorHotelNights : 0, rateMargin(rates, "subsistence", rates.subsistenceMargin), "Grinding surveyor subsistence follows hotel nights"),
     line("Labour", "Grinding production labour", rates.productionLabourDayRate, "man day", useProductionInHouse ? productionMen * productionDays : 0, rateMargin(rates, "productionLabourDayRate", rates.defaultMargin), "Grinding production labour"),
     line("Labour", "Grinding production weekend extra", rates.productionWeekendDayRate, "man day", useProductionInHouse ? productionMen * weekendDaysForProgramme(productionDays, 5, g.weekendDaysPerWeek) : 0, rateMargin(rates, "productionWeekendDayRate", rates.defaultMargin), "Grinding production weekend allowance"),
     line("Labour", "Grinding production night-shift allowance", rates.productionNightShiftAllowance, "man night", useProductionInHouse && g.nightShiftRequired ? productionMen * num(g.productionNightShifts) : 0, rateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin), "Grinding production night shift allowance"),
     line("Travel", "Grinding production travel", rates.productionLabourTravelDayRate, "man day", useProductionInHouse ? productionMen * num(g.productionTravelDays) : 0, rateMargin(rates, "productionLabourTravelDayRate", rates.travelMargin), "Grinding production travel days"),
-    line("Travel", "Grinding production mileage", rates.mileagePerKm, input.distanceUnit, useProductionInHouse ? productionKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Grinding production one-way distance x 2 x vehicles"),
+    line("Travel", "Grinding production mileage", rates.mileagePerKm, distanceRateUnit(input.distanceUnit), useProductionInHouse ? productionKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Grinding production one-way distance x 2 x vehicles"),
     line("Hotel", "Grinding hotel production", rates.hotel, "night", useProductionInHouse ? productionHotelNights : 0, rateMargin(rates, "hotel", rates.hotelMargin), "Grinding production hotel nights x men"),
     line("Subsistence", "Grinding subsistence production", rates.subsistence, "day", useProductionInHouse ? productionHotelNights : 0, rateMargin(rates, "subsistence", rates.subsistenceMargin), "Grinding production subsistence follows hotel nights"),
     line("Reports", "Engineering report", rates.engineeringReport, "item", useSurveyorInHouse && g.engineeringReport ? 1 : 0, rateMargin(rates, "engineeringReport", 0), "Grinding engineering report")
@@ -324,7 +325,7 @@ function screedLines(input: ProjectInput, rates: AdminRates) {
     line("Labour", "Screed surveyor weekend extra", rates.surveyorWeekendDayRate, "surveyor day", useSurveyorInHouse ? surveyors * weekendDaysForProgramme(surveyorDays, 5, s.weekendDaysPerWeek) : 0, rateMargin(rates, "surveyorWeekendDayRate", rates.defaultMargin), "Screed surveyor weekend allowance"),
     line("Labour", "Screed surveyor night-shift allowance", rates.surveyorNightShiftAllowance, "surveyor night", useSurveyorInHouse && s.nightShiftRequired ? surveyors * num(s.surveyorNightShifts) : 0, rateMargin(rates, "surveyorNightShiftAllowance", rates.defaultMargin), "Screed surveyor night shift allowance"),
     line("Travel", "Screed surveyor travel", rates.surveyorTravelDayRate, "surveyor day", useSurveyorInHouse ? surveyors * num(s.surveyorTravelDays) : 0, rateMargin(rates, "surveyorTravelDayRate", 0), "Screed surveyor travel days"),
-    line("Travel", "Screed surveyor mileage", rates.mileagePerKm, input.distanceUnit, useSurveyorInHouse ? surveyorKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Screed surveyor one-way distance x 2 x vehicles"),
+    line("Travel", "Screed surveyor mileage", rates.mileagePerKm, distanceRateUnit(input.distanceUnit), useSurveyorInHouse ? surveyorKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Screed surveyor one-way distance x 2 x vehicles"),
     line("Hotel", "Screed surveyor hotel", rates.hotel, "night", useSurveyorInHouse ? surveyorHotelNights : 0, rateMargin(rates, "hotel", rates.hotelMargin), "Screed surveyor hotel nights x surveyors"),
     line("Subsistence", "Screed surveyor subsistence", rates.subsistence, "day", useSurveyorInHouse ? surveyorHotelNights : 0, rateMargin(rates, "subsistence", rates.subsistenceMargin), "Screed surveyor subsistence follows hotel nights"),
     line("Reports", "Screed engineering report", rates.engineeringReport, "item", useSurveyorInHouse && s.engineeringReport ? 1 : 0, rateMargin(rates, "engineeringReport", 0), "Screed engineering report"),
@@ -332,7 +333,7 @@ function screedLines(input: ProjectInput, rates: AdminRates) {
     line("Labour", "Screed production weekend extra", rates.productionWeekendDayRate, "man day", useProductionInHouse ? productionMen * weekendDaysForProgramme(productionDays, 5, s.weekendDaysPerWeek) : 0, rateMargin(rates, "productionWeekendDayRate", rates.defaultMargin), "Screed production weekend allowance"),
     line("Labour", "Screed production night-shift allowance", rates.productionNightShiftAllowance, "man night", useProductionInHouse && s.nightShiftRequired ? productionMen * num(s.productionNightShifts) : 0, rateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin), "Screed production night shift allowance"),
     line("Travel", "Screed production travel", rates.productionLabourTravelDayRate, "man day", useProductionInHouse ? productionMen * num(s.productionTravelDays) : 0, rateMargin(rates, "productionLabourTravelDayRate", rates.travelMargin), "Screed production travel days"),
-    line("Travel", "Screed production mileage", rates.mileagePerKm, input.distanceUnit, useProductionInHouse ? productionKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Screed production one-way distance x 2 x vehicles"),
+    line("Travel", "Screed production mileage", rates.mileagePerKm, distanceRateUnit(input.distanceUnit), useProductionInHouse ? productionKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Screed production one-way distance x 2 x vehicles"),
     line("Hotel", "Screed production hotel", rates.hotel, "night", useProductionInHouse ? productionHotelNights : 0, rateMargin(rates, "hotel", rates.hotelMargin), "Screed production hotel nights x men"),
     line("Subsistence", "Screed production subsistence", rates.subsistence, "day", useProductionInHouse ? productionHotelNights : 0, rateMargin(rates, "subsistence", rates.subsistenceMargin), "Screed production subsistence follows hotel nights")
   ];
@@ -394,7 +395,7 @@ function repairLines(input: ProjectInput, rates: AdminRates, materialCalcs: Mate
     line("Travel", "Repair production travel", rates.productionLabourTravelDayRate, "man day", useInHouse ? inHouseMen * r.travelDays : 0, rateMargin(rates, "productionLabourTravelDayRate", rates.travelMargin), "In-house repair mobilisation"),
     line("Hotel", "Repair hotel", rates.hotel, "room night", useInHouse ? hotelRoomNights : 0, rateMargin(rates, "hotel", rates.hotelMargin), "Hotel nights per team x in-house men"),
     line("Subsistence", "Repair subsistence", rates.subsistence, "day", useInHouse ? hotelRoomNights : 0, rateMargin(rates, "subsistence", rates.subsistenceMargin), "Follows hotel nights: nights per team x in-house men"),
-    line("Travel", "Repair fuel", rates.repairFuelPerKm, input.distanceUnit, useInHouse ? mobilisationKm : 0, rateMargin(rates, "repairFuelPerKm", rates.travelMargin), "One-way distance x 2 x vehicles")
+    line("Travel", "Repair fuel", rates.repairFuelPerKm, distanceRateUnit(input.distanceUnit), useInHouse ? mobilisationKm : 0, rateMargin(rates, "repairFuelPerKm", rates.travelMargin), "One-way distance x 2 x vehicles")
   ];
   if (useSubcontract) {
     r.repairSubcontractors.forEach((item) => {
@@ -417,7 +418,7 @@ function projectManagementLines(input: ProjectInput, rates: AdminRates) {
   return [
     line("Labour", "Project manager", rates.projectManagerDayRate, "day", num(pm.days), rateMargin(rates, "projectManagerDayRate", rates.defaultMargin), "Whole-project management"),
     line("Travel", "Project manager travel days", rates.otherInternalTravelDayRate, "day", num(pm.travelDays), rateMargin(rates, "otherInternalTravelDayRate", rates.travelMargin), "Whole-project management travel"),
-    line("Travel", "Project manager mileage", rates.mileagePerKm, input.distanceUnit, drive ? num(pm.oneWayKm) * 2 * Math.max(0, num(pm.vehicles)) * visits : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "One-way distance x 2 x vehicles x visits"),
+    line("Travel", "Project manager mileage", rates.mileagePerKm, distanceRateUnit(input.distanceUnit), drive ? num(pm.oneWayKm) * 2 * Math.max(0, num(pm.vehicles)) * visits : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "One-way distance x 2 x vehicles x visits"),
     line("Travel", "Project manager return flights", rates.returnFlight, "flight", fly ? num(pm.returnFlights) : 0, rateMargin(rates, "returnFlight", rates.flightMargin), "Whole-project management flights"),
     line("Hotel", "Project manager hotel", rates.hotel, "night", num(pm.hotelNights), rateMargin(rates, "hotel", rates.hotelMargin), "Whole-project management hotel"),
     line("Subsistence", "Project manager subsistence", rates.subsistence, "day", num(pm.hotelNights), rateMargin(rates, "subsistence", rates.subsistenceMargin), "Subsistence follows PM hotel nights")

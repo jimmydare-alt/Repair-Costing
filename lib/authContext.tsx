@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import { approvedBrandVariables } from "./branding";
 import { createBrowserSupabaseClient, isSupabaseConfigured } from "./supabaseClient";
-import { defaultCompanies, enabledNavigation, type AppModuleKey, type Company, type MembershipRole } from "./company";
+import { canSelectCompany, defaultCompanies, enabledNavigation, type AppModuleKey, type Company, type MembershipRole } from "./company";
 
 type AuthState = {
   loading: boolean;
@@ -225,10 +225,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (client) await client.auth.signOut();
     },
     switchCompany: (companyId: string) => {
+      if (!canSelectCompany(companies.map((company) => company.id), companyId)) return;
       const switchToken = ++companySwitchToken.current;
       setActiveCompanyId(companyId);
       if (typeof document !== "undefined") document.cookie = `active_company_id=${companyId}; path=/; SameSite=Lax`;
-      if (client && session?.user && role !== "super_admin") void client.rpc("set_default_company", { target_company_id: companyId });
       if (client && session?.user) void loadRoleForCompany(client, session.user.id, companyId, role).then(async (nextRole) => {
         const nextModules = await loadCompanyModules(client, companyId, nextRole);
         if (switchToken !== companySwitchToken.current) return;

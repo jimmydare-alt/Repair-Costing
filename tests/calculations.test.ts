@@ -434,6 +434,13 @@ describe("FACE GmbH v2 contracting calculations", () => {
     expect(result.budgetLines.find((line) => line.item === "Project manager subsistence")?.quantity).toBe(2);
   });
 
+  it("uses a per-mile rate unit without changing the entered distance quantity", () => {
+    const result = calculateProject({ ...emptyInput, distanceUnit: "miles", projectManagement: { ...emptyInput.projectManagement, enabled: true, days: 1, visits: 2, travelMode: "Drive", oneWayKm: 100, vehicles: 1 } }, defaultRates);
+    const mileage = result.budgetLines.find((line) => line.item === "Project manager mileage");
+    expect(mileage?.unit).toBe("mile");
+    expect(mileage?.quantity).toBe(400);
+  });
+
   it("calculates site days from dates minus travel days and supports programme status", () => {
     const calculations = calculateProject(validationInput, defaultRates);
     const actuals = { ...defaultActuals(calculations), startDate: "2026-08-03", endDate: "2026-08-09", saturdayWorked: true, sundayWorked: false, travelDays: 1, daysTakenToComplete: 0 };
