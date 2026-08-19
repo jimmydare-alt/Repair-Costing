@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import AuthShell from "./auth-shell";
+import { Analytics } from '@vercel/analytics/next';
 
 export const metadata: Metadata = {
   title: "FACE GmbH Contracting Costing",
@@ -10,7 +11,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body><AuthShell>{children}</AuthShell></body>
+      <body>
+        <AuthShell>{children}</AuthShell>
+        <Analytics />
+      </body>
     </html>
   );
 }
