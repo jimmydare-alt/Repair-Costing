@@ -452,6 +452,10 @@ button:disabled, .ds-button:disabled, .primary-button:disabled, .secondary-butto
 .command-context b { font-size: 14px; letter-spacing: -.02em; }
 .command-context small { max-width: 62vw; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .command-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; }
+.module-switch { display: flex; min-height: 38px; padding: 3px; border: 1px solid #d8dedb; border-radius: 10px; background: #f4f6f5; }
+.module-switch button { min-height: 30px; padding: 0 11px; border: 0; border-radius: 7px; background: transparent; color: #64706a; font-size: 11px; font-weight: 800; }
+.module-switch button.active { background: #fff; color: var(--brand-primary); box-shadow: 0 2px 8px rgba(15,23,42,.1); }
+.module-single { display: inline-flex; min-height: 38px; align-items: center; padding: 0 12px; border-radius: 9px; background: #f1f4f2; color: #52605a; font-size: 11px; font-weight: 800; }
 .command-chip, .command-new {
   min-height: 38px;
   display: inline-flex;
@@ -514,6 +518,7 @@ button:disabled, .ds-button:disabled, .primary-button:disabled, .secondary-butto
   .command-context { margin-right: auto; }
   .command-context span { display: none; }
   .command-select { display: none; }
+  .module-switch, .module-single { display: none; }
   .command-chip { display: none; }
   .sidebar-account { display: grid; gap: 9px; margin: 0 12px 10px; padding: 12px; border: 1px solid rgba(255,255,255,.08); border-radius: 12px; background: rgba(255,255,255,.04); }
   .sidebar-account label { display: grid; gap: 5px; color: #aeb5b0; font-size: 10px; font-weight: 800; text-transform: uppercase; }

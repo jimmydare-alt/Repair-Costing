@@ -33,6 +33,7 @@ function companyFromRow(row: Record<string, unknown>): Company {
     defaultCurrency: row.default_currency === "GBP" || row.default_currency === "PLN" || row.default_currency === "USD" ? row.default_currency : "EUR",
     reportingCurrency: row.reporting_currency === "GBP" || row.reporting_currency === "PLN" || row.reporting_currency === "USD" ? row.reporting_currency : "EUR",
     allowedCurrencies: Array.isArray(row.allowed_currencies) ? row.allowed_currencies.filter((item): item is "EUR" | "GBP" | "PLN" | "USD" => ["EUR", "GBP", "PLN", "USD"].includes(String(item))) : ["EUR"],
+    distanceUnit: row.distance_unit === "miles" ? "miles" : "km",
     isSuperAdminCompany: Boolean(row.is_super_admin_company),
     branding: {
       logoPath: row.logo_path ? String(row.logo_path) : null,
@@ -91,22 +92,29 @@ async function loadCompanyModules(client: SupabaseClient, companyId: string, rol
   const { data } = await client
     .from("company_modules")
     .select("enabled,app_modules(module_key)")
-    .eq("company_id", companyId)
-    .eq("enabled", true);
-  const modules = (data ?? [])
-    .map((row: any) => row.app_modules?.module_key)
+    .eq("company_id", companyId);
+  return resolveEnabledModuleKeys(data ?? [], role);
+}
+
+export function resolveEnabledModuleKeys(moduleRows: Array<{ enabled: boolean; app_modules?: { module_key?: string } | Array<{ module_key?: string }> | null }>, role: MembershipRole): AppModuleKey[] {
+  const moduleKey = (row: typeof moduleRows[number]) => Array.isArray(row.app_modules) ? row.app_modules[0]?.module_key : row.app_modules?.module_key;
+  const modules = moduleRows
+    .filter((row) => row.enabled)
+    .map(moduleKey)
     .filter((key: unknown): key is AppModuleKey => typeof key === "string");
-  const enabled = modules.length ? modules : defaultModulesForRole(role);
+  const knownKeys = moduleRows.map(moduleKey);
+  const migrationDefaults: AppModuleKey[] = ["survey_costing", "remedial_costing"];
+  const enabled = moduleRows.length ? [...modules, ...migrationDefaults.filter((key) => !knownKeys.includes(key))] : defaultModulesForRole(role);
   if (role === "super_admin" && !enabled.includes("company_admin")) return [...enabled, "company_admin"];
   return enabled;
 }
 
 function defaultModulesForRole(role: MembershipRole): AppModuleKey[] {
-  if (role === "viewer") return ["dashboard", "projects", "reports"];
-  if (role === "reviewer") return ["dashboard", "projects", "reports"];
-  if (role === "accounts") return ["dashboard", "projects", "reports"];
-  if (role === "manager_editor") return ["dashboard", "projects", "calculations", "reports", "exports", "time_tracking"];
-  return ["dashboard", "projects", "calculations", "reports", "admin_rates", "repair_database", "exports", "time_tracking", "company_admin"];
+  if (role === "viewer") return ["dashboard", "projects", "reports", "survey_costing", "remedial_costing"];
+  if (role === "reviewer") return ["dashboard", "projects", "reports", "survey_costing", "remedial_costing"];
+  if (role === "accounts") return ["dashboard", "projects", "reports", "survey_costing", "remedial_costing"];
+  if (role === "manager_editor") return ["dashboard", "projects", "calculations", "reports", "exports", "time_tracking", "survey_costing", "remedial_costing"];
+  return ["dashboard", "projects", "calculations", "reports", "admin_rates", "repair_database", "exports", "time_tracking", "company_admin", "survey_costing", "remedial_costing"];
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {

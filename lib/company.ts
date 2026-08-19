@@ -2,6 +2,7 @@ export type CompanyStatus = "active" | "suspended" | "archived";
 export type MembershipRole = "super_admin" | "company_admin" | "manager_editor" | "accounts" | "reviewer" | "viewer";
 export type MembershipStatus = "invited" | "active" | "suspended" | "archived";
 export type CurrencyCode = "EUR" | "GBP" | "PLN" | "USD";
+export type DistanceUnit = "km" | "miles";
 
 export type AppModuleKey =
   | "dashboard"
@@ -12,7 +13,9 @@ export type AppModuleKey =
   | "repair_database"
   | "exports"
   | "time_tracking"
-  | "company_admin";
+  | "company_admin"
+  | "survey_costing"
+  | "remedial_costing";
 
 export type Permission =
   | "company.create"
@@ -51,6 +54,7 @@ export type Company = {
   defaultCurrency: CurrencyCode;
   reportingCurrency: CurrencyCode;
   allowedCurrencies: CurrencyCode[];
+  distanceUnit: DistanceUnit;
   isSuperAdminCompany: boolean;
   branding: CompanyBranding;
 };
@@ -110,6 +114,7 @@ export const defaultCompanies: Company[] = [
     defaultCurrency: "GBP",
     reportingCurrency: "GBP",
     allowedCurrencies: ["GBP", "EUR", "PLN", "USD"],
+    distanceUnit: "miles",
     isSuperAdminCompany: true,
     branding: {
       primaryColour: "#b91c1c",
@@ -128,6 +133,7 @@ export const defaultCompanies: Company[] = [
     defaultCurrency: "EUR",
     reportingCurrency: "EUR",
     allowedCurrencies: ["EUR"],
+    distanceUnit: "km",
     isSuperAdminCompany: false,
     branding: {
       primaryColour: "#0067a6",

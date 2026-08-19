@@ -9,6 +9,8 @@ export type AirportTransport = "N/A" | "Drive" | "Uber";
 export type Section = "Labour" | "Travel" | "Hotel" | "Subsistence" | "Equipment" | "Materials" | "Subcontract" | "Repairs" | "Haulage" | "Reports" | "Additional items";
 export type PLCategory = "Labour" | "Subcontract" | "Materials" | "Equipment" | "Travel" | "Hotel/Subsistence" | "Haulage";
 export type ProjectServiceKey = "Grinding" | "Screeding" | "Repairs";
+export type CostingModule = "remedial" | "survey";
+export type DistanceUnit = "km" | "miles";
 
 export type PhaseSchedule = {
   order: ProjectServiceKey[];
@@ -320,6 +322,8 @@ export type RepairsScope = {
 };
 
 export type ProjectInput = {
+  costingModule: CostingModule;
+  distanceUnit: DistanceUnit;
   projectReference: string;
   client: string;
   location: string;
@@ -358,6 +362,7 @@ export type ProjectInput = {
   screeding: ScreedScope;
   repairs: RepairsScope;
   additionalItems: AdditionalItem[];
+  survey?: import("./costing/survey/types").SurveyInput;
 };
 
 export type AdminRates = {
@@ -445,6 +450,7 @@ export type AdminRates = {
   repairDiamondToolingWeekly: number;
   repairWasteSkip: number;
   rateMargins?: Partial<Record<string, number>>;
+  surveyRates?: import("./costing/survey/types").SurveyAdminRates;
 };
 
 export type Line = {
@@ -473,6 +479,7 @@ export type MaterialCalc = {
 };
 
 export type ProjectCalculations = {
+  costingModule?: CostingModule;
   projectReference: string;
   client: string;
   location: string;
@@ -503,6 +510,7 @@ export type ProjectCalculations = {
   travelTotal: number;
   haulageTotal: number;
   standbyRate: number;
+  survey?: import("./costing/survey/types").SurveyCalculationDetails;
 };
 
 export type PLActuals = {
@@ -533,6 +541,9 @@ export type PLActuals = {
   hotel: number;
   subsistence: number;
   other: number;
+  surveyorInternal?: number;
+  projectManagerInternal?: number;
+  labourerInternal?: number;
   completedAt?: string;
 };
 
@@ -590,8 +601,8 @@ export type ProjectTimeEntry = {
   projectId: string;
   date: string;
   person: string;
-  role: "Technician" | "Supervisor" | "Project Manager" | "Admin" | "Other";
-  workType: "Grinding" | "Screeding" | "Repairs" | "Travel" | "Standby" | "Admin";
+  role: "Surveyor" | "Labourer" | "Technician" | "Supervisor" | "Project Manager" | "Admin" | "Other";
+  workType: "Survey" | "Grinding" | "Screeding" | "Repairs" | "Travel" | "Standby" | "Admin";
   hours: number;
   rate: number;
   approved: boolean;
@@ -618,4 +629,5 @@ export type ProjectRecord = {
   revisions?: QuoteRevision[];
   notes?: ProjectNote[];
   changeLog?: ChangeLogEntry[];
+  timeEntries?: ProjectTimeEntry[];
 };

@@ -9,7 +9,7 @@ import { money, percent, formatDateTime, setMoneyCurrency } from "@/lib/format";
 import { projectCsv } from "@/lib/export";
 import { defaultRates, emptyInput } from "@/lib/rates";
 import { createRepairLine, defaultRepairCatalog, repairTypeByCode, validateRepairCatalog } from "@/lib/repairCatalog";
-import { addProjectNote, deleteProject, loadProjects, loadRates, loadRepairCatalog, recordProjectHandover, saveActuals, saveAdminData, saveProject, setStorageContext, updateProjectWorkflow } from "@/lib/storage";
+import { addProjectNote, addProjectTimeEntry, deleteProject, loadProjects, loadRates, loadRepairCatalog, recordProjectHandover, saveActuals, saveAdminData, saveProject, setStorageContext, updateProjectWorkflow } from "@/lib/storage";
 import { useAuth } from "@/lib/authContext";
 import { hasPermission } from "@/lib/company";
 import { createBrowserSupabaseClient } from "@/lib/supabaseClient";
@@ -17,10 +17,16 @@ import { allowedStatusTransitions, normaliseProjectStatus, statusIsLocked } from
 import { buildHandoverSummary } from "@/lib/handover";
 import { adjacentBuilderStep, builderStepLabels, parseEditRoute, resolveBuilderStep, visibleBuilderSteps, type BuilderStep } from "@/lib/builder";
 import { ProductShell } from "@/components/AppShell";
-import type { AppModuleKey, CurrencyCode, MembershipRole, Permission } from "@/lib/company";
-import type { AdditionalItem, AdminRates, DetailTab, LabourMode, Line, PLCategory, PriceType, ProjectInput, ProjectRecord, ProjectStatus, RepairCatalog, RepairLabourMode, RepairLineItem, RepairMaterial, RepairMaterialCategory, RepairSubcontractor, RepairType, RepairUnitType, ScreedTeam, View } from "@/lib/types";
+import { SurveyBuilder } from "@/components/survey/SurveyBuilder";
+import { SurveyRatesAdmin } from "@/components/survey/SurveyRatesAdmin";
+import { createEmptySurveyInput, normaliseSurveyRates } from "@/lib/costing/survey/defaults";
+import { calculateSurveyProject } from "@/lib/costing/survey/calculations";
+import { createSurveyProjectInput, syncSurveyProjectInput } from "@/lib/costing/survey/project";
+import type { AppModuleKey, CurrencyCode, DistanceUnit, MembershipRole, Permission } from "@/lib/company";
+import type { AdditionalItem, AdminRates, DetailTab, LabourMode, Line, PLCategory, PriceType, ProjectInput, ProjectRecord, ProjectStatus, ProjectTimeEntry, RepairCatalog, RepairLabourMode, RepairLineItem, RepairMaterial, RepairMaterialCategory, RepairSubcontractor, RepairType, RepairUnitType, ScreedTeam, View } from "@/lib/types";
 
 const detailTabs: DetailTab[] = ["Summary", "Costing", "Commercial Review", "PM Handover", "Actual P&L", "Activity"];
+type AdminTab = "Rates" | "Survey Rates" | "Repair Types" | "Repair Materials";
 type RepairPage = "Details" | "Labour" | "Review";
 type GrindingPage = "Programme" | "Labour" | "Tools & Review";
 type ScreedPage = "Programme" | "Labour" | "Materials" | "Tools & Review";
@@ -225,16 +231,19 @@ export default function Workspace() {
   const router = useRouter();
   const routeProjectId = pathname.match(/^\/projects\/([^/]+)/)?.[1] ? decodeURIComponent(pathname.match(/^\/projects\/([^/]+)/)![1]) : "";
   const editRoute = parseEditRoute(pathname);
-  const routeEditProjectId = editRoute.projectId;
+  const surveyEditMatch = pathname.match(/^\/survey\/new-project\/([^/]+)(?:\/(revision))?$/);
+  const routeIsSurvey = pathname.startsWith("/survey") || pathname.includes("/admin-rates/survey");
+  const routeEditProjectId = surveyEditMatch?.[1] ? decodeURIComponent(surveyEditMatch[1]) : editRoute.projectId;
   const routeEditStep = editRoute.step;
-  const routeCreatesRevision = editRoute.createsRevision;
+  const routeCreatesRevision = surveyEditMatch?.[2] === "revision" || editRoute.createsRevision;
   const routeView = pathname.startsWith("/projects/") ? "Project Detail" : pathname.includes("new-project") || pathname.includes("grinding") || pathname.includes("screeding") || pathname.includes("repairs") ? "New Project" : pathname.includes("project-search") ? "Project Search" : pathname.includes("admin-rates") ? "Admin Rates" : pathname.includes("company-admin") ? "Company Admin" : "Dashboard";
   const routeTab: DetailTab = pathname.includes("grinding") ? "Grinding" : pathname.includes("screeding") ? "Screeding" : pathname.includes("repairs") ? "Repairs" : pathname.includes("proposal") ? "PM Handover" : pathname.includes("budget") ? "Costing" : pathname.includes("pl") ? "Actual P&L" : "Summary";
-  const routeAdminTab: "Rates" | "Repair Types" | "Repair Materials" = pathname.includes("repair-types") ? "Repair Types" : pathname.includes("repair-materials") ? "Repair Materials" : "Rates";
+  const routeAdminTab: AdminTab = pathname.includes("repair-types") ? "Repair Types" : pathname.includes("repair-materials") ? "Repair Materials" : pathname.includes("admin-rates/survey") ? "Survey Rates" : "Rates";
+  const initialRouteInput = routeIsSurvey ? createSurveyProjectInput("EUR", "km") : cloneInput(emptyInput);
   const [view, setView] = useState<View>(routeView);
   const [detailTab, setDetailTab] = useState<DetailTab>(routeTab);
-  const [input, setInput] = useState<ProjectInput>(() => cloneInput(emptyInput));
-  const [baselineInput, setBaselineInput] = useState<ProjectInput>(() => cloneInput(emptyInput));
+  const [input, setInput] = useState<ProjectInput>(() => initialRouteInput);
+  const [baselineInput, setBaselineInput] = useState<ProjectInput>(() => cloneInput(initialRouteInput));
   const [rates, setRatesState] = useState<AdminRates>(defaultRates);
   const [baselineRates, setBaselineRates] = useState<AdminRates>(defaultRates);
   const [repairCatalog, setRepairCatalog] = useState<RepairCatalog>(defaultRepairCatalog);
@@ -249,7 +258,7 @@ export default function Workspace() {
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
-  const [adminTab, setAdminTab] = useState<"Rates" | "Repair Types" | "Repair Materials">(routeAdminTab);
+  const [adminTab, setAdminTab] = useState<AdminTab>(routeAdminTab);
   const companyLoadToken = useRef(0);
   const [actuals, setActuals] = useState(defaultActuals(calculateProject(emptyInput, defaultRates, defaultRepairCatalog)));
   const calculations = useMemo(() => calculateProject(input, pricingRates, pricingCatalog), [input, pricingRates, pricingCatalog]);
@@ -303,18 +312,20 @@ export default function Workspace() {
       setProjects(loadedProjects);
       const companyBlank = cloneInput(emptyInput);
       companyBlank.quoteCurrency = auth.activeCompany.defaultCurrency;
+      companyBlank.distanceUnit = auth.activeCompany.distanceUnit;
       companyBlank.grinding.equipmentShippingMargin = loadedRates.shippingMargin;
       companyBlank.screeding.materialShippingMargin = loadedRates.shippingMargin;
       companyBlank.screeding.equipmentShippingMargin = loadedRates.shippingMargin;
-      setInput(companyBlank);
-      setBaselineInput(cloneInput(companyBlank));
+      const routedBlank = routeIsSurvey ? createSurveyProjectInput(auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit) : companyBlank;
+      setInput(routedBlank);
+      setBaselineInput(cloneInput(routedBlank));
       setEditingId("");
       setSelectedId("");
-      setActuals(defaultActuals(calculateProject(companyBlank, loadedRates, loadedRepairCatalog)));
+      setActuals(defaultActuals(routeIsSurvey && routedBlank.survey ? calculateSurveyProject(routedBlank.survey, loadedRates.surveyRates) : calculateProject(companyBlank, loadedRates, loadedRepairCatalog)));
       setWorkspaceLoaded(true);
     }).catch((error: unknown) => { if (loadToken === companyLoadToken.current) setWorkspaceError(error instanceof Error ? error.message : "Could not load the company workspace."); }).finally(() => { if (loadToken === companyLoadToken.current) setWorkspaceLoading(false); });
     return () => { if (loadToken === companyLoadToken.current) companyLoadToken.current += 1; };
-  }, [auth.activeCompany.defaultCurrency, auth.activeCompany.id, auth.companies.length, auth.configured, auth.session, auth.session?.user.email, auth.session?.user.id]);
+  }, [auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit, auth.activeCompany.id, auth.companies.length, auth.configured, auth.session, auth.session?.user.email, auth.session?.user.id, routeIsSurvey]);
 
   useEffect(() => {
     if (!routeProjectId) return;
@@ -356,6 +367,7 @@ export default function Workspace() {
   function startNewProject() {
     const blank = cloneInput(emptyInput);
     blank.quoteCurrency = auth.activeCompany.defaultCurrency;
+    blank.distanceUnit = auth.activeCompany.distanceUnit;
     blank.exchangeRateToCompanyCurrency = 1;
     blank.exchangeRateToGroupCurrency = auth.activeCompany.defaultCurrency === auth.activeCompany.reportingCurrency ? 1 : blank.exchangeRateToGroupCurrency;
     blank.grinding.equipmentShippingMargin = rates.shippingMargin;
@@ -371,6 +383,20 @@ export default function Workspace() {
     setView("New Project");
     setDetailTab("Summary");
     if (pathname !== "/new-project") router.push("/new-project");
+  }
+
+  function startNewSurveyProject() {
+    const blank = createSurveyProjectInput(auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit);
+    setInput(blank);
+    setBaselineInput(cloneInput(blank));
+    setPricingRates(rates);
+    setPricingCatalog(repairCatalog);
+    setSelectedId("");
+    setEditingId("");
+    setActuals(defaultActuals(calculateSurveyProject(blank.survey!, rates.surveyRates)));
+    setView("New Project");
+    setDetailTab("Summary");
+    if (pathname !== "/survey/new-project") router.push("/survey/new-project");
   }
 
   async function saveCurrentProject(status: ProjectStatus = "Draft") {
@@ -400,6 +426,10 @@ export default function Workspace() {
       return;
     }
     if (locked && !confirm("This costing is locked. Create a new editable revision while preserving the approved version?")) return;
+    if (project.inputs.costingModule === "survey") {
+      router.push(`/survey/new-project/${encodeURIComponent(project.id)}${locked ? "/revision" : ""}`);
+      return;
+    }
     const stepSegment = requestedStep && ["Grinding", "Screeding", "Repairs"].includes(requestedStep) ? `/${requestedStep.toLowerCase()}` : "";
     router.push(`/new-project/${encodeURIComponent(project.id)}${stepSegment}${locked ? "/revision" : ""}`);
   }
@@ -413,6 +443,11 @@ export default function Workspace() {
 
   const selectedContext = selected ? `${selected.inputs.projectReference || "Draft"} - ${selected.inputs.client || "No client"} - ${selected.calculations.serviceSummary}` : "No project selected";
   const shellServices = view === "Project Detail" && selected ? serviceFlags(selected.inputs) : serviceFlags(input);
+  const moduleEnabled = (module: "survey" | "remedial") => auth.enabledModules.includes(module === "survey" ? "survey_costing" : "remedial_costing");
+  const requestedCostingModule = selected?.inputs.costingModule ?? input.costingModule ?? (routeIsSurvey ? "survey" : "remedial");
+  const activeCostingModule = moduleEnabled(requestedCostingModule) ? requestedCostingModule : moduleEnabled("survey") ? "survey" : "remedial";
+  const visibleProjects = projects.filter((project) => moduleEnabled(project.inputs.costingModule ?? "remedial"));
+  const selectedModuleBlocked = Boolean(selected && !moduleEnabled(selected.inputs.costingModule ?? "remedial"));
   const activeBuilderStep = input.uiProgress?.builderStep as BuilderStep | undefined;
   const confirmNavigation = () => !hasUnsavedWork || confirm(`${hasUnsavedAdminChanges ? "Admin data" : "This costing"} has unsaved changes. Leave and discard them?`);
   const navigateBuilder = (step: "Services" | "Grinding" | "Screeding" | "Repairs") => {
@@ -435,17 +470,18 @@ export default function Workspace() {
   if (auth.configured && auth.session && !auth.companies.length) return <div className="min-h-screen bg-slate-100 p-8"><div className="mx-auto max-w-xl rounded-2xl border border-amber-200 bg-white p-6 shadow-sm"><h1 className="text-2xl font-bold">No company access</h1><p className="mt-2 text-sm text-slate-600">Your account is signed in but has no active company membership. Ask a super admin to restore the company membership.</p></div></div>;
 
   return (
-    <ProductShell view={view} pathname={pathname} selectedContext={selectedContext} activeServices={shellServices} activeBuilderStep={activeBuilderStep} activeAdminTab={adminTab} onNewProject={startNewProject} onBuilderStep={navigateBuilder} onAdminTab={setAdminTab} canNavigate={confirmNavigation}>
+    <ProductShell view={view} pathname={pathname} selectedContext={selectedContext} activeServices={shellServices} activeCostingModule={activeCostingModule} activeBuilderStep={activeBuilderStep} activeAdminTab={adminTab} onNewProject={activeCostingModule === "survey" ? startNewSurveyProject : startNewProject} onCostingModule={(module) => module === "survey" ? startNewSurveyProject() : startNewProject()} onBuilderStep={navigateBuilder} onAdminTab={setAdminTab} canNavigate={confirmNavigation}>
       <section className="workspace-page">
         {workspaceError && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{workspaceError}</div>}
         {workspaceLoading && <div className="mb-5 rounded-xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-600">Loading company workspace...</div>}
         {saveState === "saved" && <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-800">Project saved to the company workspace.</div>}
-        {moduleBlocked && <ModuleBlocked moduleKey={routeModule} />}
-        {!moduleBlocked && <>
-        <WorkspaceBanner view={view} selected={selected} projects={projects} />
-        {view === "Dashboard" && <Dashboard projects={projects} companyCurrency={auth.activeCompany.defaultCurrency} open={(project) => openProject(project)} />}
-        {view === "New Project" && <ProjectBuilder input={input} setInput={setInput} rates={pricingRates} repairCatalog={pricingCatalog} calculations={calculations} onSave={saveCurrentProject} duplicateReference={projects.some((project) => project.id !== editingId && project.inputs.projectReference.trim().toLowerCase() === input.projectReference.trim().toLowerCase())} usingSnapshot={Boolean(editingId && selected?.rateSnapshot)} saving={saveState === "saving"} dirty={hasUnsavedChanges} reprice={() => { setPricingRates(rates); setPricingCatalog(repairCatalog); setInput({ ...input, exchangeRateLockedAt: new Date().toISOString() }); }} />}
-        {view === "Project Search" && <SearchView projects={projects} open={(project) => openProject(project)} edit={editProject} />}
+        {(moduleBlocked || selectedModuleBlocked) && <ModuleBlocked moduleKey={selectedModuleBlocked ? (selected?.inputs.costingModule === "survey" ? "survey_costing" : "remedial_costing") : routeModule!} />}
+        {!moduleBlocked && !selectedModuleBlocked && <>
+        <WorkspaceBanner view={view} selected={selected} projects={visibleProjects} />
+        {view === "Dashboard" && <Dashboard projects={visibleProjects} companyCurrency={auth.activeCompany.defaultCurrency} open={(project) => openProject(project)} />}
+        {view === "New Project" && input.costingModule === "survey" && input.survey && <SurveyBuilder input={input.survey} onChange={(survey) => setInput(syncSurveyProjectInput(input, survey))} rates={normaliseSurveyRates(pricingRates.surveyRates)} onSave={(complete) => void saveCurrentProject(complete ? "Costing Complete" : "Draft")} saving={saveState === "saving"} duplicateReference={projects.some((project) => project.id !== editingId && project.inputs.projectReference.trim().toLowerCase() === input.projectReference.trim().toLowerCase())} />}
+        {view === "New Project" && input.costingModule !== "survey" && <ProjectBuilder input={input} setInput={setInput} rates={pricingRates} repairCatalog={pricingCatalog} calculations={calculations} onSave={saveCurrentProject} duplicateReference={projects.some((project) => project.id !== editingId && project.inputs.projectReference.trim().toLowerCase() === input.projectReference.trim().toLowerCase())} usingSnapshot={Boolean(editingId && selected?.rateSnapshot)} saving={saveState === "saving"} dirty={hasUnsavedChanges} reprice={() => { setPricingRates(rates); setPricingCatalog(repairCatalog); setInput({ ...input, exchangeRateLockedAt: new Date().toISOString() }); }} />}
+        {view === "Project Search" && <SearchView projects={visibleProjects} open={(project) => openProject(project)} edit={editProject} />}
         {view === "Admin Rates" && <AdminRatesView rates={rates} setRates={setRatesState} repairCatalog={repairCatalog} setRepairCatalog={setRepairCatalog} adminTab={adminTab} setAdminTab={setAdminTab} save={async () => { try { await saveAdminData(rates, repairCatalog); setBaselineRates(JSON.parse(JSON.stringify(rates)) as AdminRates); setBaselineRepairCatalog(JSON.parse(JSON.stringify(repairCatalog)) as RepairCatalog); alert("Admin data saved and versioned. New costings use these values; saved projects keep their pricing snapshot until explicitly repriced."); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "Admin data could not be saved."); } }} />}
         {view === "Company Admin" && <CompanyAdminView />}
         {view === "Project Detail" && selected && (
@@ -471,6 +507,7 @@ export default function Workspace() {
             }}
             recordHandover={async (issued) => { try { await recordProjectHandover(selected.id, auth.session?.user.email ?? "James Dare", issued); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "The handover event could not be recorded."); throw error; } }}
             addNote={async () => { if (note.trim()) { try { await addProjectNote(selected.id, { author: auth.session?.user.email ?? "James Dare", category: "General", text: note.trim() }); setNote(""); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "The note could not be saved."); } } }}
+            recordTime={async (entry) => { try { await addProjectTimeEntry(selected.id, entry); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "The time entry could not be saved."); throw error; } }}
             note={note}
             setNote={setNote}
             edit={() => editProject(selected)}
@@ -498,10 +535,11 @@ export default function Workspace() {
 }
 
 function routeModuleKey(pathname: string): AppModuleKey | null {
+  if (pathname.startsWith("/survey")) return "survey_costing";
   if (pathname.includes("admin-rates/repair-types") || pathname.includes("admin-rates/repair-materials")) return "repair_database";
   if (pathname.includes("admin-rates")) return "admin_rates";
   if (pathname.includes("company-admin")) return "company_admin";
-  if (pathname.includes("new-project") || pathname.includes("grinding") || pathname.includes("screeding") || pathname.includes("repairs")) return "calculations";
+  if (pathname.includes("new-project") || pathname.includes("grinding") || pathname.includes("screeding") || pathname.includes("repairs")) return "remedial_costing";
   if (pathname.includes("project-search")) return "projects";
   if (pathname.startsWith("/projects/")) return "projects";
   if (pathname.includes("proposal") || pathname.includes("budget") || pathname.includes("pl")) return "reports";
@@ -564,9 +602,11 @@ function CompanyAdminView() {
   const [inviteRole, setInviteRole] = useState<MembershipRole>("viewer");
   const [newCompanyName, setNewCompanyName] = useState("");
   const [newCompanyCurrency, setNewCompanyCurrency] = useState<CurrencyCode>("EUR");
+  const [newCompanyDistanceUnit, setNewCompanyDistanceUnit] = useState<DistanceUnit>("km");
   const [companyName, setCompanyName] = useState(auth.activeCompany.name);
   const [defaultCurrency, setDefaultCurrency] = useState<CurrencyCode>(auth.activeCompany.defaultCurrency);
   const [reportingCurrency, setReportingCurrency] = useState<CurrencyCode>(auth.activeCompany.reportingCurrency);
+  const [distanceUnit, setDistanceUnit] = useState<DistanceUnit>(auth.activeCompany.distanceUnit);
   const [primaryColour, setPrimaryColour] = useState(auth.activeCompany.branding.primaryColour);
   const [accentColour, setAccentColour] = useState(auth.activeCompany.branding.accentColour);
   const [message, setMessage] = useState("");
@@ -599,6 +639,7 @@ function CompanyAdminView() {
     setCompanyName(auth.activeCompany.name);
     setDefaultCurrency(auth.activeCompany.defaultCurrency);
     setReportingCurrency(auth.activeCompany.reportingCurrency);
+    setDistanceUnit(auth.activeCompany.distanceUnit);
     setPrimaryColour(auth.activeCompany.branding.primaryColour);
     setAccentColour(auth.activeCompany.branding.accentColour);
     void loadAdminData();
@@ -613,6 +654,7 @@ function CompanyAdminView() {
       default_currency: defaultCurrency,
       reporting_currency: reportingCurrency,
       allowed_currencies: Array.from(new Set([defaultCurrency, reportingCurrency])),
+      distance_unit: distanceUnit,
       primary_colour: primaryColour,
       accent_colour: accentColour,
       branding_status: "draft",
@@ -668,6 +710,7 @@ function CompanyAdminView() {
       default_currency: newCompanyCurrency,
       reporting_currency: newCompanyCurrency,
       allowed_currencies: newCompanyCurrency === "PLN" ? ["PLN", "EUR"] : [newCompanyCurrency],
+      distance_unit: newCompanyDistanceUnit,
       primary_colour: "#0067a6",
       accent_colour: "#20a7d8",
       dark_colour: "#07182f",
@@ -714,6 +757,7 @@ function CompanyAdminView() {
           <Text label="Company Name" value={companyName} onChange={setCompanyName} />
           <Select label="Default Currency" value={defaultCurrency} options={["EUR", "GBP", "PLN", "USD"]} onChange={(value) => setDefaultCurrency(value as CurrencyCode)} />
           <Select label="Reporting Currency" value={reportingCurrency} options={["EUR", "GBP", "PLN", "USD"]} onChange={(value) => setReportingCurrency(value as CurrencyCode)} />
+          <Select label="Distance Unit" value={distanceUnit} options={["km", "miles"]} onChange={(value) => setDistanceUnit(value as DistanceUnit)} disabled={!canManageModules} />
           <div className="grid grid-cols-2 gap-3">
             <Text label="Primary Colour" value={primaryColour} onChange={setPrimaryColour} />
             <Text label="Accent Colour" value={accentColour} onChange={setAccentColour} />
@@ -731,6 +775,7 @@ function CompanyAdminView() {
           <div className="grid gap-3">
             <Text label="Company Name" value={newCompanyName} onChange={setNewCompanyName} />
             <Select label="Currency" value={newCompanyCurrency} options={["EUR", "GBP", "PLN", "USD"]} onChange={(value) => setNewCompanyCurrency(value as CurrencyCode)} />
+            <Select label="Distance Unit" value={newCompanyDistanceUnit} options={["km", "miles"]} onChange={(value) => setNewCompanyDistanceUnit(value as DistanceUnit)} />
             <button className="primary-button" onClick={() => void createCompany()}>Create Company</button>
           </div>
         </section>
@@ -797,6 +842,10 @@ function Dashboard({ projects, companyCurrency, open }: { projects: ProjectRecor
   const commercialBudget = commercialProjects.reduce((sum, project) => sum + (project.calculations.budgetCompanyCurrency ?? project.calculations.budgetCost), 0);
   const commercialProfit = commercialProjects.reduce((sum, project) => sum + ((project.calculations.proposalCompanyCurrency ?? project.calculations.proposalTotal) - (project.calculations.budgetCompanyCurrency ?? project.calculations.budgetCost)), 0);
   const weightedMarkup = commercialBudget ? commercialProfit / commercialBudget * 100 : 0;
+  const moduleSummary = (["survey", "remedial"] as const).map((module) => {
+    const moduleProjects = projects.filter((project) => (project.inputs.costingModule ?? "remedial") === module);
+    return { module, projects: moduleProjects.length, sell: moduleProjects.reduce((sum, project) => sum + project.calculations.proposalTotal, 0), budget: moduleProjects.reduce((sum, project) => sum + project.calculations.budgetCost, 0) };
+  });
   return (
     <div className="grid gap-5">
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
@@ -806,6 +855,7 @@ function Dashboard({ projects, companyCurrency, open }: { projects: ProjectRecor
         <Metric label="Weighted Markup" value={percent(weightedMarkup)} />
         <Metric label="Awaiting Accounts" value={String(projects.filter((project) => project.accountsStatus === "Awaiting Accounts").length)} />
       </div>
+      <div className="grid gap-4 lg:grid-cols-2">{moduleSummary.map((row) => <div className="app-card p-5" key={row.module}><div className="flex items-center justify-between gap-3"><div><div className="text-xs font-black uppercase text-[var(--brand-primary)]">{row.module} costing</div><div className="mt-1 text-xl font-bold capitalize">{row.projects} project{row.projects === 1 ? "" : "s"}</div></div><span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold uppercase text-slate-600">{row.module}</span></div><div className="mt-4 grid grid-cols-2 gap-3"><Mini label="Sell Value" value={money(row.sell, companyCurrency)} /><Mini label="Budget" value={money(row.budget, companyCurrency)} /></div></div>)}</div>
       <div className="app-card-strong">
         <div className="panel-heading"><h2 className="text-xl font-semibold">Recent Projects</h2></div>
         <ProjectTable projects={projects.slice(0, 10)} open={open} />
@@ -1024,7 +1074,7 @@ function ProjectManagementStep({ input, setInput, rates }: { input: ProjectInput
         </div>
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <Select label="Travel Mode" value={pm.travelMode} options={["None", "Drive", "Fly"]} onChange={(travelMode) => patch({ travelMode: travelMode as ProjectInput["projectManagement"]["travelMode"] })} />
-          {pm.travelMode === "Drive" && <NumberInput label="One-Way Distance km" value={pm.oneWayKm} onChange={(oneWayKm) => patch({ oneWayKm })} />}
+          {pm.travelMode === "Drive" && <NumberInput label={`One-Way Distance (${input.distanceUnit})`} value={pm.oneWayKm} onChange={(oneWayKm) => patch({ oneWayKm })} />}
           {pm.travelMode === "Drive" && <NumberInput label="Vehicles" value={pm.vehicles} step={1} onChange={(vehicles) => patch({ vehicles })} />}
           {pm.travelMode === "Fly" && <NumberInput label="Return Flights" value={pm.returnFlights} onChange={(returnFlights) => patch({ returnFlights })} />}
           <NumberInput label="Hotel Nights" value={pm.hotelNights} onChange={(hotelNights) => patch({ hotelNights })} />
@@ -1160,7 +1210,7 @@ function SummaryRow({ label, value, strong = false, alert = false }: { label: st
 
 function DetailTabs({ tab, setTab, input }: { tab: DetailTab; setTab: (tab: DetailTab) => void; input: ProjectInput }) {
   const visibleTabs = detailTabs.filter((item) => tabIsAllowed(item, input));
-  return <div className="flex flex-wrap gap-2 rounded-xl bg-white p-2 shadow-sm">{visibleTabs.map((item) => <button key={item} onClick={() => setTab(item)} className={`rounded-md px-3 py-2 text-sm font-bold ${tab === item ? "bg-sky-700 text-white" : "bg-slate-100 text-slate-800"}`}>{item}</button>)}</div>;
+  return <div className="flex flex-wrap gap-2 rounded-xl bg-white p-2 shadow-sm">{visibleTabs.map((item) => <button key={item} onClick={() => setTab(item)} className={`rounded-md px-3 py-2 text-sm font-bold ${tab === item ? "bg-sky-700 text-white" : "bg-slate-100 text-slate-800"}`}>{item === "PM Handover" ? "Delivery Summary" : item}</button>)}</div>;
 }
 
 function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates }) {
@@ -1273,9 +1323,9 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <NumberInput label="Travel Days" value={g.productionTravelDays} onChange={(v) => patch({ productionTravelDays: v })} />
-              <NumberInput label="One-Way Distance km" value={g.productionOneWayKm} onChange={(v) => patch({ productionOneWayKm: v })} />
+              <NumberInput label={`One-Way Distance (${input.distanceUnit})`} value={g.productionOneWayKm} onChange={(v) => patch({ productionOneWayKm: v })} />
               <NumberInput label="Vehicles / Vans" value={g.productionVehicles} step={1} onChange={(v) => patch({ productionVehicles: v })} />
-              <Mini label="Calculated km" value={`${g.productionOneWayKm * 2 * Math.max(0, g.productionVehicles)}`} />
+              <Mini label={`Calculated ${input.distanceUnit}`} value={`${g.productionOneWayKm * 2 * Math.max(0, g.productionVehicles)}`} />
             </div>
           </div>
         </div>}
@@ -1307,9 +1357,9 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <NumberInput label="Travel Days" value={g.surveyorTravelDays} onChange={(v) => patch({ surveyorTravelDays: v })} />
-              <NumberInput label="One-Way Distance km" value={g.surveyorOneWayKm} onChange={(v) => patch({ surveyorOneWayKm: v })} />
+              <NumberInput label={`One-Way Distance (${input.distanceUnit})`} value={g.surveyorOneWayKm} onChange={(v) => patch({ surveyorOneWayKm: v })} />
               <NumberInput label="Vehicles" value={g.surveyorVehicles} step={1} onChange={(v) => patch({ surveyorVehicles: v })} />
-              <Mini label="Calculated km" value={`${g.surveyorOneWayKm * 2 * Math.max(0, g.surveyorVehicles)}`} />
+              <Mini label={`Calculated ${input.distanceUnit}`} value={`${g.surveyorOneWayKm * 2 * Math.max(0, g.surveyorVehicles)}`} />
             </div>
           </div>
         </div>}
@@ -1535,9 +1585,9 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <NumberInput label="Travel Days" value={s.productionTravelDays} onChange={(v) => patch({ productionTravelDays: v })} />
-              <NumberInput label="One-Way Distance km" value={s.productionOneWayKm} onChange={(v) => patch({ productionOneWayKm: v })} />
+              <NumberInput label={`One-Way Distance (${input.distanceUnit})`} value={s.productionOneWayKm} onChange={(v) => patch({ productionOneWayKm: v })} />
               <NumberInput label="Vehicles / Vans" value={s.productionVehicles} step={1} onChange={(v) => patch({ productionVehicles: v })} />
-              <Mini label="Calculated km" value={`${s.productionOneWayKm * 2 * Math.max(0, s.productionVehicles)}`} />
+              <Mini label={`Calculated ${input.distanceUnit}`} value={`${s.productionOneWayKm * 2 * Math.max(0, s.productionVehicles)}`} />
             </div>
           </div>
         </div>}
@@ -1569,9 +1619,9 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
             </div>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <NumberInput label="Travel Days" value={s.surveyorTravelDays} onChange={(v) => patch({ surveyorTravelDays: v })} />
-              <NumberInput label="One-Way Distance km" value={s.surveyorOneWayKm} onChange={(v) => patch({ surveyorOneWayKm: v })} />
+              <NumberInput label={`One-Way Distance (${input.distanceUnit})`} value={s.surveyorOneWayKm} onChange={(v) => patch({ surveyorOneWayKm: v })} />
               <NumberInput label="Vehicles" value={s.surveyorVehicles} step={1} onChange={(v) => patch({ surveyorVehicles: v })} />
-              <Mini label="Calculated km" value={`${s.surveyorOneWayKm * 2 * Math.max(0, s.surveyorVehicles)}`} />
+              <Mini label={`Calculated ${input.distanceUnit}`} value={`${s.surveyorOneWayKm * 2 * Math.max(0, s.surveyorVehicles)}`} />
             </div>
           </div>
         </div>}
@@ -1894,7 +1944,7 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
         </div>
       </div>
       {usesSubcontract && <SubcontractLabourPanel items={r.repairSubcontractors} calculatedDays={effectiveRepairDays} onChange={(items) => patch({ repairSubcontractors: items })} />}
-      {usesInHouse && <InHouseLabourPanel input={r} rates={rates} calculatedDays={repairLineDaysTotal} effectiveDays={effectiveRepairDays} mobilisationKm={mobilisationKm} hotelRoomNights={hotelRoomNights} calculatedHotelNights={calculatedRepairHotelNights} effectiveHotelNights={effectiveRepairHotelNights} onChange={patch} />}
+      {usesInHouse && <InHouseLabourPanel input={r} distanceUnit={input.distanceUnit} rates={rates} calculatedDays={repairLineDaysTotal} effectiveDays={effectiveRepairDays} mobilisationKm={mobilisationKm} hotelRoomNights={hotelRoomNights} calculatedHotelNights={calculatedRepairHotelNights} effectiveHotelNights={effectiveRepairHotelNights} onChange={patch} />}
       <RepairPageTabs repairPage={repairPage} setRepairPage={setRepairPage} placement="bottom" />
       </>}
       {repairPage === "Review" && <>
@@ -1975,12 +2025,12 @@ function HaulageItems({ items, onChange }: { items: AdditionalItem[]; onChange: 
   );
 }
 
-function InHouseLabourPanel({ input, rates, calculatedDays, effectiveDays, mobilisationKm, hotelRoomNights, calculatedHotelNights: autoHotelNights, effectiveHotelNights, onChange }: { input: ProjectInput["repairs"]; rates: AdminRates; calculatedDays: number; effectiveDays: number; mobilisationKm: number; hotelRoomNights: number; calculatedHotelNights: number; effectiveHotelNights: number; onChange: (next: Partial<ProjectInput["repairs"]>) => void }) {
+function InHouseLabourPanel({ input, distanceUnit, rates, calculatedDays, effectiveDays, mobilisationKm, hotelRoomNights, calculatedHotelNights: autoHotelNights, effectiveHotelNights, onChange }: { input: ProjectInput["repairs"]; distanceUnit: ProjectInput["distanceUnit"]; rates: AdminRates; calculatedDays: number; effectiveDays: number; mobilisationKm: number; hotelRoomNights: number; calculatedHotelNights: number; effectiveHotelNights: number; onChange: (next: Partial<ProjectInput["repairs"]>) => void }) {
   const inputtedDays = input.labourDays > 0 ? input.labourDays : calculatedDays;
   const overridden = input.labourDays > 0 && input.labourDays !== calculatedDays;
   return (
     <div className="app-card-strong">
-      <div className="panel-heading"><h2 className="text-xl font-semibold">In-House Labour & Mobilisation</h2><p className="text-sm text-slate-500">Use only when FACE is supplying labour. Distance is one-way km; return mileage is calculated.</p></div>
+      <div className="panel-heading"><h2 className="text-xl font-semibold">In-House Labour & Mobilisation</h2><p className="text-sm text-slate-500">Use only when FACE is supplying labour. Distance is one-way {distanceUnit}; return distance is calculated.</p></div>
       <div className="grid gap-4 p-5">
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <Mini label="Calculated Repair Days" value={`${calculatedDays}`} />
@@ -2002,9 +2052,9 @@ function InHouseLabourPanel({ input, rates, calculatedDays, effectiveDays, mobil
         </div>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <NumberInput label="Travel Days" value={input.travelDays} onChange={(v) => onChange({ travelDays: v })} />
-          <NumberInput label="One-Way Distance km" value={input.mobilisationOneWayKm} onChange={(v) => onChange({ mobilisationOneWayKm: v })} />
+          <NumberInput label={`One-Way Distance (${distanceUnit})`} value={input.mobilisationOneWayKm} onChange={(v) => onChange({ mobilisationOneWayKm: v })} />
           <NumberInput label="Vehicles / Vans" value={input.mobilisationVehicles} step={1} onChange={(v) => onChange({ mobilisationVehicles: v })} />
-          <Mini label="Calculated Fuel km" value={`${mobilisationKm}`} />
+          <Mini label={`Calculated Distance (${distanceUnit})`} value={`${mobilisationKm}`} />
         </div>
       </div>
     </div>
@@ -2113,7 +2163,7 @@ function AdditionalTools({ items, onChange }: { items: AdditionalItem[]; onChang
   </div>;
 }
 
-function ProjectDetail({ project, tab, setTab, actuals, setActuals, saveActuals, recordHandover: recordHandoverEvent, note, setNote, addNote, edit, updateStatus, deleteProjectRecord }: { project: ProjectRecord; tab: DetailTab; setTab: (tab: DetailTab) => void; actuals: ReturnType<typeof defaultActuals>; setActuals: (a: ReturnType<typeof defaultActuals>) => void; saveActuals: (finalise?: boolean) => void; recordHandover: (issued: boolean) => Promise<void>; note: string; setNote: (v: string) => void; addNote: () => void; edit: () => void; updateStatus: (status: ProjectStatus) => void; deleteProjectRecord: () => Promise<void> }) {
+function ProjectDetail({ project, tab, setTab, actuals, setActuals, saveActuals, recordHandover: recordHandoverEvent, note, setNote, addNote, recordTime, edit, updateStatus, deleteProjectRecord }: { project: ProjectRecord; tab: DetailTab; setTab: (tab: DetailTab) => void; actuals: ReturnType<typeof defaultActuals>; setActuals: (a: ReturnType<typeof defaultActuals>) => void; saveActuals: (finalise?: boolean) => void; recordHandover: (issued: boolean) => Promise<void>; note: string; setNote: (v: string) => void; addNote: () => void; recordTime: (entry: Omit<ProjectTimeEntry, "id" | "projectId" | "createdAt">) => Promise<void>; edit: () => void; updateStatus: (status: ProjectStatus) => void; deleteProjectRecord: () => Promise<void> }) {
   const auth = useAuth();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
@@ -2141,7 +2191,7 @@ function ProjectDetail({ project, tab, setTab, actuals, setActuals, saveActuals,
       {tab === "Commercial Review" && <SavedCommercialReview project={project} />}
       {tab === "PM Handover" && <ProjectHandover project={project} recordHandover={recordHandoverEvent} />}
       {tab === "Actual P&L" && <PLActualsPanel project={project} actuals={actuals} setActuals={setActuals} summary={summary} saveActuals={saveActuals} />}
-      {tab === "Activity" && <ActivityPanel project={project} note={note} setNote={setNote} addNote={addNote} />}
+      {tab === "Activity" && <ActivityPanel project={project} note={note} setNote={setNote} addNote={addNote} recordTime={recordTime} />}
       {canDelete && <div className="flex justify-end border-t border-slate-200 pt-5"><button className="secondary-button border-red-200 text-red-700 hover:bg-red-50" onClick={() => { setDeleteConfirmation(""); setDeleteOpen(true); }}><Trash2 size={16} />Delete Project</button></div>}
       {deleteOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-labelledby="delete-project-title">
         <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
@@ -2272,8 +2322,29 @@ function ProjectHandover({ project, recordHandover: record }: { project: Project
   </div>;
 }
 
-function ActivityPanel({ project, note, setNote, addNote }: { project: ProjectRecord; note: string; setNote: (value: string) => void; addNote: () => void }) {
-  return <div className="grid gap-5 lg:grid-cols-2"><div className="app-card p-5"><h3 className="font-bold">Notes</h3><textarea className="input mt-3 min-h-28 w-full" value={note} onChange={(event) => setNote(event.target.value)} /><button className="primary-button mt-3" onClick={addNote}>Add Note</button>{project.notes?.map((item) => <div className="mt-3 rounded-lg border border-slate-200 p-3 text-sm" key={item.id}><b>{item.author}</b><div className="mt-1">{item.text}</div></div>)}</div><div className="grid gap-5"><div className="app-card p-5"><h3 className="font-bold">Costing Revisions</h3>{project.revisions?.map((revision) => <div className="mt-3 rounded-lg border border-slate-200 p-3 text-sm" key={revision.id}><b>{revision.label}</b><div>{money(revision.proposalTotal)} sell value / {money(revision.budgetCost)} budget</div></div>)}</div><div className="app-card p-5"><h3 className="font-bold">Change Log</h3>{project.changeLog?.map((entry) => <div className="mt-3 text-sm" key={entry.id}><History size={14} className="mr-2 inline" />{formatDateTime(entry.createdAt)} - <b>{entry.action}</b>: {entry.detail}</div>)}</div></div></div>;
+function ActivityPanel({ project, note, setNote, addNote, recordTime }: { project: ProjectRecord; note: string; setNote: (value: string) => void; addNote: () => void; recordTime: (entry: Omit<ProjectTimeEntry, "id" | "projectId" | "createdAt">) => Promise<void> }) {
+  const auth = useAuth();
+  const [timeEntry, setTimeEntry] = useState<Omit<ProjectTimeEntry, "id" | "projectId" | "createdAt">>({ date: new Date().toISOString().slice(0, 10), person: auth.session?.user.email ?? "", role: project.inputs.costingModule === "survey" ? "Surveyor" : "Technician", workType: project.inputs.costingModule === "survey" ? "Survey" : "Repairs", hours: 0, rate: 0, approved: false, notes: "" });
+  const [savingTime, setSavingTime] = useState(false);
+  const timeTotal = (project.timeEntries ?? []).reduce((sum, entry) => sum + entry.hours * entry.rate, 0);
+  return <div className="grid gap-5">
+    <div className="grid gap-5 lg:grid-cols-2"><div className="app-card p-5"><h3 className="font-bold">Notes</h3><textarea className="input mt-3 min-h-28 w-full" value={note} onChange={(event) => setNote(event.target.value)} /><button className="primary-button mt-3" onClick={addNote}>Add Note</button>{project.notes?.map((item) => <div className="mt-3 rounded-lg border border-slate-200 p-3 text-sm" key={item.id}><b>{item.author}</b><div className="mt-1">{item.text}</div></div>)}</div><div className="grid gap-5"><div className="app-card p-5"><h3 className="font-bold">Costing Revisions</h3>{project.revisions?.map((revision) => <div className="mt-3 rounded-lg border border-slate-200 p-3 text-sm" key={revision.id}><b>{revision.label}</b><div>{money(revision.proposalTotal)} sell value / {money(revision.budgetCost)} budget</div></div>)}</div><div className="app-card p-5"><h3 className="font-bold">Change Log</h3>{project.changeLog?.map((entry) => <div className="mt-3 text-sm" key={entry.id}><History size={14} className="mr-2 inline" />{formatDateTime(entry.createdAt)} - <b>{entry.action}</b>: {entry.detail}</div>)}</div></div></div>
+    <section className="app-card-strong">
+      <div className="panel-heading flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-xl font-semibold">Time Tracking Trial</h3><p className="text-sm text-slate-500">A project activity trail only. Entries do not rewrite the saved costing or P&amp;L actuals.</p></div><Mini label="Recorded Value" value={money(timeTotal)} /></div>
+      <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-4">
+        <DateInput label="Date" value={timeEntry.date} onChange={(date) => setTimeEntry({ ...timeEntry, date })} />
+        <Text label="Person" value={timeEntry.person} onChange={(person) => setTimeEntry({ ...timeEntry, person })} />
+        <Select label="Role" value={timeEntry.role} options={["Surveyor", "Labourer", "Technician", "Supervisor", "Project Manager", "Admin", "Other"]} onChange={(role) => setTimeEntry({ ...timeEntry, role: role as ProjectTimeEntry["role"] })} />
+        <Select label="Work Type" value={timeEntry.workType} options={["Survey", "Grinding", "Screeding", "Repairs", "Travel", "Standby", "Admin"]} onChange={(workType) => setTimeEntry({ ...timeEntry, workType: workType as ProjectTimeEntry["workType"] })} />
+        <NumberInput label="Hours" value={timeEntry.hours} onChange={(hours) => setTimeEntry({ ...timeEntry, hours })} />
+        <NumberInput label="Cost Rate" value={timeEntry.rate} onChange={(rate) => setTimeEntry({ ...timeEntry, rate })} />
+        <Text label="Notes" value={timeEntry.notes} onChange={(notes) => setTimeEntry({ ...timeEntry, notes })} />
+        <Toggle label="Approved" checked={timeEntry.approved} onChange={(approved) => setTimeEntry({ ...timeEntry, approved })} />
+      </div>
+      <div className="px-5 pb-5"><button className="primary-button" disabled={savingTime || !timeEntry.date || !timeEntry.person.trim() || timeEntry.hours <= 0} onClick={async () => { try { setSavingTime(true); await recordTime(timeEntry); setTimeEntry({ ...timeEntry, hours: 0, notes: "", approved: false }); } finally { setSavingTime(false); } }}><Save size={16} />{savingTime ? "Saving..." : "Add Time Entry"}</button></div>
+      {!!project.timeEntries?.length && <div className="table-shell border-t border-slate-200"><table><thead><tr><th>Date</th><th>Person</th><th>Role / Work</th><th>Hours</th><th>Rate</th><th>Value</th><th>Status</th></tr></thead><tbody>{project.timeEntries.map((entry) => <tr key={entry.id}><td>{entry.date}</td><td className="font-semibold">{entry.person}</td><td>{entry.role} / {entry.workType}</td><td>{entry.hours}</td><td>{money(entry.rate)}</td><td className="font-bold">{money(entry.hours * entry.rate)}</td><td>{entry.approved ? "Approved" : "Trial"}</td></tr>)}</tbody></table></div>}
+    </section>
+  </div>;
 }
 
 function PLActualsPanel({ project, actuals, setActuals, summary, saveActuals }: { project: ProjectRecord; actuals: ReturnType<typeof defaultActuals>; setActuals: (a: ReturnType<typeof defaultActuals>) => void; summary: ReturnType<typeof calculatePL>; saveActuals: (finalise?: boolean) => void }) {
@@ -2327,12 +2398,12 @@ function PLActualsPanel({ project, actuals, setActuals, summary, saveActuals }: 
               <Mini label="Budget Site Days" value={`${project.calculations.siteDays}`} />
               <Mini label="Programme Status" value={summary.programmeStatus.replace("PROJECT ", "")} />
             </div>
-            <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2 xl:grid-cols-4">
+            {project.inputs.costingModule !== "survey" && <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2 xl:grid-cols-4">
               <NumberInput label="Survey Days" value={actuals.surveyDays} onChange={(v) => patch({ surveyDays: v })} />
               <NumberInput label="Survey Day Rate" value={actuals.surveyDayRate} onChange={(v) => patch({ surveyDayRate: v })} />
               <NumberInput label="Survey Travel Days" value={actuals.surveyTravelDays} onChange={(v) => patch({ surveyTravelDays: v })} />
               <NumberInput label="Survey Travel Rate" value={actuals.surveyTravelRate} onChange={(v) => patch({ surveyTravelRate: v })} />
-            </div>
+            </div>}
             <div className="table-shell border border-slate-200">
               <table>
                 <thead><tr><th>Actual Cost Row</th><th>Actual</th><th>Budget</th><th>Variance</th></tr></thead>
@@ -2399,7 +2470,11 @@ function plRowActualKey(item: string): keyof ReturnType<typeof defaultActuals> |
     Travel: "travel",
     Hotel: "hotel",
     Subsistence: "subsistence",
-    Other: "other"
+    Other: "other",
+    Surveyor: "surveyorInternal",
+    "Project Manager": "projectManagerInternal",
+    Labourer: "labourerInternal",
+    Reports: "engineeringReport"
   };
   return map[item];
 }
@@ -2425,20 +2500,24 @@ function SearchView({ projects, open, edit }: { projects: ProjectRecord[]; open:
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("All");
   const [service, setService] = useState("All");
+  const [module, setModule] = useState("All");
   const [visibleCount, setVisibleCount] = useState(50);
   const filtered = projects.filter((p) => `${p.inputs.projectReference} ${p.inputs.client} ${p.inputs.location} ${p.calculations.serviceSummary} ${p.inputs.costedBy}`.toLowerCase().includes(q.toLowerCase()))
     .filter((project) => status === "All" || normaliseProjectStatus(project.status) === status)
+    .filter((project) => module === "All" || (project.inputs.costingModule ?? "remedial") === module)
     .filter((project) => service === "All" || project.calculations.serviceSummary.includes(service));
-  return <div className="app-card-strong"><div className="panel-heading"><h2 className="text-xl font-semibold"><Search className="mr-2 inline" />Project Search</h2><div className="mt-3 grid gap-3 md:grid-cols-[minmax(240px,1fr)_220px_180px]"><input placeholder="Reference, client, location or estimator" value={q} onChange={(e) => { setQ(e.target.value); setVisibleCount(50); }} /><Select label="Status" value={status} options={["All", "Draft", "Costing Complete", "Won", "Lost", "Handover Issued", "Completed", "Closed"]} onChange={(value) => { setStatus(value); setVisibleCount(50); }} /><Select label="Service" value={service} options={["All", "Grinding", "Screeding", "Repairs"]} onChange={(value) => { setService(value); setVisibleCount(50); }} /></div><div className="mt-3 text-sm text-slate-500">Showing {Math.min(visibleCount, filtered.length)} of {filtered.length} project{filtered.length === 1 ? "" : "s"}</div></div><ProjectTable projects={filtered.slice(0, visibleCount)} open={open} edit={edit} />{visibleCount < filtered.length && <div className="flex justify-center border-t border-slate-200 p-4"><button className="secondary-button" onClick={() => setVisibleCount((count) => count + 50)}>Load 50 more</button></div>}</div>;
+  return <div className="app-card-strong"><div className="panel-heading"><h2 className="text-xl font-semibold"><Search className="mr-2 inline" />Project Search</h2><div className="mt-3 grid gap-3 md:grid-cols-[minmax(240px,1fr)_180px_180px_180px]"><input placeholder="Reference, client, location or estimator" value={q} onChange={(e) => { setQ(e.target.value); setVisibleCount(50); }} /><Select label="Module" value={module} options={["All", "survey", "remedial"]} onChange={(value) => { setModule(value); setVisibleCount(50); }} /><Select label="Status" value={status} options={["All", "Draft", "Costing Complete", "Won", "Lost", "Handover Issued", "Completed", "Closed"]} onChange={(value) => { setStatus(value); setVisibleCount(50); }} /><Select label="Service" value={service} options={["All", "Survey", "Grinding", "Screeding", "Repairs"]} onChange={(value) => { setService(value); setVisibleCount(50); }} /></div><div className="mt-3 text-sm text-slate-500">Showing {Math.min(visibleCount, filtered.length)} of {filtered.length} project{filtered.length === 1 ? "" : "s"}</div></div><ProjectTable projects={filtered.slice(0, visibleCount)} open={open} edit={edit} />{visibleCount < filtered.length && <div className="flex justify-center border-t border-slate-200 p-4"><button className="secondary-button" onClick={() => setVisibleCount((count) => count + 50)}>Load 50 more</button></div>}</div>;
 }
 
 function ProjectTable({ projects, open, edit }: { projects: ProjectRecord[]; open: (project: ProjectRecord) => void; edit?: (project: ProjectRecord) => void }) {
-  return <div className="table-shell border-0"><table><thead><tr><th>Project</th><th>Services</th><th>Status</th><th>Sell Value</th><th>Budget</th><th>Markup</th><th>Actions</th></tr></thead><tbody>{projects.map((p) => <tr key={p.id}><td><b>{p.inputs.projectReference || "Draft"}</b><div className="text-xs text-slate-500">{p.inputs.client} - {p.inputs.location}</div></td><td>{p.calculations.serviceSummary}</td><td>{normaliseProjectStatus(p.status)} / {p.accountsStatus}</td><td>{money(p.calculations.proposalTotal, p.inputs.quoteCurrency)}</td><td>{money(p.calculations.budgetCost, p.inputs.quoteCurrency)}</td><td>{percent(p.calculations.budgetMarkup ?? (p.calculations.budgetCost ? p.calculations.budgetProfit / p.calculations.budgetCost * 100 : 0))}</td><td><button className="secondary-button mr-2" onClick={() => open(p)}>Open</button>{edit && <button className="secondary-button" onClick={() => edit(p)}>{statusIsLocked(p.status) ? "Revise" : "Edit"}</button>}</td></tr>)}</tbody></table></div>;
+  return <div className="table-shell border-0"><table><thead><tr><th>Project</th><th>Module</th><th>Services</th><th>Status</th><th>Sell Value</th><th>Budget</th><th>Markup</th><th>Actions</th></tr></thead><tbody>{projects.map((p) => <tr key={p.id}><td><b>{p.inputs.projectReference || "Draft"}</b><div className="text-xs text-slate-500">{p.inputs.client} - {p.inputs.location}</div></td><td><span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-black uppercase text-slate-600">{p.inputs.costingModule ?? "remedial"}</span></td><td>{p.calculations.serviceSummary}</td><td>{normaliseProjectStatus(p.status)} / {p.accountsStatus}</td><td>{money(p.calculations.proposalTotal, p.inputs.quoteCurrency)}</td><td>{money(p.calculations.budgetCost, p.inputs.quoteCurrency)}</td><td>{percent(p.calculations.budgetMarkup ?? (p.calculations.budgetCost ? p.calculations.budgetProfit / p.calculations.budgetCost * 100 : 0))}</td><td><button className="secondary-button mr-2" onClick={() => open(p)}>Open</button>{edit && <button className="secondary-button" onClick={() => edit(p)}>{statusIsLocked(p.status) ? "Revise" : "Edit"}</button>}</td></tr>)}</tbody></table></div>;
 }
 
-function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, adminTab, setAdminTab, save }: { rates: AdminRates; setRates: (rates: AdminRates) => void; repairCatalog: RepairCatalog; setRepairCatalog: (catalog: RepairCatalog) => void; adminTab: "Rates" | "Repair Types" | "Repair Materials"; setAdminTab: (tab: "Rates" | "Repair Types" | "Repair Materials") => void; save: () => void }) {
+function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, adminTab, setAdminTab, save }: { rates: AdminRates; setRates: (rates: AdminRates) => void; repairCatalog: RepairCatalog; setRepairCatalog: (catalog: RepairCatalog) => void; adminTab: AdminTab; setAdminTab: (tab: AdminTab) => void; save: () => void }) {
+  const auth = useAuth();
   const [pendingRule, setPendingRule] = useState<Record<string, string>>({});
   const [adminSearch, setAdminSearch] = useState("");
+  if (adminTab === "Survey Rates") return <SurveyRatesAdmin rates={normaliseSurveyRates(rates.surveyRates)} distanceUnit={auth.activeCompany.distanceUnit} onChange={(surveyRates) => setRates({ ...rates, surveyRates })} onSave={save} />;
   const search = adminSearch.trim().toLowerCase();
   const filteredRepairTypes = repairCatalog.types.filter((type) => `${type.code} ${type.name} ${type.description}`.toLowerCase().includes(search));
   const filteredMaterials = repairCatalog.materials.filter((material) => `${material.name} ${material.category} ${material.unitType} ${material.measuredUnitType} ${material.calcMethod} ${material.notes}`.toLowerCase().includes(search));

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { approvedBrandVariables, contrastRatio, isWcagAaText, validateLogoFile } from "@/lib/branding";
 import { convertCurrency, enabledNavigation, hasPermission, normaliseCurrency } from "@/lib/company";
 import { allowedStatusTransitions, normaliseProjectStatus, statusIsLocked } from "@/lib/workflow";
+import { resolveEnabledModuleKeys } from "@/lib/authContext";
 
 describe("multi-company security helpers", () => {
   it("keeps viewer and editor permissions separate", () => {
@@ -24,6 +25,15 @@ describe("multi-company security helpers", () => {
     expect(viewerNav).toEqual(["Dashboard", "Project Search"]);
     const adminNav = enabledNavigation(["dashboard", "projects", "admin_rates"], "company_admin").map((item) => item.name);
     expect(adminNav).toEqual(["Dashboard", "Project Search", "Admin Rates"]);
+  });
+
+  it("does not re-enable costing modules that a super admin explicitly disabled", () => {
+    const modules = resolveEnabledModuleKeys([
+      { enabled: true, app_modules: { module_key: "dashboard" } },
+      { enabled: false, app_modules: { module_key: "survey_costing" } },
+      { enabled: false, app_modules: { module_key: "remedial_costing" } }
+    ], "viewer");
+    expect(modules).toEqual(["dashboard"]);
   });
 
   it("blocks SVG logos and validates size and mime type", () => {

@@ -1,5 +1,6 @@
 import type { AdminRates, ProjectInput, ScreedTeam } from "./types";
 import { createRepairLine } from "./repairCatalog";
+import { defaultSurveyRates } from "./costing/survey/defaults";
 
 const screedTeam = (): ScreedTeam => ({
   enabled: true,
@@ -179,10 +180,13 @@ export const defaultRates: AdminRates = {
   repairBackingCordRate: 0.15,
   repairDiamondToolingWeekly: 75,
   repairWasteSkip: 400,
-  rateMargins: defaultRateMargins
+  rateMargins: defaultRateMargins,
+  surveyRates: defaultSurveyRates
 };
 
 export const emptyInput: ProjectInput = {
+  costingModule: "remedial",
+  distanceUnit: "km",
   projectReference: "",
   client: "",
   location: "",
