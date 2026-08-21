@@ -22,7 +22,7 @@ export async function POST(request: Request) {
   const token = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const serviceRoleKey = process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!token || !url || !publishableKey) return NextResponse.json({ error: "An authenticated company admin session is required." }, { status: 401 });
   if (!serviceRoleKey) return NextResponse.json({ error: "Admin password reset links are not configured on this server yet." }, { status: 503 });
 

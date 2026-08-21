@@ -24,7 +24,7 @@ Self-service recovery uses Supabase email. Add these redirect URLs in Supabase A
 - `http://localhost:3015/auth/reset-password`
 - `https://repair-costing.vercel.app/auth/reset-password`
 
-The Company Admin **Copy Reset Link** action does not send email. It uses Supabase Admin `generateLink` on a protected server route. Add the Supabase service-role secret directly to Vercel as `SUPABASE_SERVICE_ROLE_KEY`. Never paste it into source code, prefix it with `NEXT_PUBLIC`, or send it in chat.
+The Company Admin **Copy Reset Link** action does not send email. It uses Supabase Admin `generateLink` on a protected server route. Create/copy a server-side secret key from Supabase **Settings > API Keys**, then add it directly to Vercel as `SUPABASE_SECRET_KEY`. The legacy `SUPABASE_SERVICE_ROLE_KEY` name also remains supported. Never paste either secret into source code, prefix it with `NEXT_PUBLIC`, or send it in chat.
 
 ## Auth Settings
 

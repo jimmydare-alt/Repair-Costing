@@ -90,6 +90,7 @@ describe("multi-company security helpers", () => {
 
   it("keeps admin password reset links on a server-only, authorised route", () => {
     const route = readFileSync("app/api/admin/password-reset-link/route.ts", "utf8");
+    expect(route).toContain("SUPABASE_SECRET_KEY");
     expect(route).toContain("SUPABASE_SERVICE_ROLE_KEY");
     expect(route).toContain('requester.rpc("authorize_password_reset"');
     expect(route).toContain('type: "recovery"');
