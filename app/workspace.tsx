@@ -19,6 +19,7 @@ import { adjacentBuilderStep, builderStepLabels, parseEditRoute, resolveBuilderS
 import { ProductShell } from "@/components/AppShell";
 import { SurveyBuilder } from "@/components/survey/SurveyBuilder";
 import { SurveyRatesAdmin } from "@/components/survey/SurveyRatesAdmin";
+import { CompanyAdminView as CompanyAdminPanel } from "@/components/company-admin/CompanyAdminView";
 import { createEmptySurveyInput, normaliseSurveyRates } from "@/lib/costing/survey/defaults";
 import { calculateSurveyProject } from "@/lib/costing/survey/calculations";
 import { createSurveyProjectInput, syncSurveyProjectInput } from "@/lib/costing/survey/project";
@@ -267,7 +268,7 @@ export default function Workspace() {
   const pl = calculatePL(selectedCalcs, selected?.actuals ?? actuals);
   const routeModule = routeModuleKey(pathname);
   const routePermission = routePermissionFor(pathname);
-  const moduleBlocked = routeModule && (routeModule === "company_admin" ? auth.role !== "super_admin" : !auth.enabledModules.includes(routeModule) || !hasPermission(auth.role, routePermission));
+  const moduleBlocked = routeModule && (!auth.enabledModules.includes(routeModule) || !hasPermission(auth.role, routePermission));
   const displayCurrency = view === "New Project" ? input.quoteCurrency : view === "Project Detail" && selected ? selected.inputs.quoteCurrency : auth.activeCompany.defaultCurrency;
   const hasUnsavedChanges = view === "New Project" && JSON.stringify(input) !== JSON.stringify(baselineInput);
   const hasUnsavedAdminChanges = view === "Admin Rates" && (JSON.stringify(rates) !== JSON.stringify(baselineRates) || JSON.stringify(repairCatalog) !== JSON.stringify(baselineRepairCatalog));
@@ -483,7 +484,7 @@ export default function Workspace() {
         {view === "New Project" && input.costingModule !== "survey" && <ProjectBuilder input={input} setInput={setInput} rates={pricingRates} repairCatalog={pricingCatalog} calculations={calculations} onSave={saveCurrentProject} duplicateReference={projects.some((project) => project.id !== editingId && project.inputs.projectReference.trim().toLowerCase() === input.projectReference.trim().toLowerCase())} usingSnapshot={Boolean(editingId && selected?.rateSnapshot)} saving={saveState === "saving"} dirty={hasUnsavedChanges} reprice={() => { setPricingRates(rates); setPricingCatalog(repairCatalog); setInput({ ...input, exchangeRateLockedAt: new Date().toISOString() }); }} />}
         {view === "Project Search" && <SearchView projects={visibleProjects} open={(project) => openProject(project)} edit={editProject} />}
         {view === "Admin Rates" && <AdminRatesView rates={rates} setRates={setRatesState} repairCatalog={repairCatalog} setRepairCatalog={setRepairCatalog} adminTab={adminTab} setAdminTab={setAdminTab} save={async () => { try { await saveAdminData(rates, repairCatalog); setBaselineRates(JSON.parse(JSON.stringify(rates)) as AdminRates); setBaselineRepairCatalog(JSON.parse(JSON.stringify(repairCatalog)) as RepairCatalog); alert("Admin data saved and versioned. New costings use these values; saved projects keep their pricing snapshot until explicitly repriced."); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "Admin data could not be saved."); } }} />}
-        {view === "Company Admin" && <CompanyAdminView />}
+        {view === "Company Admin" && <CompanyAdminPanel />}
         {view === "Project Detail" && selected && (
           <ProjectDetail
             project={selected}

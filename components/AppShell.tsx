@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useState, type ReactNode } from "react";
 import { Building2, Calculator, LayoutDashboard, Plus, Search, Settings, Shield, Wrench } from "lucide-react";
 import { useAuth } from "@/lib/authContext";
-import type { AppModuleKey } from "@/lib/company";
+import { hasPermission, type AppModuleKey } from "@/lib/company";
 import type { CostingModule, View } from "@/lib/types";
 
 type ActiveServices = {
@@ -56,7 +56,7 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
   const logo = configuredLogo?.startsWith("/") ? configuredLogo : auth.activeCompany.name.toLowerCase().includes("face") ? "/face-logo.png" : "/cogri-group-logo.png";
   const close = () => setOpen(false);
   const visible = shellNav.filter((item) => {
-    if (item.moduleKey === "company_admin") return auth.role === "super_admin";
+    if (item.moduleKey === "company_admin") return auth.enabledModules.includes("company_admin") && hasPermission(auth.role, "company.manage");
     if (!auth.enabledModules.includes(item.moduleKey)) return false;
     if (item.href === "/admin-rates/survey" && !auth.enabledModules.includes("survey_costing")) return false;
     if ((item.href.includes("repair-types") || item.href.includes("repair-materials")) && !auth.enabledModules.includes("remedial_costing")) return false;

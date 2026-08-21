@@ -10,6 +10,7 @@ type AuthState = {
   loading: boolean;
   configured: boolean;
   session: Session | null;
+  accountStatus: "active" | "suspended" | "archived" | "invited";
   role: MembershipRole;
   companies: Company[];
   activeCompany: Company;
@@ -17,6 +18,7 @@ type AuthState = {
   nav: ReturnType<typeof enabledNavigation>;
   signIn: (email: string, password: string) => Promise<{ error?: string }>;
   signUp: (email: string, password: string, fullName: string) => Promise<{ error?: string }>;
+  requestPasswordReset: (email: string) => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
   switchCompany: (companyId: string) => void;
   refreshCompanies: () => Promise<void>;
@@ -55,13 +57,14 @@ async function loadCompanies(client: SupabaseClient, userId: string) {
     ? await client.from("profiles").select("is_super_admin,status").eq("id", userId).maybeSingle()
     : null;
   const profile = profileResult.data ?? legacyProfileResult?.data;
+  const accountStatus = profile?.status === "suspended" || profile?.status === "archived" || profile?.status === "invited" ? profile.status : "active";
   const defaultCompanyId = profileResult.data?.default_company_id ? String(profileResult.data.default_company_id) : "";
-  if (profile?.status && profile.status !== "active") return { companies: [], role: "viewer" as MembershipRole, modules: [] as AppModuleKey[], defaultCompanyId };
+  if (accountStatus !== "active") return { companies: [], role: "viewer" as MembershipRole, modules: [] as AppModuleKey[], defaultCompanyId, accountStatus };
   const superAdmin = Boolean(profile?.is_super_admin);
   if (superAdmin) {
     const { data: companies } = await client.from("companies").select("*").eq("status", "active").order("name");
     const parsed = (companies ?? []).map((row) => companyFromRow(row as Record<string, unknown>));
-    return { companies: parsed, role: "super_admin" as MembershipRole, modules: defaultModulesForRole("super_admin"), defaultCompanyId };
+    return { companies: parsed, role: "super_admin" as MembershipRole, modules: defaultModulesForRole("super_admin"), defaultCompanyId, accountStatus };
   }
   const { data: memberships } = await client
     .from("company_memberships")
@@ -73,7 +76,7 @@ async function loadCompanies(client: SupabaseClient, userId: string) {
   const defaultCompany = accessibleCompanies.find((company) => company.id === defaultCompanyId) ?? accessibleCompanies[0];
   const companies = defaultCompany ? [defaultCompany] : [];
   const role = (rows[0]?.role ?? "viewer") as MembershipRole;
-  return { companies, role, modules: defaultModulesForRole(role), defaultCompanyId };
+  return { companies, role, modules: defaultModulesForRole(role), defaultCompanyId, accountStatus };
 }
 
 function preferredCompanyId(loaded: Awaited<ReturnType<typeof loadCompanies>>, requestedCompanyId = "") {
@@ -122,6 +125,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [client] = useState(() => createBrowserSupabaseClient());
   const [loading, setLoading] = useState(configured);
   const [session, setSession] = useState<Session | null>(null);
+  const [accountStatus, setAccountStatus] = useState<AuthState["accountStatus"]>("active");
   const [companies, setCompanies] = useState<Company[]>(configured ? [] : defaultCompanies);
   const [activeCompanyId, setActiveCompanyId] = useState(defaultCompanies[1].id);
   const [role, setRole] = useState<MembershipRole>("super_admin");
@@ -131,6 +135,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   async function refreshCompanies() {
     if (!client || !session?.user) return;
     const loaded = await loadCompanies(client, session.user.id);
+    setAccountStatus(loaded.accountStatus);
     setCompanies(loaded.companies);
     const nextActive = preferredCompanyId(loaded, activeCompanyId);
     const nextRole = await loadRoleForCompany(client, session.user.id, nextActive, loaded.role);
@@ -157,6 +162,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const loaded = await loadCompanies(client, data.session.user.id);
         if (!live) return;
         setCompanies(loaded.companies);
+        setAccountStatus(loaded.accountStatus);
         const cookieCompany = typeof document !== "undefined" ? document.cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)?.[1] : undefined;
         const requestedCompany = cookieCompany ? decodeURIComponent(cookieCompany) : "";
         const nextActive = preferredCompanyId(loaded, requestedCompany);
@@ -171,6 +177,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession(nextSession);
       if (!nextSession) {
         setCompanies(defaultCompanies);
+        setAccountStatus("active");
         setActiveCompanyId(defaultCompanies[1].id);
         setRole("super_admin");
         setEnabledModules(defaultModulesForRole("super_admin"));
@@ -182,6 +189,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         void loadCompanies(client, nextSession.user.id).then(async (loaded) => {
           if (!live) return;
           setCompanies(loaded.companies);
+          setAccountStatus(loaded.accountStatus);
           const cookieCompany = typeof document !== "undefined" ? document.cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)?.[1] : undefined;
           const requestedCompany = cookieCompany ? decodeURIComponent(cookieCompany) : "";
           const nextActive = preferredCompanyId(loaded, requestedCompany);
@@ -206,6 +214,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     loading,
     configured,
     session,
+    accountStatus,
     role,
     companies,
     activeCompany,
@@ -219,6 +228,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     signUp: async (email: string, password: string, fullName: string) => {
       if (!client) return { error: "Supabase is not configured." };
       const { error } = await client.auth.signUp({ email, password, options: { data: { full_name: fullName } } });
+      return { error: error?.message };
+    },
+    requestPasswordReset: async (email: string) => {
+      if (!client) return { error: "Supabase is not configured." };
+      const redirectTo = typeof window === "undefined" ? undefined : `${window.location.origin}/auth/reset-password`;
+      const { error } = await client.auth.resetPasswordForEmail(email.trim().toLowerCase(), { redirectTo });
       return { error: error?.message };
     },
     signOut: async () => {
@@ -239,7 +254,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     refreshCompanies
   // refreshCompanies closes over the same state represented in this dependency list.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [activeCompany, activeCompanyId, client, companies, configured, enabledModules, loading, nav, role, session]);
+  }), [accountStatus, activeCompany, activeCompanyId, client, companies, configured, enabledModules, loading, nav, role, session]);
 
   useEffect(() => {
     const vars = approvedBrandVariables(activeCompany.branding);

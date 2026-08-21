@@ -1,11 +1,14 @@
 # Supabase Setup
 
-Run the SQL files in `supabase/migrations` in filename order. If migrations 001 through 005 have already been run, run both remaining migrations in order:
+Run the SQL files in `supabase/migrations` in filename order. For the current release, the live database must include:
 
 - `006_rollout_workflow_and_accounts.sql`
 - `007_rollout_defaults_and_project_deletion.sql`
+- `008_costing_modules_and_distance_units.sql`
+- `009_company_distance_and_tenant_isolation.sql`
+- `010_user_access_and_password_recovery.sql`
 
-Migration 006 restores transactional P&L/admin saves. Migration 007 assigns each ordinary user a permanent company, retains all-company access for super admins and adds administrator-only project deletion.
+Migration 010 adds audited user suspension/restoration, company access removal, invitation management, super-admin promotion/demotion and final-super-admin protection. It also removes direct profile/membership writes that could bypass those controls.
 
 Supabase project supplied for this app:
 
@@ -13,6 +16,15 @@ Supabase project supplied for this app:
 - Browser key type: publishable key
 
 Do not put service-role keys, database passwords or private credentials in browser code.
+
+## Password Recovery
+
+Self-service recovery uses Supabase email. Add these redirect URLs in Supabase Auth URL Configuration:
+
+- `http://localhost:3015/auth/reset-password`
+- `https://repair-costing.vercel.app/auth/reset-password`
+
+The Company Admin **Copy Reset Link** action does not send email. It uses Supabase Admin `generateLink` on a protected server route. Add the Supabase service-role secret directly to Vercel as `SUPABASE_SERVICE_ROLE_KEY`. Never paste it into source code, prefix it with `NEXT_PUBLIC`, or send it in chat.
 
 ## Auth Settings
 

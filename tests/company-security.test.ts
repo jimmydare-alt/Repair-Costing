@@ -26,6 +26,8 @@ describe("multi-company security helpers", () => {
     expect(viewerNav).toEqual(["Dashboard", "Project Search"]);
     const adminNav = enabledNavigation(["dashboard", "projects", "admin_rates"], "company_admin").map((item) => item.name);
     expect(adminNav).toEqual(["Dashboard", "Project Search", "Admin Rates"]);
+    expect(enabledNavigation(["company_admin"], "company_admin").map((item) => item.name)).toEqual(["Company Admin"]);
+    expect(enabledNavigation(["company_admin"], "viewer")).toEqual([]);
   });
 
   it("does not re-enable costing modules that a super admin explicitly disabled", () => {
@@ -73,6 +75,26 @@ describe("multi-company security helpers", () => {
     expect(migration).toContain("revoke execute on function public.bootstrap_super_admin(text) from anon, authenticated");
     expect(migration).toContain("foreign key (project_id, company_id) references public.projects(id, company_id)");
     expect(migration).toContain("Only a super admin can change a permanent company assignment");
+  });
+
+  it("enforces audited access management and protects the final super admin", () => {
+    const migration = readFileSync("supabase/migrations/010_user_access_and_password_recovery.sql", "utf8");
+    expect(migration).toContain("The final active super admin cannot be suspended");
+    expect(migration).toContain("The final active super admin cannot be demoted");
+    expect(migration).toContain("drop policy if exists profiles_update_self_basic");
+    expect(migration).toContain("drop policy if exists memberships_admin_manage_company");
+    expect(migration).toContain("company_role_changed");
+    expect(migration).toContain("password_reset_link_generated");
+    expect(migration).toContain("grant execute on function public.set_super_admin_status");
+  });
+
+  it("keeps admin password reset links on a server-only, authorised route", () => {
+    const route = readFileSync("app/api/admin/password-reset-link/route.ts", "utf8");
+    expect(route).toContain("SUPABASE_SERVICE_ROLE_KEY");
+    expect(route).toContain('requester.rpc("authorize_password_reset"');
+    expect(route).toContain('type: "recovery"');
+    expect(route).not.toContain("body.email");
+    expect(route).toContain('"Cache-Control": "no-store, max-age=0"');
   });
 
   it("normalises legacy quotes and locks completed costings", () => {
