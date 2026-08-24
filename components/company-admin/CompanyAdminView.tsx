@@ -21,6 +21,7 @@ type CompanyInvite = { id: string; email: string; role: MembershipRole; status: 
 type CompanyModuleRow = { id: string; module_key: AppModuleKey; name: string; enabled: boolean };
 type SuperAdminProfile = { id: string; email: string; full_name?: string; status: string; default_company_id?: string | null };
 type AuditEvent = { id: string; company_id?: string | null; actor_id?: string | null; event_type: string; target_id?: string | null; event_data?: Record<string, unknown>; created_at: string };
+type AppErrorEvent = { id: string; reference: string; area: string; message: string; path?: string | null; created_at: string };
 type UserFilter = "active" | "suspended" | "removed" | "invited";
 type PendingConfirmation = {
   title: string;
@@ -77,6 +78,7 @@ export function CompanyAdminView() {
   const [modules, setModules] = useState<CompanyModuleRow[]>([]);
   const [superAdmins, setSuperAdmins] = useState<SuperAdminProfile[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [appErrors, setAppErrors] = useState<AppErrorEvent[]>([]);
   const [profileNames, setProfileNames] = useState(new Map<string, string>());
   const [userFilter, setUserFilter] = useState<UserFilter>("active");
   const [inviteEmail, setInviteEmail] = useState("");
@@ -115,10 +117,11 @@ export function CompanyAdminView() {
       auditQuery.order("created_at", { ascending: false }).limit(30),
       auth.role === "super_admin"
         ? client.from("profiles").select("id,email,full_name,status,default_company_id").eq("is_super_admin", true).order("full_name", { ascending: true })
-        : Promise.resolve({ data: [], error: null })
+        : Promise.resolve({ data: [], error: null }),
+      client.from("app_error_events").select("id,reference,area,message,path,created_at").eq("company_id", companyId).order("created_at", { ascending: false }).limit(30)
     ]);
-    const [membershipResult, inviteResult, moduleResult, auditResult, superResult] = queries;
-    const firstError = membershipResult.error ?? inviteResult.error ?? moduleResult.error ?? auditResult.error ?? superResult.error;
+    const [membershipResult, inviteResult, moduleResult, auditResult, superResult, appErrorResult] = queries;
+    const firstError = membershipResult.error ?? inviteResult.error ?? moduleResult.error ?? auditResult.error ?? superResult.error ?? appErrorResult.error;
     if (firstError) {
       setMessage(friendlyAdminError(firstError.message));
       setLoading(false);
@@ -154,6 +157,7 @@ export function CompanyAdminView() {
       return { id: appModule.id, module_key: appModule.module_key, name: appModule.name, enabled: row.enabled };
     }).sort((a: CompanyModuleRow, b: CompanyModuleRow) => a.name.localeCompare(b.name)));
     setAuditEvents(auditRows);
+    setAppErrors((appErrorResult.data ?? []) as AppErrorEvent[]);
     setSuperAdmins((superResult.data ?? []).map((row: any) => ({ ...row })));
     setLoading(false);
   }
@@ -402,6 +406,8 @@ export function CompanyAdminView() {
       {canCreateCompany && <section className="app-card-strong create-company-card"><div className="panel-heading"><div><h2>Create Company</h2><p>Super admin only. New companies start with the full module set.</p></div></div><div className="create-company-grid"><TextField label="Company Name" value={newCompanyName} onChange={(event) => setNewCompanyName(event.target.value)} /><SelectField label="Currency" value={newCompanyCurrency} onChange={(event) => setNewCompanyCurrency(event.target.value as CurrencyCode)}><option>EUR</option><option>GBP</option><option>PLN</option><option>USD</option></SelectField><SelectField label="Distance Unit" value={newCompanyDistanceUnit} onChange={(event) => setNewCompanyDistanceUnit(event.target.value as DistanceUnit)}><option value="km">Kilometres (km)</option><option value="miles">Miles</option></SelectField><SelectField label="Company Offices" value={String(newCompanyOfficeCount)} onChange={(event) => setNewCompanyOfficeCount(Number(event.target.value) === 2 ? 2 : 1)}><option value="1">1 office</option><option value="2">2 offices</option></SelectField><Button variant="primary" onClick={() => void createCompany()}>Create Company</Button></div></section>}
 
       <section className="app-card-strong access-audit-card"><div className="panel-heading"><div><h2>Access History</h2><p>{auth.role === "super_admin" ? "Recent user, invitation and recovery administration across all companies." : "Recent user, invitation and recovery administration for this company."}</p></div></div><div className="audit-list">{auditEvents.map((event) => <div key={event.id}><span className="audit-dot" /><div><b>{eventLabel(event.event_type)}</b><span>{String(event.event_data?.email ?? event.target_id ?? "User")} by {event.actor_id ? profileNames.get(event.actor_id) ?? event.actor_id.slice(0, 8) : "System"}{auth.role === "super_admin" && event.company_id ? ` / ${auth.companies.find((company) => company.id === event.company_id)?.name ?? "Company"}` : ""}</span></div><time>{new Date(event.created_at).toLocaleString("en-GB")}</time></div>)}{!auditEvents.length && <div className="admin-empty">No access changes have been recorded yet.</div>}</div></section>
+
+      <section className="app-card-strong access-audit-card"><div className="panel-heading"><div><h2>Application Errors</h2><p>Recent technical failures for {auth.activeCompany.name}. Give the reference to support when reporting a problem.</p></div><StatusChip tone={appErrors.length ? "warning" : "success"}>{appErrors.length ? `${appErrors.length} Recent` : "Clear"}</StatusChip></div><div className="audit-list">{appErrors.map((event) => <div key={event.id}><span className="audit-dot" /><div><b>{event.reference} / {event.area}</b><span>{event.message}{event.path ? ` / ${event.path}` : ""}</span></div><time>{new Date(event.created_at).toLocaleString("en-GB")}</time></div>)}{!appErrors.length && <div className="admin-empty">No recent application errors have been recorded for this company.</div>}</div></section>
 
       {pending && <div className="admin-modal-backdrop" role="presentation"><section className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-confirm-title"><div className="admin-modal-heading"><div><p>Confirmation required</p><h2 id="admin-confirm-title">{pending.title}</h2></div><button aria-label="Close" onClick={() => setPending(null)}><X /></button></div><p>{pending.description}</p><TextField label={`Type ${pending.email} to confirm`} value={confirmationEmail} autoComplete="off" onChange={(event) => setConfirmationEmail(event.target.value)} /><div className="admin-modal-actions"><Button variant="secondary" onClick={() => setPending(null)}>Cancel</Button><Button variant={pending.danger ? "danger" : "primary"} disabled={!canConfirm || actionBusy} onClick={async () => { setActionBusy(true); await pending.run(confirmationEmail); setActionBusy(false); setPending(null); }}>{actionBusy ? "Working..." : pending.confirmLabel}</Button></div></section></div>}
 

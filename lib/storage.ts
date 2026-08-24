@@ -5,7 +5,7 @@ import { defaultRates, emptyInput } from "./rates";
 import { createRepairLine, defaultRepairCatalog } from "./repairCatalog";
 import { allowedStatusTransitions, normaliseProjectStatus } from "./workflow";
 import { createBrowserSupabaseClient, isSupabaseConfigured } from "./supabaseClient";
-import type { AdminRates, ChangeLogEntry, PLActuals, ProjectInput, ProjectNote, ProjectRecord, ProjectStatus, ProjectTimeEntry, QuoteRevision, RepairCatalog } from "./types";
+import type { AdminRates, ChangeLogEntry, PLActuals, ProjectInput, ProjectNote, ProjectRecord, ProjectStatus, ProjectTimeEntry, QuoteRevision, RateVersionRecord, RepairCatalog } from "./types";
 import { calculateSurveyProject } from "./costing/survey/calculations";
 import { normaliseSurveyInput, normaliseSurveyRates } from "./costing/survey/defaults";
 
@@ -248,12 +248,23 @@ export async function saveRepairCatalog(catalog: RepairCatalog) {
   writeJson(REPAIR_CATALOG_KEY, catalog);
 }
 
-export async function loadRateVersions() {
+export async function loadRateVersions(): Promise<RateVersionRecord[]> {
   const supabase = await supabaseContext();
   if (!supabase) return [];
   const { data, error } = await supabase.client.from("rate_versions").select("*").eq("company_id", supabase.companyId).order("created_at", { ascending: false }).limit(20);
   if (error) throw new Error(`Could not load rate versions: ${error.message}`);
-  return data ?? [];
+  const creatorIds = Array.from(new Set((data ?? []).map((row) => row.created_by).filter(Boolean)));
+  const creatorLabels = new Map<string, string>();
+  if (creatorIds.length) {
+    const { data: profiles } = await supabase.client.from("profiles").select("id,full_name,email").in("id", creatorIds);
+    (profiles ?? []).forEach((profile) => creatorLabels.set(String(profile.id), String(profile.full_name || profile.email || String(profile.id).slice(0, 8))));
+  }
+  return (data ?? []).map((row) => ({
+    id: String(row.id), companyId: String(row.company_id), source: String(row.source ?? "admin_rates"),
+    rates: normaliseRates(row.rates as Partial<AdminRates>), createdBy: row.created_by ? String(row.created_by) : undefined,
+    createdByLabel: row.created_by ? creatorLabels.get(String(row.created_by)) ?? `User ${String(row.created_by).slice(0, 8)}` : "System",
+    createdAt: String(row.created_at ?? now())
+  }));
 }
 
 export async function saveRatesWithVersion(rates: AdminRates) {
@@ -512,7 +523,7 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
 export async function loadProjects(): Promise<ProjectRecord[]> {
   const supabase = await supabaseContext();
   if (supabase) {
-    const { data, error } = await supabase.client.from("projects").select("*").eq("company_id", supabase.companyId).order("updated_at", { ascending: false });
+    const { data, error } = await supabase.client.from("projects").select("*").eq("company_id", supabase.companyId).is("deleted_at", null).order("updated_at", { ascending: false });
     if (error) throw new Error(`Could not load projects: ${error.message}`);
     const ids = (data ?? []).map((row) => String(row.id));
     const actualsByProject = new Map<string, PLActuals>();
@@ -524,10 +535,23 @@ export async function loadProjects(): Promise<ProjectRecord[]> {
     return (data ?? []).map((row) => rowToProject(row as Record<string, unknown>, actualsByProject.get(String(row.id))));
   }
   if (isSupabaseConfigured()) requireCloudContext("Loading projects");
-  return readJson<ProjectRecord[]>(PROJECTS_KEY, []).map((project) => ({ ...project, companyId: project.companyId ?? "local-face-gmbh", inputs: normaliseInput(project.inputs), actuals: normaliseActuals(project.actuals, project.calculations), rateSnapshot: project.rateSnapshot ? normaliseRates(project.rateSnapshot) : undefined }));
+  return readJson<ProjectRecord[]>(PROJECTS_KEY, []).filter((project) => !project.deletedAt).map((project) => ({ ...project, companyId: project.companyId ?? "local-face-gmbh", inputs: normaliseInput(project.inputs), actuals: normaliseActuals(project.actuals, project.calculations), rateSnapshot: project.rateSnapshot ? normaliseRates(project.rateSnapshot) : undefined }));
 }
 
-export async function saveProject(input: ProjectInput, rates: AdminRates, existingId?: string, actor = "System", repairCatalog: RepairCatalog = defaultRepairCatalog, status: ProjectStatus = "Draft"): Promise<ProjectRecord> {
+export async function loadDeletedProjects(): Promise<ProjectRecord[]> {
+  const supabase = await supabaseContext();
+  if (supabase) {
+    const { data, error } = await supabase.client.from("projects").select("*").eq("company_id", supabase.companyId).not("deleted_at", "is", null).order("deleted_at", { ascending: false }).limit(100);
+    if (error) throw new Error(`Could not load the recycle bin: ${error.message}`);
+    return (data ?? []).map((row) => rowToProject(row as Record<string, unknown>));
+  }
+  if (isSupabaseConfigured()) requireCloudContext("Loading the recycle bin");
+  return readJson<ProjectRecord[]>(PROJECTS_KEY, []).filter((project) => Boolean(project.deletedAt)).map((project) => ({ ...project, inputs: normaliseInput(project.inputs), rateSnapshot: project.rateSnapshot ? normaliseRates(project.rateSnapshot) : undefined }));
+}
+
+type SaveProjectOptions = { autosave?: boolean };
+
+export async function saveProject(input: ProjectInput, rates: AdminRates, existingId?: string, actor = "System", repairCatalog: RepairCatalog = defaultRepairCatalog, status: ProjectStatus = "Draft", options: SaveProjectOptions = {}): Promise<ProjectRecord> {
   const projects = await loadProjects();
   const existing = existingId ? projects.find((project) => project.id === existingId) : undefined;
   if (existing && ["Lost", "Completed", "Closed"].includes(normaliseProjectStatus(existing.status))) throw new Error(`${normaliseProjectStatus(existing.status)} projects are locked and cannot be revised.`);
@@ -555,7 +579,9 @@ export async function saveProject(input: ProjectInput, rates: AdminRates, existi
       ? [...(existing?.revisions ?? []), makeRevision(inputs, calculations, rates, repairCatalog)]
       : existing?.revisions ?? [],
     notes: existing?.notes ?? [],
-    changeLog: log(existing?.changeLog, savedActor, existing ? `${status} edited` : `${status} created`, `${inputs.projectReference || "Draft"} ${calculations.serviceSummary} ${calculations.proposalTotal}`),
+    changeLog: options.autosave && existing
+      ? existing.changeLog ?? []
+      : log(existing?.changeLog, savedActor, options.autosave ? "Draft autosaved" : existing ? `${status} edited` : `${status} created`, `${inputs.projectReference || "Draft"} ${calculations.serviceSummary} ${calculations.proposalTotal}`),
     timeEntries: existing?.timeEntries ?? []
   };
   const supabase = await supabaseContext();
@@ -565,22 +591,47 @@ export async function saveProject(input: ProjectInput, rates: AdminRates, existi
     return record;
   }
   if (isSupabaseConfigured()) requireCloudContext("Saving a project");
-  writeJson(PROJECTS_KEY, existing ? projects.map((project) => project.id === record.id ? record : project) : [record, ...projects]);
+  const allProjects = readJson<ProjectRecord[]>(PROJECTS_KEY, []);
+  writeJson(PROJECTS_KEY, existing ? allProjects.map((project) => project.id === record.id ? record : project) : [record, ...allProjects]);
   return record;
 }
 
-export async function deleteProject(projectId: string) {
+export async function deleteProject(projectId: string, reason = "Moved to recycle bin") {
   const projects = await loadProjects();
   const current = projects.find((project) => project.id === projectId);
   if (!current) throw new Error("The selected project no longer exists.");
   const supabase = await supabaseContext();
   if (supabase) {
-    const { error } = await supabase.client.rpc("delete_project_transaction", { target_project_id: projectId });
-    if (error) throw new Error(`Could not delete project: ${error.message}`);
+    const { error } = await supabase.client.rpc("archive_project_transaction", { target_project_id: projectId, reason_value: reason });
+    if (error) throw new Error(`Could not move project to the recycle bin: ${error.message}`);
     return;
   }
-  if (isSupabaseConfigured()) requireCloudContext("Deleting a project");
-  writeJson(PROJECTS_KEY, projects.filter((project) => project.id !== projectId));
+  if (isSupabaseConfigured()) requireCloudContext("Archiving a project");
+  const all = readJson<ProjectRecord[]>(PROJECTS_KEY, []);
+  writeJson(PROJECTS_KEY, all.map((project) => project.id === projectId ? { ...project, deletedAt: now(), deletedBy: actorName(), deletionReason: reason } : project));
+}
+
+export async function restoreProject(projectId: string) {
+  const supabase = await supabaseContext();
+  if (supabase) {
+    const { error } = await supabase.client.rpc("restore_project_transaction", { target_project_id: projectId });
+    if (error) throw new Error(`Could not restore project: ${error.message}`);
+    return;
+  }
+  if (isSupabaseConfigured()) requireCloudContext("Restoring a project");
+  const all = readJson<ProjectRecord[]>(PROJECTS_KEY, []);
+  writeJson(PROJECTS_KEY, all.map((project) => project.id === projectId ? { ...project, deletedAt: undefined, deletedBy: undefined, deletionReason: undefined } : project));
+}
+
+export async function purgeProject(projectId: string) {
+  const supabase = await supabaseContext();
+  if (supabase) {
+    const { error } = await supabase.client.rpc("purge_project_transaction", { target_project_id: projectId });
+    if (error) throw new Error(`Could not permanently delete project: ${error.message}`);
+    return;
+  }
+  if (isSupabaseConfigured()) requireCloudContext("Permanently deleting a project");
+  writeJson(PROJECTS_KEY, readJson<ProjectRecord[]>(PROJECTS_KEY, []).filter((project) => project.id !== projectId));
 }
 
 export async function updateProjectWorkflow(projectId: string, status: ProjectStatus, accountsStatus?: ProjectRecord["accountsStatus"], actor = "System") {
@@ -705,6 +756,9 @@ export function rowToProject(row: Record<string, unknown>, actuals?: PLActuals):
     createdAt: String(row.created_at ?? now()),
     createdBy: row.created_by ? String(row.created_by) : undefined,
     updatedBy: row.updated_by ? String(row.updated_by) : undefined,
+    deletedAt: row.deleted_at ? String(row.deleted_at) : undefined,
+    deletedBy: row.deleted_by ? String(row.deleted_by) : undefined,
+    deletionReason: row.deletion_reason ? String(row.deletion_reason) : undefined,
     status: normaliseProjectStatus(row.status),
     accountsStatus: (row.accounts_status as ProjectRecord["accountsStatus"]) ?? "Not Required",
     inputs,

@@ -19,3 +19,6 @@
 
 -- 011_company_offices.sql
 -- Adds the company office count used by new survey and remedial travel snapshots.
+
+-- 012_rollout_hardening.sql
+-- Adds protected project archiving/restoration, super-admin purge and app error references.

@@ -1,66 +1,48 @@
 # Supabase Setup
 
-Run the SQL files in `supabase/migrations` in filename order. For the current release, the live database must include:
+Run every SQL file in `supabase/migrations` in filename order. The current production database must include migrations 006 through 012.
 
-- `006_rollout_workflow_and_accounts.sql`
-- `007_rollout_defaults_and_project_deletion.sql`
-- `008_costing_modules_and_distance_units.sql`
-- `009_company_distance_and_tenant_isolation.sql`
-- `010_user_access_and_password_recovery.sql`
+- 006: workflow and accounts controls
+- 007: rollout defaults and original deletion transaction
+- 008: costing modules and distance units
+- 009: company distance settings and tenant isolation
+- 010: user access and password recovery
+- 011: office count and workbook-aligned USA rates
+- 012: secure draft/recycle support and company-scoped application error reporting
 
-Migration 010 adds audited user suspension/restoration, company access removal, invitation management, super-admin promotion/demotion and final-super-admin protection. It also removes direct profile/membership writes that could bypass those controls.
+Migration 012 changes legacy project deletion into a reversible archive, adds restore and super-admin-only purge transactions, and adds the administrator error-event feed.
 
-Supabase project supplied for this app:
+Supabase project:
 
 - URL: `https://nbocvmzwoxxizpysthig.supabase.co`
-- Browser key type: publishable key
+- Browser key: publishable/anon key only
 
-Do not put service-role keys, database passwords or private credentials in browser code.
+Never put a service-role key, secret API key, database password or private credential in browser code or a `NEXT_PUBLIC_` environment variable.
 
 ## Password Recovery
 
-Self-service recovery uses Supabase email. Add these redirect URLs in Supabase Auth URL Configuration:
+Add these redirect URLs in Supabase Auth URL Configuration:
 
 - `http://localhost:3015/auth/reset-password`
 - `https://repair-costing.vercel.app/auth/reset-password`
 
-The Company Admin **Copy Reset Link** action does not send email. It uses Supabase Admin `generateLink` on a protected server route. Create/copy a server-side secret key from Supabase **Settings > API Keys**, then add it directly to Vercel as `SUPABASE_SECRET_KEY`. The legacy `SUPABASE_SERVICE_ROLE_KEY` name also remains supported. Never paste either secret into source code, prefix it with `NEXT_PUBLIC`, or send it in chat.
+Company Admin **Copy Reset Link** uses a protected server route. Configure `SUPABASE_SECRET_KEY` directly in Vercel; legacy `SUPABASE_SERVICE_ROLE_KEY` is also supported. Never commit either value.
 
 ## Auth Settings
 
-For the requested local-first login behaviour:
-
 - Email/password auth: enabled
-- Email confirmation: disabled for now
-- Session persistence: browser local storage
-- Redirect URLs:
-  - `http://localhost:3015`
-  - `https://repair-costing.vercel.app`
-  - later company server URL
+- Email confirmation: disabled until the rollout policy changes
+- Session persistence: Supabase browser auth session
+- Allowed app URLs: local reset URL and `https://repair-costing.vercel.app`
 
-## First Companies
+## Operational Recovery
 
-Seeded by migration:
-
-- `CoGri Group`, reporting/default currency `GBP`
-- `Face GmbH`, reporting/default currency `EUR`
-
-First super admin user:
-
-- `james.dare@cogrigroup.com`
-
-After this user has signed up once, run:
-
-```sql
-select public.bootstrap_super_admin('james.dare@cogrigroup.com');
-```
+- Do not repair project records directly in production unless the recovery runbook explicitly requires it.
+- Use the Project Search recycle bin for accidental deletion.
+- Use saved rate versions to inspect or restore a previous admin-rate set.
+- Use Supabase point-in-time recovery or a separate restored project for infrastructure-level recovery tests.
+- Follow `PRODUCTION_RECOVERY_RUNBOOK.md` and record each drill.
 
 ## Logo Policy
 
-Version one blocks SVG uploads. Allowed logo formats:
-
-- PNG
-- JPG/JPEG
-- WebP
-
-Maximum file size: 2 MB.
+Allowed formats are PNG, JPG/JPEG and WebP, maximum 2 MB. SVG uploads remain blocked.

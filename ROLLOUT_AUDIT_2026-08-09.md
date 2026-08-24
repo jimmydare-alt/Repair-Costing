@@ -1,41 +1,57 @@
-# Production Rollout Audit - 9 August 2026
+# Production Rollout Audit - 24 August 2026
 
 ## Scope
 
-This audit covers the production release of the multi-company remedial costing system, including project workflow, grinding, repairs, the current screeding model, shared travel, admin rates, P&L actuals, Supabase persistence and the internal project-manager handover.
+This audit covers the multi-company Survey and Remedial Costing Platform: authentication, company isolation, survey costing, grinding, screeding, repairs, project management, extras, project search, P&L actuals, rate administration, snapshots, handover output and operational recovery.
 
-## Controls Added
+## Current Controls
 
-- New projects start from a clean company-currency input record.
-- Only selected services appear in navigation and calculations.
-- Labour modes isolate subcontract and in-house costs; closed sections are not priced.
-- Surveyor labour remains mandatory for grinding and screeding.
-- Approval blockers cover missing project identity, disabled selected services, zero days, missing labour, incomplete repair materials, missing vehicles, invalid exchange rates and contradictory programme overrides.
-- Overall markup below 25% requires a manager reason.
-- Approved costings create immutable calculation/rate/catalogue snapshots.
-- Lost, completed and closed projects cannot be revised.
-- P&L actuals save through a database transaction and never overwrite project calculations.
-- Admin rates and repair catalogue save together through a database transaction and create a rate version.
-- Accounts users can update P&L actuals but cannot edit projects or admin rates.
-- PM handovers are budget-only, internal/confidential, and cannot be generated from an unapproved costing or issued before the project is Won.
+- Survey and remedial projects use separate input shapes and calculation engines.
+- New projects start blank in the active company's currency, distance unit and office configuration.
+- Only enabled company modules and selected remedial services appear in navigation and calculations.
+- Subcontract, in-house and both labour modes price only the selected mode. Hidden inactive inputs are retained for convenience but excluded from totals.
+- Surveyor labour is mandatory where the service requires it.
+- Validation identifies omissions and contradictory inputs. It does not block completion for commercial approval or require sign-off.
+- Overall and category markup below 25% is highlighted as a warning only.
+- Every saved project keeps its rates, repair catalogue, exchange rates and calculation version as a snapshot.
+- Admin rate saves are versioned. A super admin can load an earlier version into the editor, review it and explicitly save it as the new current version.
+- Drafts with a project reference autosave to the company database after 30 seconds of inactivity. Manual Save Draft remains available.
+- Project removal is reversible. Company administrators archive to the recycle bin with a reason; only super admins can permanently purge an archived project.
+- P&L actuals are stored separately from the budget snapshot and do not overwrite costing inputs.
+- Technical failures receive an `ERR-YYYYMMDD-XXXXXX` reference and are visible to administrators for the affected company.
 
-## Calculation Findings Resolved
+## Security And Tenancy
 
-- Removed the duplicate legacy repair formula engine.
-- Corrected weekend-day calculation for partial weeks.
-- Applied overridden in-house production days to grinding and screeding equipment.
-- Corrected project travel to use role-specific rates and exclude subcontractors.
-- Corrected mileage to use the entered vehicle count exactly.
-- Corrected P&L survey labour to include surveyor weekend/night allowances.
-- Corrected P&L hotel/subsistence extras so all budget rows reconcile to the project budget.
-- Kept subcontract mobilisation in Subcontract for P&L reporting.
-- Aggregated repair material requirements before full-unit rounding.
+- Supabase row-level security scopes projects, rates, repair catalogues, P&L actuals, audit events and error events to active company membership.
+- Ordinary users have one permanent default company and cannot switch into another company's workspace.
+- Super admins can access all companies and are the only users who can enable modules or permanently purge projects.
+- Suspended users and archived memberships cannot read company data.
+- Secret/service-role keys remain server-side and are not exposed in browser code.
 
-## Deployment Gate
+## Calculation Findings Retained
 
-Before production deployment:
+- Repair materials aggregate by material across the project before full-unit rounding.
+- Width, depth, length, quantity and hole dimensions affect material volume according to the repair type's configured method.
+- Subcontract mobilisation is included in Subcontract where retained in legacy records; current subcontract entry is treated as the complete subcontract cost.
+- In-house labour, hotel, subsistence and travel use the applicable team size and service-specific inputs.
+- A one-office journey is office-to-site doubled. A two-office journey is primary-office-to-site plus site-to-secondary-office. Vehicle and journey counts are applied afterwards.
+- Screeding programme checks preparation, screeding and grinding activity days separately.
+- P&L budget categories reconcile to Labour, Subcontract, Materials, Equipment, Travel, Hotel/Subsistence and Haulage.
 
-1. Apply `supabase/migrations/006_rollout_workflow_and_accounts.sql`.
-2. Run TypeScript, unit tests, lint and the Next.js production build.
-3. Verify login, company switching, clean New Project, service navigation, project save/reload, admin save, P&L save/reload and handover PDF on the Vercel deployment.
-4. Confirm no existing project, admin-rate or repair-catalogue records were reset.
+## Verification
+
+- TypeScript strict check: required before release.
+- Unit and calculation suite: 98 tests passing on 24 August 2026.
+- Production build and lint: required before release.
+- Browser smoke suite: public production login shell passed in headless Chrome on 24 August 2026. The authenticated workflow runs when dedicated `E2E_EMAIL` and `E2E_PASSWORD` secrets are provided.
+- Database migration required for this release: `supabase/migrations/012_rollout_hardening.sql`.
+
+## Release Gate
+
+1. Apply migration 012 before deploying application code.
+2. Run typecheck, unit tests, lint and production build.
+3. Confirm a draft autosaves, reloads through Continue Costing and retains its rate snapshot.
+4. Archive and restore a disposable project in each production company.
+5. Save and reload P&L actuals without changing project budget totals.
+6. Confirm Company Admin can read a test error reference only for the active company.
+7. Follow `PRODUCTION_RECOVERY_RUNBOOK.md` and record the quarterly recovery drill.

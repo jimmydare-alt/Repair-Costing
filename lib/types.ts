@@ -698,6 +698,9 @@ export type ProjectRecord = {
   createdAt: string;
   createdBy?: string;
   updatedBy?: string;
+  deletedAt?: string;
+  deletedBy?: string;
+  deletionReason?: string;
   status: ProjectStatus;
   accountsStatus: AccountsStatus;
   inputs: ProjectInput;
@@ -712,4 +715,14 @@ export type ProjectRecord = {
   notes?: ProjectNote[];
   changeLog?: ChangeLogEntry[];
   timeEntries?: ProjectTimeEntry[];
+};
+
+export type RateVersionRecord = {
+  id: string;
+  companyId: string;
+  source: string;
+  rates: AdminRates;
+  createdBy?: string;
+  createdByLabel: string;
+  createdAt: string;
 };

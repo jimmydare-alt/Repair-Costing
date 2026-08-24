@@ -9,7 +9,7 @@ import { money, percent, formatDateTime, setMoneyCurrency } from "@/lib/format";
 import { projectCsv } from "@/lib/export";
 import { applyUsaWorkbookRates, createRemedialProjectInput, defaultRates, emptyInput } from "@/lib/rates";
 import { createRepairLine, defaultRepairCatalog, repairTypeByCode, validateRepairCatalog } from "@/lib/repairCatalog";
-import { addProjectNote, addProjectTimeEntry, deleteProject, loadProjects, loadRates, loadRepairCatalog, recordProjectHandover, saveActuals, saveAdminData, saveProject, setStorageContext, updateProjectWorkflow } from "@/lib/storage";
+import { addProjectNote, addProjectTimeEntry, deleteProject, loadDeletedProjects, loadProjects, loadRates, loadRateVersions, loadRepairCatalog, purgeProject, recordProjectHandover, restoreProject, saveActuals, saveAdminData, saveProject, setStorageContext, updateProjectWorkflow } from "@/lib/storage";
 import { useAuth } from "@/lib/authContext";
 import { distanceUnitCopy, hasPermission } from "@/lib/company";
 import { createBrowserSupabaseClient } from "@/lib/supabaseClient";
@@ -24,8 +24,9 @@ import { createEmptySurveyInput, normaliseSurveyRates } from "@/lib/costing/surv
 import { calculateSurveyProject } from "@/lib/costing/survey/calculations";
 import { createSurveyProjectInput, syncSurveyProjectInput } from "@/lib/costing/survey/project";
 import { chargeableJourneyDistance, effectiveReturnFlights } from "@/lib/travel";
+import { reportAppError } from "@/lib/monitoring";
 import type { AppModuleKey, CurrencyCode, DistanceUnit, MembershipRole, Permission } from "@/lib/company";
-import type { AdditionalItem, AdminRates, AirportTransport, DestinationTransport, DetailTab, LabourMode, Line, PLCategory, PriceType, ProjectInput, ProjectRecord, ProjectStatus, ProjectTimeEntry, RepairCatalog, RepairLabourMode, RepairLineItem, RepairMaterial, RepairMaterialCategory, RepairSubcontractor, RepairType, RepairUnitType, ScreedTeam, TravelMode, View } from "@/lib/types";
+import type { AdditionalItem, AdminRates, AirportTransport, DestinationTransport, DetailTab, LabourMode, Line, PLCategory, PriceType, ProjectInput, ProjectRecord, ProjectStatus, ProjectTimeEntry, RateVersionRecord, RepairCatalog, RepairLabourMode, RepairLineItem, RepairMaterial, RepairMaterialCategory, RepairSubcontractor, RepairType, RepairUnitType, ScreedTeam, TravelMode, View } from "@/lib/types";
 
 const detailTabs: DetailTab[] = ["Summary", "Costing", "Commercial Review", "PM Handover", "Actual P&L", "Activity"];
 type AdminTab = "Rates" | "Survey Rates" | "Repair Types" | "Repair Materials";
@@ -256,12 +257,16 @@ export default function Workspace() {
   const [pricingRates, setPricingRates] = useState<AdminRates>(defaultRates);
   const [pricingCatalog, setPricingCatalog] = useState<RepairCatalog>(defaultRepairCatalog);
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
+  const [deletedProjects, setDeletedProjects] = useState<ProjectRecord[]>([]);
+  const [rateVersions, setRateVersions] = useState<RateVersionRecord[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [editingId, setEditingId] = useState("");
   const [note, setNote] = useState("");
   const [workspaceError, setWorkspaceError] = useState("");
   const [workspaceLoading, setWorkspaceLoading] = useState(false);
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle");
+  const [saveState, setSaveState] = useState<"idle" | "autosaving" | "saving" | "saved">("idle");
+  const [lastSavedAt, setLastSavedAt] = useState("");
+  const autosaveInFlight = useRef(false);
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
   const [adminTab, setAdminTab] = useState<AdminTab>(routeAdminTab);
   const companyLoadToken = useRef(0);
@@ -277,6 +282,7 @@ export default function Workspace() {
   const hasUnsavedChanges = view === "New Project" && JSON.stringify(input) !== JSON.stringify(baselineInput);
   const hasUnsavedAdminChanges = view === "Admin Rates" && (JSON.stringify(rates) !== JSON.stringify(baselineRates) || JSON.stringify(repairCatalog) !== JSON.stringify(baselineRepairCatalog));
   const hasUnsavedWork = hasUnsavedChanges || hasUnsavedAdminChanges;
+  const duplicateProjectReference = Boolean(input.projectReference.trim()) && projects.some((project) => project.id !== editingId && project.inputs.projectReference.trim().toLowerCase() === input.projectReference.trim().toLowerCase());
   setMoneyCurrency(displayCurrency);
 
   useEffect(() => {
@@ -306,7 +312,7 @@ export default function Workspace() {
     setWorkspaceLoading(true);
     setWorkspaceLoaded(false);
     setWorkspaceError("");
-    void Promise.all([loadRates(), loadProjects(), loadRepairCatalog()]).then(([loadedRates, loadedProjects, loadedRepairCatalog]) => {
+    void Promise.all([loadRates(), loadProjects(), loadRepairCatalog(), loadDeletedProjects(), loadRateVersions()]).then(([loadedRates, loadedProjects, loadedRepairCatalog, loadedDeletedProjects, loadedRateVersions]) => {
       if (loadToken !== companyLoadToken.current) return;
       setRatesState(loadedRates);
       setBaselineRates(JSON.parse(JSON.stringify(loadedRates)) as AdminRates);
@@ -315,12 +321,15 @@ export default function Workspace() {
       setPricingRates(loadedRates);
       setPricingCatalog(loadedRepairCatalog);
       setProjects(loadedProjects);
+      setDeletedProjects(loadedDeletedProjects);
+      setRateVersions(loadedRateVersions);
       const companyBlank = createRemedialProjectInput(loadedRates, auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit, auth.activeCompany.officeCount);
       const routedBlank = routeIsSurvey ? createSurveyProjectInput(auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit, undefined, auth.activeCompany.officeCount) : companyBlank;
       setInput(routedBlank);
       setBaselineInput(cloneInput(routedBlank));
       setEditingId("");
       setSelectedId("");
+      setLastSavedAt("");
       setActuals(defaultActuals(routeIsSurvey && routedBlank.survey ? calculateSurveyProject(routedBlank.survey, loadedRates.surveyRates) : calculateProject(companyBlank, loadedRates, loadedRepairCatalog)));
       setWorkspaceLoaded(true);
     }).catch((error: unknown) => { if (loadToken === companyLoadToken.current) setWorkspaceError(error instanceof Error ? error.message : "Could not load the company workspace."); }).finally(() => { if (loadToken === companyLoadToken.current) setWorkspaceLoading(false); });
@@ -339,6 +348,7 @@ export default function Workspace() {
     if (!routeEditProjectId || !workspaceLoaded) return;
     const project = projects.find((item) => item.id === routeEditProjectId);
     if (!project) return;
+    if (editingId === project.id) return;
     const editable = cloneInput(project.inputs);
     if (routeCreatesRevision) {
       const numericRevision = Number.parseInt(editable.revision, 10);
@@ -354,14 +364,16 @@ export default function Workspace() {
     setActuals(project.actuals ?? defaultActuals(project.calculations));
   // Loading an edit route is intentionally keyed to the routed record, not input edits.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [routeEditProjectId, routeEditStep, routeCreatesRevision, workspaceLoaded]);
+  }, [editingId, routeEditProjectId, routeEditStep, routeCreatesRevision, workspaceLoaded]);
 
   useEffect(() => {
     if (selected) setActuals(selected.actuals ?? defaultActuals(selected.calculations));
   }, [selected, selectedId]);
 
   async function refresh() {
-    setProjects(await loadProjects());
+    const [active, deleted] = await Promise.all([loadProjects(), loadDeletedProjects()]);
+    setProjects(active);
+    setDeletedProjects(deleted);
   }
 
   function startNewProject() {
@@ -375,6 +387,8 @@ export default function Workspace() {
     setSelectedId("");
     setEditingId("");
     setActuals(defaultActuals(calculateProject(blank, rates, repairCatalog)));
+    setLastSavedAt("");
+    setSaveState("idle");
     setView("New Project");
     setDetailTab("Summary");
     if (pathname !== "/new-project") router.push("/new-project");
@@ -389,6 +403,8 @@ export default function Workspace() {
     setSelectedId("");
     setEditingId("");
     setActuals(defaultActuals(calculateSurveyProject(blank.survey!, rates.surveyRates)));
+    setLastSavedAt("");
+    setSaveState("idle");
     setView("New Project");
     setDetailTab("Summary");
     if (pathname !== "/survey/new-project") router.push("/survey/new-project");
@@ -406,12 +422,55 @@ export default function Workspace() {
       setView("Project Detail");
       setDetailTab("Summary");
       setSaveState("saved");
+      setLastSavedAt(new Date().toISOString());
       router.push(`/projects/${encodeURIComponent(saved.id)}`);
     } catch (error) {
       setWorkspaceError(error instanceof Error ? error.message : "The project could not be saved.");
       setSaveState("idle");
     }
   }
+
+  useEffect(() => {
+    if (view !== "New Project" || !workspaceLoaded || !hasUnsavedChanges || duplicateProjectReference || !input.projectReference.trim() || saveState === "saving" || saveState === "autosaving") return;
+    const timer = window.setTimeout(() => {
+      if (autosaveInFlight.current) return;
+      autosaveInFlight.current = true;
+      setSaveState("autosaving");
+      const existingId = editingId || undefined;
+      void saveProject(input, pricingRates, existingId, auth.session?.user.email ?? "System", pricingCatalog, "Draft", { autosave: true }).then((saved) => {
+        setBaselineInput(cloneInput(saved.inputs));
+        setEditingId(saved.id);
+        setSelectedId(saved.id);
+        setProjects((current) => [saved, ...current.filter((project) => project.id !== saved.id)]);
+        setLastSavedAt(new Date().toISOString());
+        setSaveState("saved");
+        if (!existingId) router.replace(`${saved.inputs.costingModule === "survey" ? "/survey/new-project" : "/new-project"}/${encodeURIComponent(saved.id)}`);
+      }).catch((error) => {
+        setWorkspaceError(error instanceof Error ? error.message : "The draft could not be autosaved.");
+        setSaveState("idle");
+      }).finally(() => { autosaveInFlight.current = false; });
+    }, 30000);
+    return () => window.clearTimeout(timer);
+  }, [auth.session?.user.email, duplicateProjectReference, editingId, hasUnsavedChanges, input, pricingCatalog, pricingRates, router, saveState, view, workspaceLoaded]);
+
+  useEffect(() => {
+    if (!workspaceError || workspaceError.includes("Reference ERR-")) return;
+    const original = workspaceError;
+    void reportAppError({ companyId: auth.activeCompany.id, userId: auth.session?.user.id, area: "workspace", error: original, path: pathname }).then((reference) => {
+      setWorkspaceError((current) => current === original ? `${original} Reference ${reference}.` : current);
+    });
+  }, [auth.activeCompany.id, auth.session?.user.id, pathname, workspaceError]);
+
+  useEffect(() => {
+    const reportRuntimeError = (event: ErrorEvent) => { void reportAppError({ companyId: auth.activeCompany.id, userId: auth.session?.user.id, area: "runtime", error: event.error ?? event.message, path: pathname }); };
+    const reportRejection = (event: PromiseRejectionEvent) => { void reportAppError({ companyId: auth.activeCompany.id, userId: auth.session?.user.id, area: "unhandled-promise", error: event.reason, path: pathname }); };
+    window.addEventListener("error", reportRuntimeError);
+    window.addEventListener("unhandledrejection", reportRejection);
+    return () => {
+      window.removeEventListener("error", reportRuntimeError);
+      window.removeEventListener("unhandledrejection", reportRejection);
+    };
+  }, [auth.activeCompany.id, auth.session?.user.id, pathname]);
 
   function editProject(project: ProjectRecord, requestedStep?: BuilderStep) {
     const locked = statusIsLocked(project.status);
@@ -469,15 +528,16 @@ export default function Workspace() {
       <section className="workspace-page">
         {workspaceError && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{workspaceError}</div>}
         {workspaceLoading && <div className="mb-5 rounded-xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-600">Loading company workspace...</div>}
-        {saveState === "saved" && <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-800">Project saved to the company workspace.</div>}
+        {saveState === "autosaving" && <div className="mb-5 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm font-semibold text-sky-800">Saving draft securely...</div>}
+        {saveState === "saved" && !hasUnsavedChanges && <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-800">Project saved to the company workspace{lastSavedAt ? ` at ${new Date(lastSavedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}` : ""}.</div>}
         {(moduleBlocked || selectedModuleBlocked) && <ModuleBlocked moduleKey={selectedModuleBlocked ? (selected?.inputs.costingModule === "survey" ? "survey_costing" : "remedial_costing") : routeModule!} />}
         {!moduleBlocked && !selectedModuleBlocked && <>
         <WorkspaceBanner view={view} selected={selected} projects={visibleProjects} />
         {view === "Dashboard" && <Dashboard projects={visibleProjects} companyCurrency={auth.activeCompany.defaultCurrency} open={(project) => openProject(project)} />}
-        {view === "New Project" && input.costingModule === "survey" && input.survey && <SurveyBuilder input={input.survey} onChange={(survey) => setInput(syncSurveyProjectInput(input, survey))} rates={normaliseSurveyRates(pricingRates.surveyRates)} onSave={(complete) => void saveCurrentProject(complete ? "Costing Complete" : "Draft")} saving={saveState === "saving"} duplicateReference={projects.some((project) => project.id !== editingId && project.inputs.projectReference.trim().toLowerCase() === input.projectReference.trim().toLowerCase())} />}
-        {view === "New Project" && input.costingModule !== "survey" && <ProjectBuilder input={input} setInput={setInput} rates={pricingRates} repairCatalog={pricingCatalog} calculations={calculations} onSave={saveCurrentProject} duplicateReference={projects.some((project) => project.id !== editingId && project.inputs.projectReference.trim().toLowerCase() === input.projectReference.trim().toLowerCase())} usingSnapshot={Boolean(editingId && selected?.rateSnapshot)} saving={saveState === "saving"} dirty={hasUnsavedChanges} reprice={() => { setPricingRates(rates); setPricingCatalog(repairCatalog); setInput({ ...input, exchangeRateLockedAt: new Date().toISOString() }); }} />}
-        {view === "Project Search" && <SearchView projects={visibleProjects} open={(project) => openProject(project)} edit={editProject} />}
-        {view === "Admin Rates" && <AdminRatesView rates={rates} setRates={setRatesState} repairCatalog={repairCatalog} setRepairCatalog={setRepairCatalog} adminTab={adminTab} setAdminTab={setAdminTab} save={async () => { try { await saveAdminData(rates, repairCatalog); setBaselineRates(JSON.parse(JSON.stringify(rates)) as AdminRates); setBaselineRepairCatalog(JSON.parse(JSON.stringify(repairCatalog)) as RepairCatalog); alert("Admin data saved and versioned. New costings use these values; saved projects keep their pricing snapshot until explicitly repriced."); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "Admin data could not be saved."); } }} />}
+        {view === "New Project" && input.costingModule === "survey" && input.survey && <SurveyBuilder input={input.survey} onChange={(survey) => setInput(syncSurveyProjectInput(input, survey))} rates={normaliseSurveyRates(pricingRates.surveyRates)} onSave={(complete) => void saveCurrentProject(complete ? "Costing Complete" : "Draft")} saving={saveState === "saving" || saveState === "autosaving"} duplicateReference={duplicateProjectReference} />}
+        {view === "New Project" && input.costingModule !== "survey" && <ProjectBuilder input={input} setInput={setInput} rates={pricingRates} repairCatalog={pricingCatalog} calculations={calculations} onSave={saveCurrentProject} duplicateReference={duplicateProjectReference} usingSnapshot={Boolean(editingId && selected?.rateSnapshot)} saving={saveState === "saving" || saveState === "autosaving"} dirty={hasUnsavedChanges} reprice={() => { setPricingRates(rates); setPricingCatalog(repairCatalog); setInput({ ...input, exchangeRateLockedAt: new Date().toISOString() }); }} />}
+        {view === "Project Search" && <SearchView projects={visibleProjects} deletedProjects={deletedProjects.filter((project) => moduleEnabled(project.inputs.costingModule ?? "remedial"))} open={(project) => openProject(project)} edit={editProject} restore={async (project) => { try { await restoreProject(project.id); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "The project could not be restored."); throw error; } }} purge={async (project) => { try { await purgeProject(project.id); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "The project could not be permanently deleted."); throw error; } }} />}
+        {view === "Admin Rates" && <AdminRatesView rates={rates} setRates={setRatesState} repairCatalog={repairCatalog} setRepairCatalog={setRepairCatalog} adminTab={adminTab} setAdminTab={setAdminTab} rateVersions={rateVersions} restoreRateVersion={(version) => setRatesState(version.rates)} save={async () => { try { await saveAdminData(rates, repairCatalog); setBaselineRates(JSON.parse(JSON.stringify(rates)) as AdminRates); setBaselineRepairCatalog(JSON.parse(JSON.stringify(repairCatalog)) as RepairCatalog); setRateVersions(await loadRateVersions()); alert("Admin data saved and versioned. New costings use these values; saved projects keep their pricing snapshot until explicitly repriced."); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "Admin data could not be saved."); } }} />}
         {view === "Company Admin" && <CompanyAdminPanel />}
         {view === "Project Detail" && selected && (
           <ProjectDetail
@@ -507,15 +567,15 @@ export default function Workspace() {
             setNote={setNote}
             edit={() => editProject(selected)}
             updateStatus={async (status) => { try { await updateProjectWorkflow(selected.id, status, undefined, auth.session?.user.email ?? "James Dare"); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "Project status could not be updated."); } }}
-            deleteProjectRecord={async () => {
+            deleteProjectRecord={async (reason) => {
               try {
-                await deleteProject(selected.id);
+                await deleteProject(selected.id, reason);
                 setSelectedId("");
                 setEditingId("");
                 await refresh();
-                router.push("/");
+                router.push("/project-search");
               } catch (error) {
-                setWorkspaceError(error instanceof Error ? error.message : "The project could not be deleted.");
+                setWorkspaceError(error instanceof Error ? error.message : "The project could not be moved to the recycle bin.");
                 throw error;
               }
             }}
@@ -2213,10 +2273,11 @@ function AdditionalTools({ items, onChange }: { items: AdditionalItem[]; onChang
   </div>;
 }
 
-function ProjectDetail({ project, tab, setTab, actuals, setActuals, saveActuals, recordHandover: recordHandoverEvent, note, setNote, addNote, recordTime, edit, updateStatus, deleteProjectRecord }: { project: ProjectRecord; tab: DetailTab; setTab: (tab: DetailTab) => void; actuals: ReturnType<typeof defaultActuals>; setActuals: (a: ReturnType<typeof defaultActuals>) => void; saveActuals: (finalise?: boolean) => void; recordHandover: (issued: boolean) => Promise<void>; note: string; setNote: (v: string) => void; addNote: () => void; recordTime: (entry: Omit<ProjectTimeEntry, "id" | "projectId" | "createdAt">) => Promise<void>; edit: () => void; updateStatus: (status: ProjectStatus) => void; deleteProjectRecord: () => Promise<void> }) {
+function ProjectDetail({ project, tab, setTab, actuals, setActuals, saveActuals, recordHandover: recordHandoverEvent, note, setNote, addNote, recordTime, edit, updateStatus, deleteProjectRecord }: { project: ProjectRecord; tab: DetailTab; setTab: (tab: DetailTab) => void; actuals: ReturnType<typeof defaultActuals>; setActuals: (a: ReturnType<typeof defaultActuals>) => void; saveActuals: (finalise?: boolean) => void; recordHandover: (issued: boolean) => Promise<void>; note: string; setNote: (v: string) => void; addNote: () => void; recordTime: (entry: Omit<ProjectTimeEntry, "id" | "projectId" | "createdAt">) => Promise<void>; edit: () => void; updateStatus: (status: ProjectStatus) => void; deleteProjectRecord: (reason: string) => Promise<void> }) {
   const auth = useAuth();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deletionReason, setDeletionReason] = useState("");
   const [deleting, setDeleting] = useState(false);
   const canEdit = hasPermission(auth.role, "projects.update");
   const canDelete = hasPermission(auth.role, "projects.delete");
@@ -2242,14 +2303,15 @@ function ProjectDetail({ project, tab, setTab, actuals, setActuals, saveActuals,
       {tab === "PM Handover" && <ProjectHandover project={project} recordHandover={recordHandoverEvent} />}
       {tab === "Actual P&L" && <PLActualsPanel project={project} actuals={actuals} setActuals={setActuals} summary={summary} saveActuals={saveActuals} />}
       {tab === "Activity" && <ActivityPanel project={project} note={note} setNote={setNote} addNote={addNote} recordTime={recordTime} />}
-      {canDelete && <div className="flex justify-end border-t border-slate-200 pt-5"><button className="secondary-button border-red-200 text-red-700 hover:bg-red-50" onClick={() => { setDeleteConfirmation(""); setDeleteOpen(true); }}><Trash2 size={16} />Delete Project</button></div>}
+      {canDelete && <div className="flex justify-end border-t border-slate-200 pt-5"><button className="secondary-button border-red-200 text-red-700 hover:bg-red-50" onClick={() => { setDeleteConfirmation(""); setDeletionReason(""); setDeleteOpen(true); }}><Trash2 size={16} />Move to Recycle Bin</button></div>}
       {deleteOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-labelledby="delete-project-title">
         <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
-          <h2 className="text-xl font-bold text-slate-950" id="delete-project-title">Permanently delete project?</h2>
-          <p className="mt-2 text-sm text-slate-600">This removes the costing, saved actuals, notes and history. It cannot be undone.</p>
-          <div className="mt-4 rounded-lg border border-red-100 bg-red-50 p-3 text-sm text-red-900">Type <b>{project.inputs.projectReference || project.id}</b> to confirm.</div>
+          <h2 className="text-xl font-bold text-slate-950" id="delete-project-title">Move project to the recycle bin?</h2>
+          <p className="mt-2 text-sm text-slate-600">The costing, actuals, notes and history are retained. A company administrator can restore it from Project Search.</p>
+          <div className="mt-4"><Text label="Reason" value={deletionReason} onChange={setDeletionReason} /></div>
+          <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Type <b>{project.inputs.projectReference || project.id}</b> to confirm.</div>
           <div className="mt-4"><Text label="Project reference" value={deleteConfirmation} onChange={setDeleteConfirmation} /></div>
-          <div className="mt-5 flex flex-wrap justify-end gap-2"><button className="secondary-button" onClick={() => setDeleteOpen(false)} disabled={deleting}>Cancel</button><button className="primary-button bg-red-700 hover:bg-red-800" disabled={deleting || deleteConfirmation.trim() !== (project.inputs.projectReference || project.id)} onClick={async () => { try { setDeleting(true); await deleteProjectRecord(); setDeleteOpen(false); } catch { /* The workspace error banner explains the failure. */ } finally { setDeleting(false); } }}><Trash2 size={16} />{deleting ? "Deleting..." : "Delete permanently"}</button></div>
+          <div className="mt-5 flex flex-wrap justify-end gap-2"><button className="secondary-button" onClick={() => setDeleteOpen(false)} disabled={deleting}>Cancel</button><button className="primary-button bg-red-700 hover:bg-red-800" disabled={deleting || !deletionReason.trim() || deleteConfirmation.trim() !== (project.inputs.projectReference || project.id)} onClick={async () => { try { setDeleting(true); await deleteProjectRecord(deletionReason.trim()); setDeleteOpen(false); } catch { /* The workspace error banner explains the failure. */ } finally { setDeleting(false); } }}><Trash2 size={16} />{deleting ? "Moving..." : "Move to Recycle Bin"}</button></div>
         </div>
       </div>}
     </div>
@@ -2546,24 +2608,60 @@ function LineTable({ lines }: { lines: Line[] }) {
   })}</tbody></table></div>;
 }
 
-function SearchView({ projects, open, edit }: { projects: ProjectRecord[]; open: (project: ProjectRecord) => void; edit: (project: ProjectRecord) => void }) {
+function SearchView({ projects, deletedProjects, open, edit, restore, purge }: { projects: ProjectRecord[]; deletedProjects: ProjectRecord[]; open: (project: ProjectRecord) => void; edit: (project: ProjectRecord) => void; restore: (project: ProjectRecord) => Promise<void>; purge: (project: ProjectRecord) => Promise<void> }) {
+  const auth = useAuth();
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("All");
   const [service, setService] = useState("All");
   const [module, setModule] = useState("All");
   const [visibleCount, setVisibleCount] = useState(50);
+  const [busyProjectId, setBusyProjectId] = useState("");
+  const [purgeTarget, setPurgeTarget] = useState<ProjectRecord | null>(null);
+  const [purgeConfirmation, setPurgeConfirmation] = useState("");
   const filtered = projects.filter((p) => `${p.inputs.projectReference} ${p.inputs.client} ${p.inputs.location} ${p.calculations.serviceSummary} ${p.inputs.costedBy}`.toLowerCase().includes(q.toLowerCase()))
     .filter((project) => status === "All" || normaliseProjectStatus(project.status) === status)
     .filter((project) => module === "All" || (project.inputs.costingModule ?? "remedial") === module)
     .filter((project) => service === "All" || project.calculations.serviceSummary.includes(service));
-  return <div className="app-card-strong"><div className="panel-heading"><h2 className="text-xl font-semibold"><Search className="mr-2 inline" />Project Search</h2><div className="mt-3 grid gap-3 md:grid-cols-[minmax(240px,1fr)_180px_180px_180px]"><input placeholder="Reference, client, location or estimator" value={q} onChange={(e) => { setQ(e.target.value); setVisibleCount(50); }} /><Select label="Module" value={module} options={["All", "survey", "remedial"]} onChange={(value) => { setModule(value); setVisibleCount(50); }} /><Select label="Status" value={status} options={["All", "Draft", "Costing Complete", "Won", "Lost", "Handover Issued", "Completed", "Closed"]} onChange={(value) => { setStatus(value); setVisibleCount(50); }} /><Select label="Service" value={service} options={["All", "Survey", "Grinding", "Screeding", "Repairs"]} onChange={(value) => { setService(value); setVisibleCount(50); }} /></div><div className="mt-3 text-sm text-slate-500">Showing {Math.min(visibleCount, filtered.length)} of {filtered.length} project{filtered.length === 1 ? "" : "s"}</div></div><ProjectTable projects={filtered.slice(0, visibleCount)} open={open} edit={edit} />{visibleCount < filtered.length && <div className="flex justify-center border-t border-slate-200 p-4"><button className="secondary-button" onClick={() => setVisibleCount((count) => count + 50)}>Load 50 more</button></div>}</div>;
+  return <div className="grid gap-5"><div className="app-card-strong"><div className="panel-heading"><h2 className="text-xl font-semibold"><Search className="mr-2 inline" />Project Search</h2><div className="mt-3 grid gap-3 md:grid-cols-[minmax(240px,1fr)_180px_180px_180px]"><input placeholder="Reference, client, location or estimator" value={q} onChange={(e) => { setQ(e.target.value); setVisibleCount(50); }} /><Select label="Module" value={module} options={["All", "survey", "remedial"]} onChange={(value) => { setModule(value); setVisibleCount(50); }} /><Select label="Status" value={status} options={["All", "Draft", "Costing Complete", "Won", "Lost", "Handover Issued", "Completed", "Closed"]} onChange={(value) => { setStatus(value); setVisibleCount(50); }} /><Select label="Service" value={service} options={["All", "Survey", "Grinding", "Screeding", "Repairs"]} onChange={(value) => { setService(value); setVisibleCount(50); }} /></div><div className="mt-3 text-sm text-slate-500">Showing {Math.min(visibleCount, filtered.length)} of {filtered.length} project{filtered.length === 1 ? "" : "s"}</div></div><ProjectTable projects={filtered.slice(0, visibleCount)} open={open} edit={edit} />{visibleCount < filtered.length && <div className="flex justify-center border-t border-slate-200 p-4"><button className="secondary-button" onClick={() => setVisibleCount((count) => count + 50)}>Load 50 more</button></div>}</div>
+    {hasPermission(auth.role, "projects.delete") && <details className="app-card-strong" open={false}><summary className="cursor-pointer list-none px-5 py-4 font-bold text-slate-900"><span className="flex items-center justify-between gap-3"><span className="flex items-center gap-2"><Trash2 size={17} />Recycle Bin</span><span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">{deletedProjects.length}</span></span></summary><div className="border-t border-slate-200"><p className="px-5 py-3 text-sm text-slate-600">Archived projects are excluded from dashboards and searches but keep their costing, actuals and activity history.</p><div className="table-shell border-0"><table><thead><tr><th>Project</th><th>Module</th><th>Archived</th><th>Reason</th><th>Actions</th></tr></thead><tbody>{deletedProjects.map((project) => <tr key={project.id}><td><b>{project.inputs.projectReference || "Draft"}</b><div className="text-xs text-slate-500">{project.inputs.client} - {project.inputs.location}</div></td><td>{project.inputs.costingModule ?? "remedial"}</td><td>{project.deletedAt ? formatDateTime(project.deletedAt) : "-"}</td><td>{project.deletionReason || "No reason recorded"}</td><td><div className="flex flex-wrap gap-2"><button className="secondary-button" disabled={busyProjectId === project.id} onClick={async () => { try { setBusyProjectId(project.id); await restore(project); } finally { setBusyProjectId(""); } }}>{busyProjectId === project.id ? "Restoring..." : "Restore"}</button>{auth.role === "super_admin" && <button className="secondary-button border-red-200 text-red-700 hover:bg-red-50" disabled={busyProjectId === project.id} onClick={() => { setPurgeTarget(project); setPurgeConfirmation(""); }}>Delete Permanently</button>}</div></td></tr>)}{!deletedProjects.length && <tr><td colSpan={5} className="py-8 text-center text-sm text-slate-500">The recycle bin is empty.</td></tr>}</tbody></table></div></div></details>}
+    {purgeTarget && <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-labelledby="purge-project-title"><div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl"><h2 className="text-xl font-bold text-slate-950" id="purge-project-title">Permanently delete archived project?</h2><p className="mt-2 text-sm text-slate-600">This is restricted to super admins and cannot be undone. All saved costing, actuals, notes and history will be removed.</p><div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900">Type <b>{purgeTarget.inputs.projectReference || purgeTarget.id}</b> to confirm.</div><div className="mt-4"><Text label="Project reference" value={purgeConfirmation} onChange={setPurgeConfirmation} /></div><div className="mt-5 flex flex-wrap justify-end gap-2"><button className="secondary-button" disabled={busyProjectId === purgeTarget.id} onClick={() => setPurgeTarget(null)}>Cancel</button><button className="primary-button bg-red-700 hover:bg-red-800" disabled={busyProjectId === purgeTarget.id || purgeConfirmation.trim() !== (purgeTarget.inputs.projectReference || purgeTarget.id)} onClick={async () => { try { setBusyProjectId(purgeTarget.id); await purge(purgeTarget); setPurgeTarget(null); } finally { setBusyProjectId(""); } }}><Trash2 size={16} />{busyProjectId === purgeTarget.id ? "Deleting..." : "Delete Permanently"}</button></div></div></div>}
+  </div>;
 }
 
 function ProjectTable({ projects, open, edit }: { projects: ProjectRecord[]; open: (project: ProjectRecord) => void; edit?: (project: ProjectRecord) => void }) {
   return <div className="table-shell border-0"><table><thead><tr><th>Project</th><th>Module</th><th>Services</th><th>Status</th><th>Sell Value</th><th>Budget</th><th>Markup</th><th>Actions</th></tr></thead><tbody>{projects.map((p) => <tr key={p.id}><td><b>{p.inputs.projectReference || "Draft"}</b><div className="text-xs text-slate-500">{p.inputs.client} - {p.inputs.location}</div></td><td><span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-black uppercase text-slate-600">{p.inputs.costingModule ?? "remedial"}</span></td><td>{p.calculations.serviceSummary}</td><td>{normaliseProjectStatus(p.status)} / {p.accountsStatus}</td><td>{money(p.calculations.proposalTotal, p.inputs.quoteCurrency)}</td><td>{money(p.calculations.budgetCost, p.inputs.quoteCurrency)}</td><td>{percent(p.calculations.budgetMarkup ?? (p.calculations.budgetCost ? p.calculations.budgetProfit / p.calculations.budgetCost * 100 : 0))}</td><td><button className="secondary-button mr-2" onClick={() => open(p)}>Open</button>{edit && <button className="secondary-button" onClick={() => edit(p)}>{statusIsLocked(p.status) ? "Revise" : "Edit"}</button>}</td></tr>)}</tbody></table></div>;
 }
 
-function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, adminTab, setAdminTab, save }: { rates: AdminRates; setRates: (rates: AdminRates) => void; repairCatalog: RepairCatalog; setRepairCatalog: (catalog: RepairCatalog) => void; adminTab: AdminTab; setAdminTab: (tab: AdminTab) => void; save: () => void }) {
+function numericRateMap(value: unknown, prefix = "", result = new Map<string, number>()) {
+  if (!value || typeof value !== "object") return result;
+  Object.entries(value as Record<string, unknown>).forEach(([key, item]) => {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (typeof item === "number") result.set(path, item);
+    else if (item && typeof item === "object") numericRateMap(item, path, result);
+  });
+  return result;
+}
+
+function changedRateCount(current: AdminRates, previous: AdminRates) {
+  const left = numericRateMap(current);
+  const right = numericRateMap(previous);
+  return Array.from(new Set([...left.keys(), ...right.keys()])).filter((key) => left.get(key) !== right.get(key)).length;
+}
+
+function changedRateRows(current: AdminRates, previous: AdminRates) {
+  const editor = numericRateMap(current);
+  const saved = numericRateMap(previous);
+  return Array.from(new Set([...editor.keys(), ...saved.keys()]))
+    .filter((key) => editor.get(key) !== saved.get(key))
+    .sort()
+    .map((key) => ({ key, editor: editor.get(key) ?? 0, saved: saved.get(key) ?? 0 }));
+}
+
+function rateHistoryValue(key: string, value: number) {
+  return /margin/i.test(key) ? `${(value * 100).toLocaleString("en-GB", { maximumFractionDigits: 2 })}%` : value.toLocaleString("en-GB", { maximumFractionDigits: 4 });
+}
+
+function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, adminTab, setAdminTab, rateVersions, restoreRateVersion, save }: { rates: AdminRates; setRates: (rates: AdminRates) => void; repairCatalog: RepairCatalog; setRepairCatalog: (catalog: RepairCatalog) => void; adminTab: AdminTab; setAdminTab: (tab: AdminTab) => void; rateVersions: RateVersionRecord[]; restoreRateVersion: (version: RateVersionRecord) => void; save: () => void }) {
   const auth = useAuth();
   const distanceCopy = distanceUnitCopy(auth.activeCompany.distanceUnit);
   const [pendingRule, setPendingRule] = useState<Record<string, string>>({});
@@ -2669,6 +2767,26 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, admi
                 <button className="secondary-button" onClick={resetRates}>Reset to Defaults</button>
               </div>
             </div>
+            <details className="rounded-xl border border-slate-200 bg-white">
+              <summary className="cursor-pointer px-4 py-3 text-sm font-bold text-slate-900">Rate Version History <span className="ml-2 text-xs font-semibold text-slate-500">{rateVersions.length} saved version{rateVersions.length === 1 ? "" : "s"}</span></summary>
+              <div className="border-t border-slate-200 p-4">
+                <p className="mb-3 text-sm text-slate-600">Compare previous company rates without affecting saved projects. Loading a version changes the editor only; it must still be validated and saved.</p>
+                <div className="grid gap-2">
+                  {rateVersions.slice(0, 10).map((version, index) => {
+                    const changes = changedRateRows(rates, version.rates);
+                    const changed = changedRateCount(rates, version.rates);
+                    return <div className="grid gap-2 rounded-lg border border-slate-200 px-3 py-3 md:grid-cols-[minmax(180px,1fr)_minmax(150px,1fr)_120px_auto] md:items-center" key={version.id}>
+                      <div><b className="block text-sm">{index === 0 ? "Latest saved version" : `Saved version ${rateVersions.length - index}`}</b><span className="text-xs text-slate-500">{new Date(version.createdAt).toLocaleString("en-GB")}</span></div>
+                      <div className="text-sm"><b>{version.createdByLabel}</b><span className="block text-xs text-slate-500">{version.source.replaceAll("_", " ")}</span></div>
+                      <div className={`text-sm font-bold ${changed ? "text-amber-700" : "text-emerald-700"}`}>{changed ? `${changed} value${changed === 1 ? "" : "s"} differ` : "Matches editor"}</div>
+                      {auth.role === "super_admin" && <button className="secondary-button" disabled={!changed} onClick={() => { if (window.confirm(`Load rates saved on ${new Date(version.createdAt).toLocaleString("en-GB")} into the editor? Current unsaved rate changes will be replaced.`)) { restoreRateVersion(version); alert("Previous rates loaded into the editor. Review them, then use Validate & Save Admin Data to make them current."); } }}>Load Version</button>}
+                      {changes.length > 0 && <details className="md:col-span-4 rounded-lg bg-slate-50"><summary className="cursor-pointer px-3 py-2 text-xs font-bold text-slate-700">Compare changed values</summary><div className="grid gap-1 border-t border-slate-200 p-3">{changes.slice(0, 12).map((change) => <div className="grid gap-1 text-xs sm:grid-cols-[minmax(220px,1fr)_140px_140px]" key={change.key}><span className="font-semibold text-slate-700">{change.key.replaceAll(".", " / ")}</span><span>Saved: <b>{rateHistoryValue(change.key, change.saved)}</b></span><span>Editor: <b>{rateHistoryValue(change.key, change.editor)}</b></span></div>)}{changes.length > 12 && <div className="pt-1 text-xs font-semibold text-slate-500">And {changes.length - 12} more changed value{changes.length - 12 === 1 ? "" : "s"}.</div>}</div></details>}
+                    </div>;
+                  })}
+                  {!rateVersions.length && <div className="rounded-lg bg-slate-50 p-4 text-sm text-slate-600">No historical rate versions have been recorded yet. The next admin save will create one.</div>}
+                </div>
+              </div>
+            </details>
             <RateSection
               title="Production Labour"
               description="Shared worker rates for grinding, screeding and in-house repair labour. These are separate from surveyor costs."
