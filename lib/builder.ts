@@ -41,6 +41,12 @@ export function adjacentBuilderStep(input: ProjectInput, direction: -1 | 1): Bui
   return visible[Math.min(visible.length - 1, Math.max(0, current + direction))];
 }
 
+export function costingInputsEqual(left: ProjectInput, right: ProjectInput) {
+  const { uiProgress: _leftProgress, ...leftCosting } = left;
+  const { uiProgress: _rightProgress, ...rightCosting } = right;
+  return JSON.stringify(leftCosting) === JSON.stringify(rightCosting);
+}
+
 export function parseEditRoute(pathname: string) {
   const match = pathname.match(/^\/new-project\/([^/]+)(?:\/([^/]+))?(?:\/(revision))?$/);
   const segment = match?.[2]?.toLowerCase();

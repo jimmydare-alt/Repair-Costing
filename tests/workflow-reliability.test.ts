@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adjacentBuilderStep, parseEditRoute, resolveBuilderStep, visibleBuilderSteps } from "@/lib/builder";
+import { adjacentBuilderStep, costingInputsEqual, parseEditRoute, resolveBuilderStep, visibleBuilderSteps } from "@/lib/builder";
 import { calculatePL, calculateProject, defaultActuals } from "@/lib/calculations";
 import { defaultRepairCatalog, materialById, validateRepairCatalog } from "@/lib/repairCatalog";
 import { defaultRates, emptyInput } from "@/lib/rates";
@@ -18,6 +18,12 @@ describe("rollout workflow reliability", () => {
   it("falls back safely if a saved step is no longer selected", () => {
     const input = { ...emptyInput, uiProgress: { ...emptyInput.uiProgress, builderStep: "Repairs" } };
     expect(resolveBuilderStep(input)).toBe("Services");
+  });
+
+  it("does not treat builder navigation as an unsaved costing change", () => {
+    const navigated = { ...emptyInput, uiProgress: { ...emptyInput.uiProgress, builderStep: "Project" as const } };
+    expect(costingInputsEqual(navigated, emptyInput)).toBe(true);
+    expect(costingInputsEqual({ ...navigated, client: "Changed client" }, emptyInput)).toBe(false);
   });
 
   it("parses a saved-project continuation route including service and revision", () => {

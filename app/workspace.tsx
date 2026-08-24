@@ -15,7 +15,7 @@ import { distanceUnitCopy, hasPermission } from "@/lib/company";
 import { createBrowserSupabaseClient } from "@/lib/supabaseClient";
 import { allowedStatusTransitions, normaliseProjectStatus, statusIsLocked } from "@/lib/workflow";
 import { buildHandoverSummary } from "@/lib/handover";
-import { adjacentBuilderStep, builderStepLabels, parseEditRoute, resolveBuilderStep, visibleBuilderSteps, type BuilderStep } from "@/lib/builder";
+import { adjacentBuilderStep, builderStepLabels, costingInputsEqual, parseEditRoute, resolveBuilderStep, visibleBuilderSteps, type BuilderStep } from "@/lib/builder";
 import { ProductShell } from "@/components/AppShell";
 import { SurveyBuilder } from "@/components/survey/SurveyBuilder";
 import { SurveyRatesAdmin } from "@/components/survey/SurveyRatesAdmin";
@@ -279,7 +279,7 @@ export default function Workspace() {
   const routePermission = routePermissionFor(pathname);
   const moduleBlocked = routeModule && (!auth.enabledModules.includes(routeModule) || !hasPermission(auth.role, routePermission));
   const displayCurrency = view === "New Project" ? input.quoteCurrency : view === "Project Detail" && selected ? selected.inputs.quoteCurrency : auth.activeCompany.defaultCurrency;
-  const hasUnsavedChanges = view === "New Project" && JSON.stringify(input) !== JSON.stringify(baselineInput);
+  const hasUnsavedChanges = view === "New Project" && !costingInputsEqual(input, baselineInput);
   const hasUnsavedAdminChanges = view === "Admin Rates" && (JSON.stringify(rates) !== JSON.stringify(baselineRates) || JSON.stringify(repairCatalog) !== JSON.stringify(baselineRepairCatalog));
   const hasUnsavedWork = hasUnsavedChanges || hasUnsavedAdminChanges;
   const duplicateProjectReference = Boolean(input.projectReference.trim()) && projects.some((project) => project.id !== editingId && project.inputs.projectReference.trim().toLowerCase() === input.projectReference.trim().toLowerCase());
