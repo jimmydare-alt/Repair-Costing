@@ -88,7 +88,7 @@ input[type="checkbox"], input[type="radio"] {
   pointer-events: none;
   transform: translateY(-50%);
 }
-input.dashboard-search-input { padding-left: 42px; }
+input.dashboard-search-input:not([type="checkbox"]):not([type="radio"]) { padding-left: 42px; }
 
 input.toggle-native {
   position: absolute;
