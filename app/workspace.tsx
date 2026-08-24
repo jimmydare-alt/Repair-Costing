@@ -2397,6 +2397,7 @@ function ProjectHandover({ project, recordHandover: record }: { project: Project
   const auth = useAuth();
   const [busy, setBusy] = useState<"" | "save" | "send">("");
   const [actionError, setActionError] = useState("");
+  const [actionMessage, setActionMessage] = useState("");
   const summary = buildHandoverSummary(project);
   const filename = `${project.inputs.projectReference || "project"}-delivery-summary.pdf`;
   const canManageHandover = hasPermission(auth.role, "projects.update");
@@ -2405,10 +2406,12 @@ function ProjectHandover({ project, recordHandover: record }: { project: Project
   const savePdf = async () => {
     try {
       setActionError("");
+      setActionMessage("");
       setBusy("save");
       const blob = await handoverPdf(project);
       downloadBlob(blob, filename);
       await record(false);
+      setActionMessage(`PDF generated. Check your Downloads folder for ${filename}.`);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : "The handover PDF could not be saved.");
     } finally { setBusy(""); }
@@ -2416,17 +2419,20 @@ function ProjectHandover({ project, recordHandover: record }: { project: Project
   const sendPdf = async () => {
     try {
       setActionError("");
+      setActionMessage("");
       setBusy("send");
       const blob = await handoverPdf(project);
       const file = new File([blob], filename, { type: "application/pdf" });
       if (navigator.share && navigator.canShare?.({ files: [file] })) {
         await navigator.share({ title: `${project.inputs.projectReference} Project Cost & Delivery Summary`, text: `Internal project handover for ${project.inputs.client}.`, files: [file] });
         await record(true);
+        setActionMessage("The project handover was shared and recorded as issued.");
       } else {
         downloadBlob(blob, filename);
         window.location.href = `mailto:?subject=${encodeURIComponent(`${project.inputs.projectReference} Project Cost & Delivery Summary`)}&body=${encodeURIComponent("The internal project handover PDF has been downloaded and is ready to attach.")}`;
         const sent = confirm("Attach the downloaded PDF and send the email. Select OK only after it has been sent; Cancel keeps the project at its current status.");
         await record(sent);
+        setActionMessage(sent ? "The project handover was recorded as issued." : `PDF generated. Check your Downloads folder for ${filename}; the project status was not changed.`);
       }
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")) setActionError(error instanceof Error ? error.message : "The handover could not be shared.");
@@ -2442,6 +2448,7 @@ function ProjectHandover({ project, recordHandover: record }: { project: Project
       {!canGenerate && <div className="m-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-950">Complete the costing before generating this handover.</div>}
       {canGenerate && !canIssue && <div className="mx-5 mt-5 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950">The PDF can be reviewed and saved now. Mark the project as Won before issuing it to the project manager.</div>}
       {actionError && <div className="mx-5 mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-900" role="alert">{actionError}</div>}
+      {actionMessage && <div className="mx-5 mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-bold text-emerald-900" role="status">{actionMessage}</div>}
       <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-4"><Mini label="Project" value={project.inputs.projectReference} /><Mini label="Services" value={project.calculations.serviceSummary} /><Mini label="Project Days" value={String(project.calculations.siteDays)} /><Mini label="Project Budget" value={money(project.calculations.budgetCost)} /></div>
     </div>
     <div className="grid gap-5 lg:grid-cols-2">
