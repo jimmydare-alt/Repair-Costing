@@ -24,16 +24,6 @@ export function statusIsLocked(status: ProjectStatus) {
   return normaliseProjectStatus(status) !== "Draft";
 }
 
-export function allowedStatusTransitions(status: ProjectStatus): ActiveProjectStatus[] {
-  const current = normaliseProjectStatus(status);
-  const transitions: Record<ActiveProjectStatus, ActiveProjectStatus[]> = {
-    "Draft": ["Draft", "Costing Complete"],
-    "Costing Complete": ["Costing Complete", "Won", "Lost"],
-    "Won": ["Won", "Handover Issued", "Completed"],
-    "Lost": ["Lost"],
-    "Handover Issued": ["Handover Issued", "Completed"],
-    "Completed": ["Completed", "Closed"],
-    "Closed": ["Closed"]
-  };
-  return transitions[current];
+export function allowedStatusTransitions(_status: ProjectStatus): ActiveProjectStatus[] {
+  return [...activeProjectStatuses];
 }

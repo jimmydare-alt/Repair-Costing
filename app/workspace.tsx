@@ -915,7 +915,7 @@ function Dashboard({ projects, companyCurrency, open }: { projects: ProjectRecor
     <div className="grid gap-5">
       <div className="app-card-strong p-4">
         <div className="grid gap-3 lg:grid-cols-[minmax(260px,1fr)_170px_190px_170px_auto] lg:items-end">
-          <div className="grid min-w-0 gap-1"><label htmlFor="dashboard-project-search">Search projects</label><div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={17} /><input id="dashboard-project-search" className="w-full pl-10" placeholder="Reference, client, location or estimator" value={filters.query} onChange={(event) => patchFilters({ query: event.target.value })} /></div></div>
+          <div className="grid min-w-0 gap-1"><label htmlFor="dashboard-project-search">Search projects</label><div className="dashboard-search-control"><Search aria-hidden="true" size={17} /><input id="dashboard-project-search" className="dashboard-search-input" placeholder="Reference, client, location or estimator" value={filters.query} onChange={(event) => patchFilters({ query: event.target.value })} /></div></div>
           <Select label="Module" value={filters.module} options={["All", "survey", "remedial"]} onChange={(module) => patchFilters({ module: module as DashboardFilters["module"] })} />
           <Select label="Status" value={filters.status} options={["All", "Draft", "Costing Complete", "Won", "Handover Issued", "Lost", "Completed", "Closed"]} onChange={(status) => patchFilters({ status })} />
           <Select label="Service" value={filters.service} options={["All", "Survey", "Grinding", "Screeding", "Repairs"]} onChange={(service) => patchFilters({ service })} />

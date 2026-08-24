@@ -78,6 +78,18 @@ input[type="checkbox"], input[type="radio"] {
   accent-color: var(--cogri-red);
 }
 
+.dashboard-search-control { position: relative; }
+.dashboard-search-control > svg {
+  position: absolute;
+  top: 50%;
+  left: 13px;
+  z-index: 1;
+  color: #8a9297;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+input.dashboard-search-input { padding-left: 42px; }
+
 input.toggle-native {
   position: absolute;
   width: 1px;

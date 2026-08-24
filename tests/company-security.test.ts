@@ -98,10 +98,11 @@ describe("multi-company security helpers", () => {
     expect(route).toContain('"Cache-Control": "no-store, max-age=0"');
   });
 
-  it("normalises legacy quotes and locks completed costings", () => {
+  it("normalises legacy quotes, locks completed costings and permits status corrections", () => {
     expect(normaliseProjectStatus("Quoted")).toBe("Costing Complete");
     expect(statusIsLocked("Costing Complete")).toBe(true);
-    expect(allowedStatusTransitions("Costing Complete")).toEqual(["Costing Complete", "Won", "Lost"]);
-    expect(allowedStatusTransitions("Completed")).toEqual(["Completed", "Closed"]);
+    expect(allowedStatusTransitions("Costing Complete")).toEqual(["Draft", "Costing Complete", "Won", "Lost", "Handover Issued", "Completed", "Closed"]);
+    expect(allowedStatusTransitions("Completed")).toContain("Draft");
+    expect(allowedStatusTransitions("Closed")).toContain("Won");
   });
 });
