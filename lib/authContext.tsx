@@ -36,6 +36,7 @@ function companyFromRow(row: Record<string, unknown>): Company {
     reportingCurrency: row.reporting_currency === "GBP" || row.reporting_currency === "PLN" || row.reporting_currency === "USD" ? row.reporting_currency : "EUR",
     allowedCurrencies: Array.isArray(row.allowed_currencies) ? row.allowed_currencies.filter((item): item is "EUR" | "GBP" | "PLN" | "USD" => ["EUR", "GBP", "PLN", "USD"].includes(String(item))) : ["EUR"],
     distanceUnit: row.distance_unit === "miles" ? "miles" : "km",
+    officeCount: Number(row.office_count) === 2 ? 2 : 1,
     isSuperAdminCompany: Boolean(row.is_super_admin_company),
     branding: {
       logoPath: row.logo_path ? String(row.logo_path) : null,

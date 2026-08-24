@@ -414,6 +414,8 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
   const grindingDays = Number(savedScreeding.grindingDays ?? savedScreeding.primerDays ?? 0);
   const activityDays = preparationDays + screedingDays + grindingDays;
   const screedDays = Number(savedScreeding.totalDaysOnSite ?? 0) || activityDays;
+  const officeCount: ProjectInput["officeCount"] = input?.officeCount === 2 || Number(input?.survey?.secondaryOfficeDistanceOneWay) > 0 ? 2 : 1;
+  const legacyMode = (mode: ProjectInput["projectManagement"]["travelMode"] | undefined, ...values: unknown[]) => mode ?? (values.some((value) => Number(value) > 0) ? "Drive" : "None");
   const normalisedTeams = (savedScreeding.teams ?? []).filter((team) => team.enabled !== false || Boolean(team.contractorName || team.rate || team.mobilisation || team.prep || team.screed || team.grind)).map((team) => ({
     ...team,
     enabled: true,
@@ -429,6 +431,7 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
     ...(input ?? {}),
     costingModule: input?.costingModule === "survey" ? "survey" : "remedial",
     distanceUnit: input?.distanceUnit === "miles" ? "miles" : "km",
+    officeCount,
     quoteCurrency: input?.quoteCurrency ?? emptyInput.quoteCurrency,
     exchangeRateToCompanyCurrency: asNumber(input?.exchangeRateToCompanyCurrency, 1) > 0 ? asNumber(input?.exchangeRateToCompanyCurrency, 1) : 1,
     exchangeRateToGroupCurrency: asNumber(input?.exchangeRateToGroupCurrency, 1) > 0 ? asNumber(input?.exchangeRateToGroupCurrency, 1) : 1,
@@ -444,7 +447,11 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
       dayOverrides: input?.phaseSchedule?.dayOverrides ?? {},
       startsWithPrevious: input?.phaseSchedule?.startsWithPrevious ?? {}
     },
-    projectManagement: { ...emptyInput.projectManagement, ...(input?.projectManagement ?? {}) },
+    projectManagement: {
+      ...emptyInput.projectManagement,
+      ...(input?.projectManagement ?? {}),
+      travelMode: legacyMode(input?.projectManagement?.travelMode, input?.projectManagement?.travelDays, input?.projectManagement?.oneWayKm)
+    },
     bdmBonusRequired: Boolean(input?.bdmBonusRequired),
     markupOverrideReason: input?.markupOverrideReason ?? "",
     uiProgress: { ...emptyInput.uiProgress, ...(input?.uiProgress ?? {}) },
@@ -456,8 +463,10 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
       generatorCount: Number(savedGrinding.generatorCount ?? (savedGrinding.generatorRequired ? 1 : 0)),
       additionalTools: Array.isArray(savedGrinding.additionalTools) ? savedGrinding.additionalTools.map((item) => ({ ...item, unit: "item", quantity: 1, plCategory: "Equipment" as const })) : [],
       productionMen,
+      productionTravelMode: legacyMode(savedGrinding.productionTravelMode, savedGrinding.productionTravelDays, savedGrinding.productionOneWayKm),
       productionNightShifts: Number(savedGrinding.productionNightShifts ?? savedGrinding.nightShifts ?? 0),
       surveyorCount,
+      surveyorTravelMode: legacyMode(savedGrinding.surveyorTravelMode, savedGrinding.surveyorTravelDays, savedGrinding.surveyorOneWayKm),
       surveyorNightShifts: Number(savedGrinding.surveyorNightShifts ?? savedGrinding.nightShifts ?? 0),
       productionLabourMode: savedGrinding.productionLabourMode ?? (savedGrinding.subcontractRate || savedGrinding.subcontractMobilisation ? "subcontract" : emptyInput.grinding.productionLabourMode),
       productionSubcontractors: normaliseSubcontractors(savedGrinding.productionSubcontractors, "Grinding subcontractor"),
@@ -475,10 +484,12 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
       equipmentShippingMargin: asNumber(savedScreeding.equipmentShippingMargin, emptyInput.screeding.equipmentShippingMargin),
       productionLabourMode: savedScreeding.productionLabourMode ?? "subcontract",
       productionLabourDays: Number(savedScreeding.productionLabourDays ?? 0),
+      productionTravelMode: legacyMode(savedScreeding.productionTravelMode, savedScreeding.productionTravelDays, savedScreeding.productionOneWayKm),
       productionNightShifts: Number(savedScreeding.productionNightShifts ?? savedScreeding.nightShifts ?? 0),
       productionVehicles: Number(savedScreeding.productionVehicles ?? emptyInput.screeding.productionVehicles),
       surveyorLabourMode: savedScreeding.surveyorLabourMode ?? "in_house",
       surveyorDays: Number(savedScreeding.surveyorDays ?? screedDays),
+      surveyorTravelMode: legacyMode(savedScreeding.surveyorTravelMode, savedScreeding.surveyorTravelDays, savedScreeding.surveyorOneWayKm),
       surveyorNightShifts: Number(savedScreeding.surveyorNightShifts ?? savedScreeding.nightShifts ?? 0),
       surveyorVehicles: Number(savedScreeding.surveyorVehicles ?? emptyInput.screeding.surveyorVehicles),
       surveyorSubcontractors: normaliseSubcontractors(savedScreeding.surveyorSubcontractors, "Screed surveyor subcontractor"),
@@ -488,12 +499,13 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
       ...emptyInput.repairs,
       ...(input?.repairs ?? {}),
       daysPerWeek: asNumber(input?.repairs?.daysPerWeek, emptyInput.repairs.daysPerWeek),
+      travelMode: legacyMode(input?.repairs?.travelMode, input?.repairs?.travelDays, input?.repairs?.mobilisationOneWayKm),
       repairSubcontractors: normaliseRepairSubcontractors(input),
       materialInputs: input?.repairs?.materialInputs?.length ? input.repairs.materialInputs : emptyInput.repairs.materialInputs,
       repairLines: Array.isArray(input?.repairs?.repairLines) ? input.repairs.repairLines : []
     },
     additionalItems: normaliseAdditionalItems(input?.additionalItems),
-    survey: input?.costingModule === "survey" ? normaliseSurveyInput(input.survey, input.quoteCurrency ?? "EUR", input.distanceUnit === "miles" ? "miles" : "km") : input?.survey
+    survey: input?.costingModule === "survey" ? normaliseSurveyInput(input.survey, input.quoteCurrency ?? "EUR", input.distanceUnit === "miles" ? "miles" : "km", officeCount) : input?.survey
   };
 }
 

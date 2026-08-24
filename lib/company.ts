@@ -3,6 +3,7 @@ export type MembershipRole = "super_admin" | "company_admin" | "manager_editor" 
 export type MembershipStatus = "invited" | "active" | "suspended" | "archived";
 export type CurrencyCode = "EUR" | "GBP" | "PLN" | "USD";
 export type DistanceUnit = "km" | "miles";
+export type OfficeCount = 1 | 2;
 
 export function distanceUnitCopy(unit: DistanceUnit) {
   return unit === "miles"
@@ -69,6 +70,7 @@ export type Company = {
   reportingCurrency: CurrencyCode;
   allowedCurrencies: CurrencyCode[];
   distanceUnit: DistanceUnit;
+  officeCount: OfficeCount;
   isSuperAdminCompany: boolean;
   branding: CompanyBranding;
 };
@@ -128,6 +130,7 @@ export const defaultCompanies: Company[] = [
     reportingCurrency: "GBP",
     allowedCurrencies: ["GBP", "EUR", "PLN", "USD"],
     distanceUnit: "miles",
+    officeCount: 1,
     isSuperAdminCompany: true,
     branding: {
       primaryColour: "#b91c1c",
@@ -147,6 +150,7 @@ export const defaultCompanies: Company[] = [
     reportingCurrency: "EUR",
     allowedCurrencies: ["EUR"],
     distanceUnit: "km",
+    officeCount: 1,
     isSuperAdminCompany: false,
     branding: {
       primaryColour: "#0067a6",

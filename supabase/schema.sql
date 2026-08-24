@@ -17,3 +17,5 @@
 -- 004_storage_branding.sql
 -- Creates the private company-branding bucket for PNG/JPG/WebP logos only.
 
+-- 011_company_offices.sql
+-- Adds the company office count used by new survey and remedial travel snapshots.

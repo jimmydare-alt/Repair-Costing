@@ -23,8 +23,9 @@ import { CompanyAdminView as CompanyAdminPanel } from "@/components/company-admi
 import { createEmptySurveyInput, normaliseSurveyRates } from "@/lib/costing/survey/defaults";
 import { calculateSurveyProject } from "@/lib/costing/survey/calculations";
 import { createSurveyProjectInput, syncSurveyProjectInput } from "@/lib/costing/survey/project";
+import { chargeableJourneyDistance, effectiveReturnFlights } from "@/lib/travel";
 import type { AppModuleKey, CurrencyCode, DistanceUnit, MembershipRole, Permission } from "@/lib/company";
-import type { AdditionalItem, AdminRates, DetailTab, LabourMode, Line, PLCategory, PriceType, ProjectInput, ProjectRecord, ProjectStatus, ProjectTimeEntry, RepairCatalog, RepairLabourMode, RepairLineItem, RepairMaterial, RepairMaterialCategory, RepairSubcontractor, RepairType, RepairUnitType, ScreedTeam, View } from "@/lib/types";
+import type { AdditionalItem, AdminRates, AirportTransport, DestinationTransport, DetailTab, LabourMode, Line, PLCategory, PriceType, ProjectInput, ProjectRecord, ProjectStatus, ProjectTimeEntry, RepairCatalog, RepairLabourMode, RepairLineItem, RepairMaterial, RepairMaterialCategory, RepairSubcontractor, RepairType, RepairUnitType, ScreedTeam, TravelMode, View } from "@/lib/types";
 
 const detailTabs: DetailTab[] = ["Summary", "Costing", "Commercial Review", "PM Handover", "Actual P&L", "Activity"];
 type AdminTab = "Rates" | "Survey Rates" | "Repair Types" | "Repair Materials";
@@ -143,8 +144,9 @@ function repairReadiness(input: ProjectInput, repairCatalog: RepairCatalog): Rep
   });
   const calculatedRepairDays = Math.ceil(input.repairs.repairLines.reduce((sum, repairLine) => sum + repairLineDays(repairLine, repairCatalog), 0));
   if (input.repairs.labourDays > 0 && input.repairs.labourDays !== calculatedRepairDays) warnings.push(`Repair days are manually overridden from ${calculatedRepairDays} to ${input.repairs.labourDays}.`);
-  if (usesInHouse && input.repairs.mobilisationOneWayKm > 0 && input.repairs.mobilisationVehicles <= 0) blockers.push("Add at least one repair vehicle when mobilisation distance is entered.");
-  if (usesInHouse && input.repairs.travelDays > 0 && !input.repairs.hotelRequired) warnings.push("Travel is included without hotel/subsistence. Check this is a local or same-day job.");
+  if (usesInHouse && input.repairs.travelMode === "Drive" && (input.repairs.mobilisationOneWayKm > 0 || input.repairs.mobilisationSecondaryOneWayKm > 0) && input.repairs.mobilisationVehicles <= 0) blockers.push("Add at least one repair vehicle when driving is selected.");
+  if (usesInHouse && input.repairs.travelMode !== "None" && input.repairs.travelDays > 0 && !input.repairs.hotelRequired) warnings.push("Travel is included without hotel/subsistence. Check this is a local or same-day job.");
+  if (usesInHouse && input.repairs.travelMode === "Fly" && input.repairs.airportTransport === "N/A") warnings.push("Repair flights are selected without home-airport transport. Confirm no transfer or parking cost is needed.");
   if (input.repairs.materialInputs.some((item) => item.lengthM || item.areaM2 || item.widthMm || item.depthMm || item.thicknessMm)) warnings.push("Legacy material inputs are ignored; use repair lines/material rules only.");
   return { blockers, warnings };
 }
@@ -170,8 +172,9 @@ function grindingReadiness(input: ProjectInput): RepairReadiness {
   if (usesProductionInHouse && g.productionMen <= 0) warnings.push("In-house grinding is selected but no production men are entered for grinder days.");
   if (usesProductionInHouse && !g.dustVacuums) warnings.push("In-house grinding is selected but no dust vacuums are entered.");
   if (g.nightShiftRequired && !g.nightShifts && !g.productionNightShifts && !g.surveyorNightShifts) blockers.push("Night shift is selected but no night shifts are entered.");
-  if (usesProductionInHouse && g.productionOneWayKm > 0 && g.productionVehicles <= 0) blockers.push("Add at least one production vehicle when grinding travel distance is entered.");
-  if (usesSurveyorInHouse && g.surveyorOneWayKm > 0 && g.surveyorVehicles <= 0) blockers.push("Add at least one surveyor vehicle when grinding travel distance is entered.");
+  if (usesProductionInHouse && g.productionTravelMode === "Drive" && (g.productionOneWayKm > 0 || g.productionSecondaryOneWayKm > 0) && g.productionVehicles <= 0) blockers.push("Add at least one production vehicle when grinding driving is selected.");
+  if (usesSurveyorInHouse && g.surveyorTravelMode === "Drive" && (g.surveyorOneWayKm > 0 || g.surveyorSecondaryOneWayKm > 0) && g.surveyorVehicles <= 0) blockers.push("Add at least one surveyor vehicle when grinding driving is selected.");
+  if (usesProductionInHouse && g.productionTravelMode === "Fly" && !g.equipmentShipping) warnings.push("Grinding production is flying but equipment shipping is zero. Confirm tools are already available at the destination.");
   if (g.productionLabourDays > 0 && g.productionLabourDays !== days) warnings.push(`Production labour days are overridden from ${days} to ${g.productionLabourDays}.`);
   if (g.surveyorDays > 0 && g.surveyorDays !== days) warnings.push(`Surveyor labour days are overridden from ${days} to ${g.surveyorDays}.`);
   return { blockers, warnings };
@@ -197,8 +200,9 @@ function screedReadiness(input: ProjectInput): RepairReadiness {
   if (usesProductionInHouse && s.productionMen <= 0) blockers.push("Add production men for in-house screeding labour.");
   if (usesProductionSubcontract && !s.teams.some((team) => team.rate > 0 && (team.priceType === "lump sum" || team.preparationDays + team.screedingDays + team.grindingDays > 0))) blockers.push("Add at least one screeding production subcontractor cost.");
   if (s.nightShiftRequired && !s.nightShifts && !s.productionNightShifts && !s.surveyorNightShifts) blockers.push("Night shift is selected but no night shifts are entered.");
-  if (usesProductionInHouse && s.productionOneWayKm > 0 && s.productionVehicles <= 0) blockers.push("Add at least one production vehicle when screeding travel distance is entered.");
-  if (usesSurveyorInHouse && s.surveyorOneWayKm > 0 && s.surveyorVehicles <= 0) blockers.push("Add at least one surveyor vehicle when screeding travel distance is entered.");
+  if (usesProductionInHouse && s.productionTravelMode === "Drive" && (s.productionOneWayKm > 0 || s.productionSecondaryOneWayKm > 0) && s.productionVehicles <= 0) blockers.push("Add at least one production vehicle when screeding driving is selected.");
+  if (usesSurveyorInHouse && s.surveyorTravelMode === "Drive" && (s.surveyorOneWayKm > 0 || s.surveyorSecondaryOneWayKm > 0) && s.surveyorVehicles <= 0) blockers.push("Add at least one surveyor vehicle when screeding driving is selected.");
+  if (usesProductionInHouse && s.productionTravelMode === "Fly" && !s.equipmentShipping) warnings.push("Screeding production is flying but equipment shipping is zero. Confirm tools are already available at the destination.");
   if (s.productionLabourDays > 0 && s.productionLabourDays !== days) warnings.push(`Production labour days are overridden from ${days} to ${s.productionLabourDays}.`);
   if (s.surveyorDays > 0 && s.surveyorDays !== days) warnings.push(`Surveyor labour days are overridden from ${days} to ${s.surveyorDays}.`);
   if (s.ukSupervisorRequired) warnings.push("UK supervisor is no longer priced in the screeding model. Use surveyor labour instead.");
@@ -220,9 +224,9 @@ function projectReadiness(input: ProjectInput, budgetMarkupExact: number, duplic
   if (hasCommercialValue && budgetMarkupExact < 25) warnings.push(`Overall markup is ${percent(budgetMarkupExact)}, below 25%.`);
   if (duplicateReference && input.projectReference.trim()) warnings.push("This project reference already exists. Confirm this is intentional before saving.");
   if (input.projectManagement.enabled && input.projectManagement.days <= 0) warnings.push("Project management is enabled but no management days are entered.");
-  if (input.projectManagement.enabled && input.projectManagement.travelMode === "Drive" && input.projectManagement.oneWayKm <= 0) warnings.push("Project manager driving is selected but the one-way distance is zero.");
+  if (input.projectManagement.enabled && input.projectManagement.travelMode === "Drive" && chargeableJourneyDistance(input.officeCount, input.projectManagement.oneWayKm, input.projectManagement.secondaryOneWayKm, input.projectManagement.vehicles, input.projectManagement.visits) <= 0) warnings.push("Project manager driving is selected but the office journey or vehicle count is zero.");
   if (input.projectManagement.enabled && input.projectManagement.travelMode === "Drive" && input.projectManagement.vehicles <= 0) warnings.push("Project manager driving is selected but no vehicles are entered.");
-  if (input.projectManagement.enabled && input.projectManagement.travelMode === "Fly" && input.projectManagement.returnFlights <= 0) warnings.push("Project manager flying is selected but no return flights are entered.");
+  if (input.projectManagement.enabled && input.projectManagement.travelMode === "Fly" && input.projectManagement.airportTransport === "N/A") warnings.push("Project manager flying is selected without home-airport transport. Confirm no transfer or parking cost is needed.");
   return { blockers, warnings };
 }
 
@@ -311,8 +315,8 @@ export default function Workspace() {
       setPricingRates(loadedRates);
       setPricingCatalog(loadedRepairCatalog);
       setProjects(loadedProjects);
-      const companyBlank = createRemedialProjectInput(loadedRates, auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit);
-      const routedBlank = routeIsSurvey ? createSurveyProjectInput(auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit) : companyBlank;
+      const companyBlank = createRemedialProjectInput(loadedRates, auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit, auth.activeCompany.officeCount);
+      const routedBlank = routeIsSurvey ? createSurveyProjectInput(auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit, undefined, auth.activeCompany.officeCount) : companyBlank;
       setInput(routedBlank);
       setBaselineInput(cloneInput(routedBlank));
       setEditingId("");
@@ -321,7 +325,7 @@ export default function Workspace() {
       setWorkspaceLoaded(true);
     }).catch((error: unknown) => { if (loadToken === companyLoadToken.current) setWorkspaceError(error instanceof Error ? error.message : "Could not load the company workspace."); }).finally(() => { if (loadToken === companyLoadToken.current) setWorkspaceLoading(false); });
     return () => { if (loadToken === companyLoadToken.current) companyLoadToken.current += 1; };
-  }, [auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit, auth.activeCompany.id, auth.companies.length, auth.configured, auth.session, auth.session?.user.email, auth.session?.user.id, routeIsSurvey]);
+  }, [auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit, auth.activeCompany.id, auth.activeCompany.officeCount, auth.companies.length, auth.configured, auth.session, auth.session?.user.email, auth.session?.user.id, routeIsSurvey]);
 
   useEffect(() => {
     if (!routeProjectId) return;
@@ -361,7 +365,7 @@ export default function Workspace() {
   }
 
   function startNewProject() {
-    const blank = createRemedialProjectInput(rates, auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit);
+    const blank = createRemedialProjectInput(rates, auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit, auth.activeCompany.officeCount);
     blank.exchangeRateToCompanyCurrency = 1;
     blank.exchangeRateToGroupCurrency = auth.activeCompany.defaultCurrency === auth.activeCompany.reportingCurrency ? 1 : blank.exchangeRateToGroupCurrency;
     setInput(blank);
@@ -377,7 +381,7 @@ export default function Workspace() {
   }
 
   function startNewSurveyProject() {
-    const blank = createSurveyProjectInput(auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit);
+    const blank = createSurveyProjectInput(auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit, undefined, auth.activeCompany.officeCount);
     setInput(blank);
     setBaselineInput(cloneInput(blank));
     setPricingRates(rates);
@@ -1048,14 +1052,68 @@ function PhaseScheduleStep({ input, setInput, repairCatalog }: { input: ProjectI
   );
 }
 
+type InternalTravelFormValue = {
+  mode: TravelMode;
+  travelDays: number;
+  primaryOneWay: number;
+  secondaryOneWay: number;
+  vehicles: number;
+  returnFlights: number;
+  airportTransport: AirportTransport;
+  airportTransferReturns: number;
+  airportParkingDays: number;
+  destinationTransport: DestinationTransport;
+  rentalVehicles: number;
+  rentalVehicleDays: number;
+};
+
+function InternalTravelFields({ value, officeCount, distanceUnit, people, journeys = 1, onChange }: { value: InternalTravelFormValue; officeCount: ProjectInput["officeCount"]; distanceUnit: ProjectInput["distanceUnit"]; people: number; journeys?: number; onChange: (next: Partial<InternalTravelFormValue>) => void }) {
+  const returnFlights = effectiveReturnFlights(value.returnFlights, people);
+  const airportReturns = value.airportTransferReturns || 1;
+  const journeyDistance = chargeableJourneyDistance(officeCount, value.primaryOneWay, value.secondaryOneWay, value.vehicles, journeys);
+  return <div className="grid gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <Select label="Travel Method" value={value.mode} options={["None", "Drive", "Fly"]} onChange={(mode) => onChange({ mode: mode as TravelMode })} />
+      {value.mode !== "None" && <NumberInput label="Travel Days" value={value.travelDays} onChange={(travelDays) => onChange({ travelDays })} />}
+      {value.mode === "None" && <div className="sm:col-span-1 xl:col-span-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">No internal travel cost will be added. Hidden drive and flight inputs are ignored.</div>}
+    </div>
+    {value.mode === "Drive" && <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <NumberInput label={`${officeCount === 2 ? "Primary Office to Site" : "Office to Site"} (${distanceUnit})`} value={value.primaryOneWay} onChange={(primaryOneWay) => onChange({ primaryOneWay })} />
+      {officeCount === 2 && <NumberInput label={`Site to Secondary Office (${distanceUnit})`} value={value.secondaryOneWay} onChange={(secondaryOneWay) => onChange({ secondaryOneWay })} />}
+      <NumberInput label="Vehicles / Vans" value={value.vehicles} step={1} onChange={(vehicles) => onChange({ vehicles })} />
+      <Mini label={`Chargeable ${distanceUnit}`} value={`${journeyDistance}`} />
+    </div>}
+    {value.mode === "Fly" && <>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Mini label="People Flying" value={`${people}`} />
+        <div className={value.returnFlights > 0 && value.returnFlights !== people ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Return Flights" value={returnFlights} step={1} onChange={(returnFlights) => onChange({ returnFlights: returnFlights === people ? 0 : returnFlights })} />{value.returnFlights > 0 && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => onChange({ returnFlights: 0 })}>Reset to people flying ({people})</button>}</div>
+        <Select label="Home Airport Transport" value={value.airportTransport} options={["N/A", "Drive", "Uber"]} onChange={(airportTransport) => onChange({ airportTransport: airportTransport as AirportTransport })} />
+        {value.airportTransport === "Drive" && <NumberInput label="Airport Vehicles" value={value.vehicles} step={1} onChange={(vehicles) => onChange({ vehicles })} />}
+        {value.airportTransport === "Drive" && <NumberInput label="Airport Parking Days" value={value.airportParkingDays} step={1} onChange={(airportParkingDays) => onChange({ airportParkingDays })} />}
+        {value.airportTransport === "Uber" && <NumberInput label="Return Airport Transfers" value={airportReturns} step={1} onChange={(airportTransferReturns) => onChange({ airportTransferReturns: airportTransferReturns === 1 ? 0 : airportTransferReturns })} />}
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <Select label="Destination Transport" value={value.destinationTransport} options={["None", "Rental Car", "Rental Van"]} onChange={(destinationTransport) => onChange({ destinationTransport: destinationTransport as DestinationTransport })} />
+        {value.destinationTransport !== "None" && <NumberInput label="Rental Vehicles" value={value.rentalVehicles || 1} step={1} onChange={(rentalVehicles) => onChange({ rentalVehicles })} />}
+        {value.destinationTransport !== "None" && <NumberInput label="Rental Vehicle Days" value={value.rentalVehicleDays} step={1} onChange={(rentalVehicleDays) => onChange({ rentalVehicleDays })} />}
+      </div>
+    </>}
+  </div>;
+}
+
 function ProjectManagementStep({ input, setInput, rates }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates }) {
   const pm = input.projectManagement;
   const patch = (next: Partial<typeof pm>) => setInput({ ...input, projectManagement: { ...pm, ...next } });
   const sell = (rate: number, quantity: number, key: keyof AdminRates, fallback: number) => rate * quantity * (1 + adminRateMargin(rates, key, fallback));
   const labourSell = sell(rates.projectManagerDayRate, pm.days, "projectManagerDayRate", rates.defaultMargin);
-  const travelSell = sell(rates.otherInternalTravelDayRate, pm.travelDays, "otherInternalTravelDayRate", rates.travelMargin)
-    + (pm.travelMode === "Drive" ? sell(rates.mileagePerKm, pm.oneWayKm * 2 * pm.vehicles * pm.visits, "mileagePerKm", rates.travelMargin) : 0)
-    + (pm.travelMode === "Fly" ? sell(rates.returnFlight, pm.returnFlights, "returnFlight", rates.flightMargin) : 0);
+  const pmMileage = chargeableJourneyDistance(input.officeCount, pm.oneWayKm, pm.secondaryOneWayKm, pm.vehicles, pm.visits);
+  const travelSell = pm.travelMode === "None" ? 0 : sell(rates.otherInternalTravelDayRate, pm.travelDays, "otherInternalTravelDayRate", rates.travelMargin)
+    + (pm.travelMode === "Drive" ? sell(rates.mileagePerKm, pmMileage, "mileagePerKm", rates.travelMargin) : 0)
+    + (pm.travelMode === "Fly" ? sell(rates.returnFlight, effectiveReturnFlights(pm.returnFlights, 1), "returnFlight", rates.flightMargin)
+      + (pm.airportTransport === "Uber" ? sell(rates.airportUberReturn, pm.airportTransferReturns || 1, "airportUberReturn", rates.travelMargin) : 0)
+      + (pm.airportTransport === "Drive" ? sell(rates.airportParkingPerDay, pm.airportParkingDays * Math.max(1, pm.vehicles), "airportParkingPerDay", rates.travelMargin) : 0)
+      + (pm.destinationTransport === "Rental Car" ? sell(rates.rentalCar, Math.max(1, pm.rentalVehicles) * pm.rentalVehicleDays, "rentalCar", rates.travelMargin) : 0)
+      + (pm.destinationTransport === "Rental Van" ? sell(rates.rentalVan, Math.max(1, pm.rentalVehicles) * pm.rentalVehicleDays, "rentalVan", rates.travelMargin) : 0) : 0);
   const staySell = sell(rates.hotel, pm.hotelNights, "hotel", rates.hotelMargin) + sell(rates.subsistence, pm.hotelNights, "subsistence", rates.subsistenceMargin);
   return (
     <div className="grid gap-5">
@@ -1065,16 +1123,10 @@ function ProjectManagementStep({ input, setInput, rates }: { input: ProjectInput
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <NumberInput label="Project Manager Days" value={pm.days} onChange={(days) => patch({ days })} />
           <NumberInput label="Number of Visits" value={pm.visits} onChange={(visits) => patch({ visits })} />
-          <NumberInput label="Travel Days" value={pm.travelDays} onChange={(travelDays) => patch({ travelDays })} />
           <Mini label="Labour Sell" value={money(labourSell)} />
         </div>
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Select label="Travel Mode" value={pm.travelMode} options={["None", "Drive", "Fly"]} onChange={(travelMode) => patch({ travelMode: travelMode as ProjectInput["projectManagement"]["travelMode"] })} />
-          {pm.travelMode === "Drive" && <NumberInput label={`One-Way Distance (${input.distanceUnit})`} value={pm.oneWayKm} onChange={(oneWayKm) => patch({ oneWayKm })} />}
-          {pm.travelMode === "Drive" && <NumberInput label="Vehicles" value={pm.vehicles} step={1} onChange={(vehicles) => patch({ vehicles })} />}
-          {pm.travelMode === "Fly" && <NumberInput label="Return Flights" value={pm.returnFlights} onChange={(returnFlights) => patch({ returnFlights })} />}
-          <NumberInput label="Hotel Nights" value={pm.hotelNights} onChange={(hotelNights) => patch({ hotelNights })} />
-        </div>
+        <InternalTravelFields officeCount={input.officeCount} distanceUnit={input.distanceUnit} people={1} journeys={pm.visits} value={{ mode: pm.travelMode, travelDays: pm.travelDays, primaryOneWay: pm.oneWayKm, secondaryOneWay: pm.secondaryOneWayKm, vehicles: pm.vehicles, returnFlights: pm.returnFlights, airportTransport: pm.airportTransport, airportTransferReturns: pm.airportTransferReturns, airportParkingDays: pm.airportParkingDays, destinationTransport: pm.destinationTransport, rentalVehicles: pm.rentalVehicles, rentalVehicleDays: pm.rentalVehicleDays }} onChange={(next) => patch({ travelMode: next.mode ?? pm.travelMode, travelDays: next.travelDays ?? pm.travelDays, oneWayKm: next.primaryOneWay ?? pm.oneWayKm, secondaryOneWayKm: next.secondaryOneWay ?? pm.secondaryOneWayKm, vehicles: next.vehicles ?? pm.vehicles, returnFlights: next.returnFlights ?? pm.returnFlights, airportTransport: next.airportTransport ?? pm.airportTransport, airportTransferReturns: next.airportTransferReturns ?? pm.airportTransferReturns, airportParkingDays: next.airportParkingDays ?? pm.airportParkingDays, destinationTransport: next.destinationTransport ?? pm.destinationTransport, rentalVehicles: next.rentalVehicles ?? pm.rentalVehicles, rentalVehicleDays: next.rentalVehicleDays ?? pm.rentalVehicleDays })} />
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><NumberInput label="Hotel Nights" value={pm.hotelNights} onChange={(hotelNights) => patch({ hotelNights })} /></div>
         <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-3">
           <Mini label="Travel Sell" value={money(travelSell)} />
           <Mini label="Hotel + Subsistence Sell" value={money(staySell)} />
@@ -1231,8 +1283,8 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
   const surveyorDaysOverridden = g.surveyorDays > 0 && g.surveyorDays !== estimatedDays;
   const calculatedProductionWeekendDays = weekendDaysForProgramme(productionDays, 5, g.weekendDaysPerWeek);
   const calculatedSurveyorWeekendDays = weekendDaysForProgramme(surveyorDays, 5, g.weekendDaysPerWeek);
-  const calculatedProductionHotelNights = calculatedHotelNights(productionDays, g.weekendDaysPerWeek, g.productionTravelDays);
-  const calculatedSurveyorHotelNights = calculatedHotelNights(surveyorDays, g.weekendDaysPerWeek, g.surveyorTravelDays);
+  const calculatedProductionHotelNights = calculatedHotelNights(productionDays, g.weekendDaysPerWeek, g.productionTravelMode === "None" ? 0 : g.productionTravelDays);
+  const calculatedSurveyorHotelNights = calculatedHotelNights(surveyorDays, g.weekendDaysPerWeek, g.surveyorTravelMode === "None" ? 0 : g.surveyorTravelDays);
   const productionHotelNights = g.productionHotelNights || calculatedProductionHotelNights;
   const surveyorHotelNights = g.surveyorHotelNights || calculatedSurveyorHotelNights;
   const productionSubcontractSell = repairSubcontractorSell(g.productionSubcontractors);
@@ -1317,12 +1369,7 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
               <Toggle label="Hotel / Subsistence" checked={g.productionHotelRequired} onChange={(v) => patch({ productionHotelRequired: v })} />
               {g.productionHotelRequired && <div className={g.productionHotelNights > 0 && g.productionHotelNights !== calculatedProductionHotelNights ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Hotel Nights Per Team" value={productionHotelNights} step={1} onChange={(v) => patch({ productionHotelNights: v === calculatedProductionHotelNights ? 0 : v })} />{g.productionHotelNights > 0 && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => patch({ productionHotelNights: 0 })}>Reset to calculated {calculatedProductionHotelNights}</button>}</div>}
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <NumberInput label="Travel Days" value={g.productionTravelDays} onChange={(v) => patch({ productionTravelDays: v })} />
-              <NumberInput label={`One-Way Distance (${input.distanceUnit})`} value={g.productionOneWayKm} onChange={(v) => patch({ productionOneWayKm: v })} />
-              <NumberInput label="Vehicles / Vans" value={g.productionVehicles} step={1} onChange={(v) => patch({ productionVehicles: v })} />
-              <Mini label={`Calculated ${input.distanceUnit}`} value={`${g.productionOneWayKm * 2 * Math.max(0, g.productionVehicles)}`} />
-            </div>
+            <InternalTravelFields officeCount={input.officeCount} distanceUnit={input.distanceUnit} people={g.productionMen} value={{ mode: g.productionTravelMode, travelDays: g.productionTravelDays, primaryOneWay: g.productionOneWayKm, secondaryOneWay: g.productionSecondaryOneWayKm, vehicles: g.productionVehicles, returnFlights: g.productionReturnFlights, airportTransport: g.productionAirportTransport, airportTransferReturns: g.productionAirportTransferReturns, airportParkingDays: g.productionAirportParkingDays, destinationTransport: g.productionDestinationTransport, rentalVehicles: g.productionRentalVehicles, rentalVehicleDays: g.productionRentalVehicleDays }} onChange={(next) => patch({ productionTravelMode: next.mode ?? g.productionTravelMode, productionTravelDays: next.travelDays ?? g.productionTravelDays, productionOneWayKm: next.primaryOneWay ?? g.productionOneWayKm, productionSecondaryOneWayKm: next.secondaryOneWay ?? g.productionSecondaryOneWayKm, productionVehicles: next.vehicles ?? g.productionVehicles, productionReturnFlights: next.returnFlights ?? g.productionReturnFlights, productionAirportTransport: next.airportTransport ?? g.productionAirportTransport, productionAirportTransferReturns: next.airportTransferReturns ?? g.productionAirportTransferReturns, productionAirportParkingDays: next.airportParkingDays ?? g.productionAirportParkingDays, productionDestinationTransport: next.destinationTransport ?? g.productionDestinationTransport, productionRentalVehicles: next.rentalVehicles ?? g.productionRentalVehicles, productionRentalVehicleDays: next.rentalVehicleDays ?? g.productionRentalVehicleDays })} />
           </div>
         </div>}
         <div className="app-card-strong">
@@ -1351,12 +1398,7 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
               <Toggle label="Hotel / Subsistence" checked={g.surveyorHotelRequired} onChange={(v) => patch({ surveyorHotelRequired: v })} />
               {g.surveyorHotelRequired && <div className={g.surveyorHotelNights > 0 && g.surveyorHotelNights !== calculatedSurveyorHotelNights ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Hotel Nights Per Team" value={surveyorHotelNights} onChange={(v) => patch({ surveyorHotelNights: v === calculatedSurveyorHotelNights ? 0 : v })} />{g.surveyorHotelNights > 0 && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => patch({ surveyorHotelNights: 0 })}>Reset to calculated {calculatedSurveyorHotelNights}</button>}</div>}
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <NumberInput label="Travel Days" value={g.surveyorTravelDays} onChange={(v) => patch({ surveyorTravelDays: v })} />
-              <NumberInput label={`One-Way Distance (${input.distanceUnit})`} value={g.surveyorOneWayKm} onChange={(v) => patch({ surveyorOneWayKm: v })} />
-              <NumberInput label="Vehicles" value={g.surveyorVehicles} step={1} onChange={(v) => patch({ surveyorVehicles: v })} />
-              <Mini label={`Calculated ${input.distanceUnit}`} value={`${g.surveyorOneWayKm * 2 * Math.max(0, g.surveyorVehicles)}`} />
-            </div>
+            <InternalTravelFields officeCount={input.officeCount} distanceUnit={input.distanceUnit} people={g.surveyorCount} value={{ mode: g.surveyorTravelMode, travelDays: g.surveyorTravelDays, primaryOneWay: g.surveyorOneWayKm, secondaryOneWay: g.surveyorSecondaryOneWayKm, vehicles: g.surveyorVehicles, returnFlights: g.surveyorReturnFlights, airportTransport: g.surveyorAirportTransport, airportTransferReturns: g.surveyorAirportTransferReturns, airportParkingDays: g.surveyorAirportParkingDays, destinationTransport: g.surveyorDestinationTransport, rentalVehicles: g.surveyorRentalVehicles, rentalVehicleDays: g.surveyorRentalVehicleDays }} onChange={(next) => patch({ surveyorTravelMode: next.mode ?? g.surveyorTravelMode, surveyorTravelDays: next.travelDays ?? g.surveyorTravelDays, surveyorOneWayKm: next.primaryOneWay ?? g.surveyorOneWayKm, surveyorSecondaryOneWayKm: next.secondaryOneWay ?? g.surveyorSecondaryOneWayKm, surveyorVehicles: next.vehicles ?? g.surveyorVehicles, surveyorReturnFlights: next.returnFlights ?? g.surveyorReturnFlights, surveyorAirportTransport: next.airportTransport ?? g.surveyorAirportTransport, surveyorAirportTransferReturns: next.airportTransferReturns ?? g.surveyorAirportTransferReturns, surveyorAirportParkingDays: next.airportParkingDays ?? g.surveyorAirportParkingDays, surveyorDestinationTransport: next.destinationTransport ?? g.surveyorDestinationTransport, surveyorRentalVehicles: next.rentalVehicles ?? g.surveyorRentalVehicles, surveyorRentalVehicleDays: next.rentalVehicleDays ?? g.surveyorRentalVehicleDays })} />
           </div>
         </div>}
         <GrindingPageTabs grindingPage={grindingPage} setGrindingPage={setGrindingPage} placement="bottom" />
@@ -1442,8 +1484,8 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
   const surveyorDaysOverridden = s.surveyorDays > 0 && s.surveyorDays !== screedDays;
   const calculatedProductionWeekendDays = weekendDaysForProgramme(productionDays, 5, s.weekendDaysPerWeek);
   const calculatedSurveyorWeekendDays = weekendDaysForProgramme(surveyorDays, 5, s.weekendDaysPerWeek);
-  const calculatedProductionHotelNights = calculatedHotelNights(productionDays, s.weekendDaysPerWeek, s.productionTravelDays);
-  const calculatedSurveyorHotelNights = calculatedHotelNights(surveyorDays, s.weekendDaysPerWeek, s.surveyorTravelDays);
+  const calculatedProductionHotelNights = calculatedHotelNights(productionDays, s.weekendDaysPerWeek, s.productionTravelMode === "None" ? 0 : s.productionTravelDays);
+  const calculatedSurveyorHotelNights = calculatedHotelNights(surveyorDays, s.weekendDaysPerWeek, s.surveyorTravelMode === "None" ? 0 : s.surveyorTravelDays);
   const productionHotelNights = s.productionHotelNights || calculatedProductionHotelNights;
   const surveyorHotelNights = s.surveyorHotelNights || calculatedSurveyorHotelNights;
   const productionSubcontractSell = s.teams.reduce((sum, team) => {
@@ -1582,12 +1624,7 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
               <Toggle label="Hotel / Subsistence" checked={s.productionHotelRequired} onChange={(v) => patch({ productionHotelRequired: v })} />
               {s.productionHotelRequired && <div className={s.productionHotelNights > 0 && s.productionHotelNights !== calculatedProductionHotelNights ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Hotel Nights Per Team" value={productionHotelNights} onChange={(v) => patch({ productionHotelNights: v === calculatedProductionHotelNights ? 0 : v })} />{s.productionHotelNights > 0 && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => patch({ productionHotelNights: 0 })}>Reset to calculated {calculatedProductionHotelNights}</button>}</div>}
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <NumberInput label="Travel Days" value={s.productionTravelDays} onChange={(v) => patch({ productionTravelDays: v })} />
-              <NumberInput label={`One-Way Distance (${input.distanceUnit})`} value={s.productionOneWayKm} onChange={(v) => patch({ productionOneWayKm: v })} />
-              <NumberInput label="Vehicles / Vans" value={s.productionVehicles} step={1} onChange={(v) => patch({ productionVehicles: v })} />
-              <Mini label={`Calculated ${input.distanceUnit}`} value={`${s.productionOneWayKm * 2 * Math.max(0, s.productionVehicles)}`} />
-            </div>
+            <InternalTravelFields officeCount={input.officeCount} distanceUnit={input.distanceUnit} people={s.productionMen} value={{ mode: s.productionTravelMode, travelDays: s.productionTravelDays, primaryOneWay: s.productionOneWayKm, secondaryOneWay: s.productionSecondaryOneWayKm, vehicles: s.productionVehicles, returnFlights: s.productionReturnFlights, airportTransport: s.productionAirportTransport, airportTransferReturns: s.productionAirportTransferReturns, airportParkingDays: s.productionAirportParkingDays, destinationTransport: s.productionDestinationTransport, rentalVehicles: s.productionRentalVehicles, rentalVehicleDays: s.productionRentalVehicleDays }} onChange={(next) => patch({ productionTravelMode: next.mode ?? s.productionTravelMode, productionTravelDays: next.travelDays ?? s.productionTravelDays, productionOneWayKm: next.primaryOneWay ?? s.productionOneWayKm, productionSecondaryOneWayKm: next.secondaryOneWay ?? s.productionSecondaryOneWayKm, productionVehicles: next.vehicles ?? s.productionVehicles, productionReturnFlights: next.returnFlights ?? s.productionReturnFlights, productionAirportTransport: next.airportTransport ?? s.productionAirportTransport, productionAirportTransferReturns: next.airportTransferReturns ?? s.productionAirportTransferReturns, productionAirportParkingDays: next.airportParkingDays ?? s.productionAirportParkingDays, productionDestinationTransport: next.destinationTransport ?? s.productionDestinationTransport, productionRentalVehicles: next.rentalVehicles ?? s.productionRentalVehicles, productionRentalVehicleDays: next.rentalVehicleDays ?? s.productionRentalVehicleDays })} />
           </div>
         </div>}
         <div className="app-card-strong">
@@ -1616,12 +1653,7 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
               <Toggle label="Hotel / Subsistence" checked={s.surveyorHotelRequired || s.hotelRequired} onChange={(v) => patch({ surveyorHotelRequired: v, hotelRequired: v })} />
               {(s.surveyorHotelRequired || s.hotelRequired) && <div className={s.surveyorHotelNights > 0 && s.surveyorHotelNights !== calculatedSurveyorHotelNights ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Hotel Nights Per Team" value={surveyorHotelNights} onChange={(v) => patch({ surveyorHotelNights: v === calculatedSurveyorHotelNights ? 0 : v })} />{s.surveyorHotelNights > 0 && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => patch({ surveyorHotelNights: 0 })}>Reset to calculated {calculatedSurveyorHotelNights}</button>}</div>}
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <NumberInput label="Travel Days" value={s.surveyorTravelDays} onChange={(v) => patch({ surveyorTravelDays: v })} />
-              <NumberInput label={`One-Way Distance (${input.distanceUnit})`} value={s.surveyorOneWayKm} onChange={(v) => patch({ surveyorOneWayKm: v })} />
-              <NumberInput label="Vehicles" value={s.surveyorVehicles} step={1} onChange={(v) => patch({ surveyorVehicles: v })} />
-              <Mini label={`Calculated ${input.distanceUnit}`} value={`${s.surveyorOneWayKm * 2 * Math.max(0, s.surveyorVehicles)}`} />
-            </div>
+            <InternalTravelFields officeCount={input.officeCount} distanceUnit={input.distanceUnit} people={s.surveyors} value={{ mode: s.surveyorTravelMode, travelDays: s.surveyorTravelDays, primaryOneWay: s.surveyorOneWayKm, secondaryOneWay: s.surveyorSecondaryOneWayKm, vehicles: s.surveyorVehicles, returnFlights: s.surveyorReturnFlights, airportTransport: s.surveyorAirportTransport, airportTransferReturns: s.surveyorAirportTransferReturns, airportParkingDays: s.surveyorAirportParkingDays, destinationTransport: s.surveyorDestinationTransport, rentalVehicles: s.surveyorRentalVehicles, rentalVehicleDays: s.surveyorRentalVehicleDays }} onChange={(next) => patch({ surveyorTravelMode: next.mode ?? s.surveyorTravelMode, surveyorTravelDays: next.travelDays ?? s.surveyorTravelDays, surveyorOneWayKm: next.primaryOneWay ?? s.surveyorOneWayKm, surveyorSecondaryOneWayKm: next.secondaryOneWay ?? s.surveyorSecondaryOneWayKm, surveyorVehicles: next.vehicles ?? s.surveyorVehicles, surveyorReturnFlights: next.returnFlights ?? s.surveyorReturnFlights, surveyorAirportTransport: next.airportTransport ?? s.surveyorAirportTransport, surveyorAirportTransferReturns: next.airportTransferReturns ?? s.surveyorAirportTransferReturns, surveyorAirportParkingDays: next.airportParkingDays ?? s.surveyorAirportParkingDays, surveyorDestinationTransport: next.destinationTransport ?? s.surveyorDestinationTransport, surveyorRentalVehicles: next.rentalVehicles ?? s.surveyorRentalVehicles, surveyorRentalVehicleDays: next.rentalVehicleDays ?? s.surveyorRentalVehicleDays })} />
           </div>
         </div>}
         <ScreedPageTabs screedPage={screedPage} setScreedPage={setScreedPage} placement="bottom" />
@@ -1761,12 +1793,19 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
   const labourMode = r.labourMode ?? "subcontract";
   const usesSubcontract = labourMode === "subcontract" || labourMode === "both";
   const usesInHouse = labourMode === "in_house" || labourMode === "both";
-  const mobilisationKm = Math.max(0, r.mobilisationOneWayKm) * 2 * Math.max(0, r.mobilisationVehicles);
-  const calculatedRepairHotelNights = calculatedHotelNights(effectiveRepairDays, r.weekendRequired ? r.weekendDays : 0, r.travelDays);
+  const mobilisationKm = r.travelMode === "Drive" ? chargeableJourneyDistance(input.officeCount, r.mobilisationOneWayKm, r.mobilisationSecondaryOneWayKm, r.mobilisationVehicles) : 0;
+  const calculatedRepairHotelNights = calculatedHotelNights(effectiveRepairDays, r.weekendRequired ? r.weekendDays : 0, r.travelMode === "None" ? 0 : r.travelDays);
   const effectiveRepairHotelNights = r.hotelNights || calculatedRepairHotelNights;
   const hotelRoomNights = r.hotelRequired ? effectiveRepairHotelNights * Math.max(0, r.labourMen) : 0;
   const inHouseMen = Math.max(0, r.labourMen);
-  const inHouseSellTotal = usesInHouse ? ((inHouseMen * effectiveRepairDays * rates.productionLabourDayRate * (1 + adminRateMargin(rates, "productionLabourDayRate", rates.defaultMargin))) + (r.weekendRequired ? inHouseMen * weekendDaysForProgramme(effectiveRepairDays, 5, r.weekendDays) * rates.productionWeekendDayRate * (1 + adminRateMargin(rates, "productionWeekendDayRate", rates.defaultMargin)) : 0) + (r.nightShiftRequired ? inHouseMen * r.nightShiftHours * rates.productionNightShiftAllowance * (1 + adminRateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin)) : 0) + (inHouseMen * r.travelDays * rates.productionLabourTravelDayRate * (1 + adminRateMargin(rates, "productionLabourTravelDayRate", rates.travelMargin))) + (hotelRoomNights * rates.hotel * (1 + adminRateMargin(rates, "hotel", rates.hotelMargin))) + (hotelRoomNights * rates.subsistence * (1 + adminRateMargin(rates, "subsistence", rates.subsistenceMargin))) + (mobilisationKm * rates.repairFuelPerKm * (1 + adminRateMargin(rates, "repairFuelPerKm", rates.travelMargin)))) : 0;
+  const repairTravelSell = r.travelMode === "None" ? 0 : (inHouseMen * r.travelDays * rates.productionLabourTravelDayRate * (1 + adminRateMargin(rates, "productionLabourTravelDayRate", rates.travelMargin)))
+    + (r.travelMode === "Drive" ? mobilisationKm * rates.repairFuelPerKm * (1 + adminRateMargin(rates, "repairFuelPerKm", rates.travelMargin)) : 0)
+    + (r.travelMode === "Fly" ? effectiveReturnFlights(r.returnFlights, inHouseMen) * rates.returnFlight * (1 + adminRateMargin(rates, "returnFlight", rates.flightMargin))
+      + (r.airportTransport === "Uber" ? (r.airportTransferReturns || 1) * rates.airportUberReturn * (1 + adminRateMargin(rates, "airportUberReturn", rates.travelMargin)) : 0)
+      + (r.airportTransport === "Drive" ? r.airportParkingDays * Math.max(1, r.mobilisationVehicles) * rates.airportParkingPerDay * (1 + adminRateMargin(rates, "airportParkingPerDay", rates.travelMargin)) : 0)
+      + (r.destinationTransport === "Rental Car" ? Math.max(1, r.rentalVehicles) * r.rentalVehicleDays * rates.rentalCar * (1 + adminRateMargin(rates, "rentalCar", rates.travelMargin)) : 0)
+      + (r.destinationTransport === "Rental Van" ? Math.max(1, r.rentalVehicles) * r.rentalVehicleDays * rates.rentalVan * (1 + adminRateMargin(rates, "rentalVan", rates.travelMargin)) : 0) : 0);
+  const inHouseSellTotal = usesInHouse ? ((inHouseMen * effectiveRepairDays * rates.productionLabourDayRate * (1 + adminRateMargin(rates, "productionLabourDayRate", rates.defaultMargin))) + (r.weekendRequired ? inHouseMen * weekendDaysForProgramme(effectiveRepairDays, 5, r.weekendDays) * rates.productionWeekendDayRate * (1 + adminRateMargin(rates, "productionWeekendDayRate", rates.defaultMargin)) : 0) + (r.nightShiftRequired ? inHouseMen * r.nightShiftHours * rates.productionNightShiftAllowance * (1 + adminRateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin)) : 0) + repairTravelSell + (hotelRoomNights * rates.hotel * (1 + adminRateMargin(rates, "hotel", rates.hotelMargin))) + (hotelRoomNights * rates.subsistence * (1 + adminRateMargin(rates, "subsistence", rates.subsistenceMargin)))) : 0;
   const subcontractSellTotal = repairSubcontractorSell(r.repairSubcontractors);
   const logisticsSellTotal = additionalItemsSell(r.haulageItems);
   const selectedOptionalRules = (repairLine: RepairLineItem) => {
@@ -1960,7 +1999,7 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
         </div>
       </div>
       {usesSubcontract && <SubcontractLabourPanel items={r.repairSubcontractors} calculatedDays={effectiveRepairDays} onChange={(items) => patch({ repairSubcontractors: items })} />}
-      {usesInHouse && <InHouseLabourPanel input={r} distanceUnit={input.distanceUnit} rates={rates} calculatedDays={repairLineDaysTotal} effectiveDays={effectiveRepairDays} mobilisationKm={mobilisationKm} hotelRoomNights={hotelRoomNights} calculatedHotelNights={calculatedRepairHotelNights} effectiveHotelNights={effectiveRepairHotelNights} onChange={patch} />}
+      {usesInHouse && <InHouseLabourPanel input={r} officeCount={input.officeCount} distanceUnit={input.distanceUnit} rates={rates} calculatedDays={repairLineDaysTotal} effectiveDays={effectiveRepairDays} hotelRoomNights={hotelRoomNights} calculatedHotelNights={calculatedRepairHotelNights} effectiveHotelNights={effectiveRepairHotelNights} onChange={patch} />}
       <RepairPageTabs repairPage={repairPage} setRepairPage={setRepairPage} placement="bottom" />
       </>}
       {repairPage === "Review" && <>
@@ -2041,7 +2080,7 @@ function HaulageItems({ items, onChange }: { items: AdditionalItem[]; onChange: 
   );
 }
 
-function InHouseLabourPanel({ input, distanceUnit, rates, calculatedDays, effectiveDays, mobilisationKm, hotelRoomNights, calculatedHotelNights: autoHotelNights, effectiveHotelNights, onChange }: { input: ProjectInput["repairs"]; distanceUnit: ProjectInput["distanceUnit"]; rates: AdminRates; calculatedDays: number; effectiveDays: number; mobilisationKm: number; hotelRoomNights: number; calculatedHotelNights: number; effectiveHotelNights: number; onChange: (next: Partial<ProjectInput["repairs"]>) => void }) {
+function InHouseLabourPanel({ input, officeCount, distanceUnit, rates, calculatedDays, effectiveDays, hotelRoomNights, calculatedHotelNights: autoHotelNights, effectiveHotelNights, onChange }: { input: ProjectInput["repairs"]; officeCount: ProjectInput["officeCount"]; distanceUnit: ProjectInput["distanceUnit"]; rates: AdminRates; calculatedDays: number; effectiveDays: number; hotelRoomNights: number; calculatedHotelNights: number; effectiveHotelNights: number; onChange: (next: Partial<ProjectInput["repairs"]>) => void }) {
   const inputtedDays = input.labourDays > 0 ? input.labourDays : calculatedDays;
   const overridden = input.labourDays > 0 && input.labourDays !== calculatedDays;
   return (
@@ -2066,12 +2105,7 @@ function InHouseLabourPanel({ input, distanceUnit, rates, calculatedDays, effect
           {input.hotelRequired && <div className={input.hotelNights > 0 && input.hotelNights !== autoHotelNights ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Hotel Nights Per Team" value={effectiveHotelNights} onChange={(v) => onChange({ hotelNights: v === autoHotelNights ? 0 : v })} />{input.hotelNights > 0 && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => onChange({ hotelNights: 0 })}>Reset to calculated {autoHotelNights}</button>}</div>}
           {input.hotelRequired && <Mini label="Room Nights" value={`${hotelRoomNights}`} />}
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <NumberInput label="Travel Days" value={input.travelDays} onChange={(v) => onChange({ travelDays: v })} />
-          <NumberInput label={`One-Way Distance (${distanceUnit})`} value={input.mobilisationOneWayKm} onChange={(v) => onChange({ mobilisationOneWayKm: v })} />
-          <NumberInput label="Vehicles / Vans" value={input.mobilisationVehicles} step={1} onChange={(v) => onChange({ mobilisationVehicles: v })} />
-          <Mini label={`Calculated Distance (${distanceUnit})`} value={`${mobilisationKm}`} />
-        </div>
+        <InternalTravelFields officeCount={officeCount} distanceUnit={distanceUnit} people={input.labourMen} value={{ mode: input.travelMode, travelDays: input.travelDays, primaryOneWay: input.mobilisationOneWayKm, secondaryOneWay: input.mobilisationSecondaryOneWayKm, vehicles: input.mobilisationVehicles, returnFlights: input.returnFlights, airportTransport: input.airportTransport, airportTransferReturns: input.airportTransferReturns, airportParkingDays: input.airportParkingDays, destinationTransport: input.destinationTransport, rentalVehicles: input.rentalVehicles, rentalVehicleDays: input.rentalVehicleDays }} onChange={(next) => onChange({ travelMode: next.mode ?? input.travelMode, travelDays: next.travelDays ?? input.travelDays, mobilisationOneWayKm: next.primaryOneWay ?? input.mobilisationOneWayKm, mobilisationSecondaryOneWayKm: next.secondaryOneWay ?? input.mobilisationSecondaryOneWayKm, mobilisationVehicles: next.vehicles ?? input.mobilisationVehicles, returnFlights: next.returnFlights ?? input.returnFlights, airportTransport: next.airportTransport ?? input.airportTransport, airportTransferReturns: next.airportTransferReturns ?? input.airportTransferReturns, airportParkingDays: next.airportParkingDays ?? input.airportParkingDays, destinationTransport: next.destinationTransport ?? input.destinationTransport, rentalVehicles: next.rentalVehicles ?? input.rentalVehicles, rentalVehicleDays: next.rentalVehicleDays ?? input.rentalVehicleDays })} />
       </div>
     </div>
   );

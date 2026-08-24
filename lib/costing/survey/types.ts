@@ -1,5 +1,5 @@
 import type { CurrencyCode } from "../../company";
-import type { DistanceUnit, Line, PLCategory, ProjectCalculations } from "../../types";
+import type { DistanceUnit, Line, OfficeCount, PLCategory, ProjectCalculations } from "../../types";
 
 export type SurveyType = "AutoStore" | "Fmin" | "Exotec" | "Robotics" | "Level Survey Only" | "Prof Runs Only" | "Bespoke";
 export type SurveyorSupply = "In-house" | "Subcontracted";
@@ -23,6 +23,7 @@ export type SurveyInput = {
   costedBy: string;
   quoteCurrency: CurrencyCode;
   distanceUnit: DistanceUnit;
+  officeCount: OfficeCount;
   surveyType: SurveyType;
   autoStoreArea: number;
   fminRuns: number;

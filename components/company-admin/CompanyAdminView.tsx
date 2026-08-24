@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Check, Copy, KeyRound, MoreHorizontal, RefreshCw, Shield, UserCheck, UserX, X } from "lucide-react";
 import { Button, SelectField, StatusChip, TextField } from "@/components/design";
 import { useAuth } from "@/lib/authContext";
-import { distanceUnitCopy, hasPermission, type AppModuleKey, type CurrencyCode, type DistanceUnit, type MembershipRole } from "@/lib/company";
+import { distanceUnitCopy, hasPermission, type AppModuleKey, type CurrencyCode, type DistanceUnit, type MembershipRole, type OfficeCount } from "@/lib/company";
 import { createBrowserSupabaseClient } from "@/lib/supabaseClient";
 
 type CompanyAdminMember = {
@@ -84,10 +84,12 @@ export function CompanyAdminView() {
   const [newCompanyName, setNewCompanyName] = useState("");
   const [newCompanyCurrency, setNewCompanyCurrency] = useState<CurrencyCode>("EUR");
   const [newCompanyDistanceUnit, setNewCompanyDistanceUnit] = useState<DistanceUnit>("km");
+  const [newCompanyOfficeCount, setNewCompanyOfficeCount] = useState<OfficeCount>(1);
   const [companyName, setCompanyName] = useState(auth.activeCompany.name);
   const [defaultCurrency, setDefaultCurrency] = useState<CurrencyCode>(auth.activeCompany.defaultCurrency);
   const [reportingCurrency, setReportingCurrency] = useState<CurrencyCode>(auth.activeCompany.reportingCurrency);
   const [distanceUnit, setDistanceUnit] = useState<DistanceUnit>(auth.activeCompany.distanceUnit);
+  const [officeCount, setOfficeCount] = useState<OfficeCount>(auth.activeCompany.officeCount);
   const [primaryColour, setPrimaryColour] = useState(auth.activeCompany.branding.primaryColour);
   const [accentColour, setAccentColour] = useState(auth.activeCompany.branding.accentColour);
   const [message, setMessage] = useState("");
@@ -161,6 +163,7 @@ export function CompanyAdminView() {
     setDefaultCurrency(auth.activeCompany.defaultCurrency);
     setReportingCurrency(auth.activeCompany.reportingCurrency);
     setDistanceUnit(auth.activeCompany.distanceUnit);
+    setOfficeCount(auth.activeCompany.officeCount);
     setPrimaryColour(auth.activeCompany.branding.primaryColour);
     setAccentColour(auth.activeCompany.branding.accentColour);
     void loadAdminData();
@@ -176,13 +179,16 @@ export function CompanyAdminView() {
       reporting_currency: reportingCurrency,
       allowed_currencies: Array.from(new Set([defaultCurrency, reportingCurrency])),
       distance_unit: distanceUnit,
+      office_count: officeCount,
       primary_colour: primaryColour,
       accent_colour: accentColour,
       branding_status: "draft",
       branding_updated_at: new Date().toISOString()
     }).eq("id", auth.activeCompany.id);
     if (error) {
-      setMessage(error.message.includes("distance_unit")
+      setMessage(error.message.includes("office_count")
+        ? "Company office settings are not enabled in the live database yet. Apply Supabase migration 011, then save again."
+        : error.message.includes("distance_unit")
         ? "Distance units are not enabled in the live database yet. Apply Supabase migrations 008 and 009, then save again."
         : error.message);
       return;
@@ -313,7 +319,7 @@ export function CompanyAdminView() {
     const { data, error } = await client.from("companies").insert({
       name: newCompanyName.trim(), short_name: newCompanyName.trim().slice(0, 20), default_currency: newCompanyCurrency,
       reporting_currency: newCompanyCurrency, allowed_currencies: newCompanyCurrency === "PLN" ? ["PLN", "EUR"] : [newCompanyCurrency],
-      distance_unit: newCompanyDistanceUnit, primary_colour: "#0067a6", accent_colour: "#20a7d8", dark_colour: "#07182f", soft_colour: "#e9eef5"
+      distance_unit: newCompanyDistanceUnit, office_count: newCompanyOfficeCount, primary_colour: "#0067a6", accent_colour: "#20a7d8", dark_colour: "#07182f", soft_colour: "#e9eef5"
     }).select("id").single();
     if (error || !data) { setMessage(error?.message ?? "Company was not created."); return; }
     const { data: appModules } = await client.from("app_modules").select("id");
@@ -353,9 +359,10 @@ export function CompanyAdminView() {
           <SelectField label="Default Currency" value={defaultCurrency} onChange={(event) => setDefaultCurrency(event.target.value as CurrencyCode)}><option>EUR</option><option>GBP</option><option>PLN</option><option>USD</option></SelectField>
           <SelectField label="Reporting Currency" value={reportingCurrency} onChange={(event) => setReportingCurrency(event.target.value as CurrencyCode)}><option>EUR</option><option>GBP</option><option>PLN</option><option>USD</option></SelectField>
           <SelectField label="Distance Unit" value={distanceUnit} disabled={!canManageCompany} onChange={(event) => setDistanceUnit(event.target.value as DistanceUnit)}><option value="km">Kilometres (km)</option><option value="miles">Miles</option></SelectField>
+          <SelectField label="Company Offices" value={String(officeCount)} disabled={!canManageCompany} onChange={(event) => setOfficeCount(Number(event.target.value) === 2 ? 2 : 1)}><option value="1">1 office</option><option value="2">2 offices</option></SelectField>
           <TextField label="Primary Colour" value={primaryColour} onChange={(event) => setPrimaryColour(event.target.value)} />
           <TextField label="Accent Colour" value={accentColour} onChange={(event) => setAccentColour(event.target.value)} />
-          <div className="admin-context-note">New costings use {distanceUnitCopy(distanceUnit).plural}. Existing saved costings keep their recorded unit and rate snapshot; values are never converted automatically.</div>
+          <div className="admin-context-note">New costings use {distanceUnitCopy(distanceUnit).plural} and {officeCount === 2 ? "primary and secondary office journey legs" : "one office distance doubled for the return journey"}. Existing saved costings keep their recorded setup and rate snapshot.</div>
         </div>
         <div className="panel-actions"><Button variant="primary" disabled={!canManageCompany} onClick={() => void saveCompanyBasics()}>Save Company Settings</Button></div>
       </section>
@@ -392,7 +399,7 @@ export function CompanyAdminView() {
 
       <section className="app-card-strong modules-admin-card"><div className="panel-heading"><div><h2>Modules</h2><p>Only super admins can change the costing areas available to a company.</p></div></div><div className="module-admin-grid">{modules.map((module) => <label key={module.id}><span><b>{module.name}</b><small>{module.module_key}</small></span><input type="checkbox" checked={module.enabled} disabled={!canManageModules} onChange={() => void toggleModule(module)} /></label>)}</div></section>
 
-      {canCreateCompany && <section className="app-card-strong create-company-card"><div className="panel-heading"><div><h2>Create Company</h2><p>Super admin only. New companies start with the full module set.</p></div></div><div className="create-company-grid"><TextField label="Company Name" value={newCompanyName} onChange={(event) => setNewCompanyName(event.target.value)} /><SelectField label="Currency" value={newCompanyCurrency} onChange={(event) => setNewCompanyCurrency(event.target.value as CurrencyCode)}><option>EUR</option><option>GBP</option><option>PLN</option><option>USD</option></SelectField><SelectField label="Distance Unit" value={newCompanyDistanceUnit} onChange={(event) => setNewCompanyDistanceUnit(event.target.value as DistanceUnit)}><option value="km">Kilometres (km)</option><option value="miles">Miles</option></SelectField><Button variant="primary" onClick={() => void createCompany()}>Create Company</Button></div></section>}
+      {canCreateCompany && <section className="app-card-strong create-company-card"><div className="panel-heading"><div><h2>Create Company</h2><p>Super admin only. New companies start with the full module set.</p></div></div><div className="create-company-grid"><TextField label="Company Name" value={newCompanyName} onChange={(event) => setNewCompanyName(event.target.value)} /><SelectField label="Currency" value={newCompanyCurrency} onChange={(event) => setNewCompanyCurrency(event.target.value as CurrencyCode)}><option>EUR</option><option>GBP</option><option>PLN</option><option>USD</option></SelectField><SelectField label="Distance Unit" value={newCompanyDistanceUnit} onChange={(event) => setNewCompanyDistanceUnit(event.target.value as DistanceUnit)}><option value="km">Kilometres (km)</option><option value="miles">Miles</option></SelectField><SelectField label="Company Offices" value={String(newCompanyOfficeCount)} onChange={(event) => setNewCompanyOfficeCount(Number(event.target.value) === 2 ? 2 : 1)}><option value="1">1 office</option><option value="2">2 offices</option></SelectField><Button variant="primary" onClick={() => void createCompany()}>Create Company</Button></div></section>}
 
       <section className="app-card-strong access-audit-card"><div className="panel-heading"><div><h2>Access History</h2><p>{auth.role === "super_admin" ? "Recent user, invitation and recovery administration across all companies." : "Recent user, invitation and recovery administration for this company."}</p></div></div><div className="audit-list">{auditEvents.map((event) => <div key={event.id}><span className="audit-dot" /><div><b>{eventLabel(event.event_type)}</b><span>{String(event.event_data?.email ?? event.target_id ?? "User")} by {event.actor_id ? profileNames.get(event.actor_id) ?? event.actor_id.slice(0, 8) : "System"}{auth.role === "super_admin" && event.company_id ? ` / ${auth.companies.find((company) => company.id === event.company_id)?.name ?? "Company"}` : ""}</span></div><time>{new Date(event.created_at).toLocaleString("en-GB")}</time></div>)}{!auditEvents.length && <div className="admin-empty">No access changes have been recorded yet.</div>}</div></section>
 

@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import { calculatedHotelNights, calculateActualSiteDays, calculatePhaseSchedule, calculatePL, calculateProject, calculateProjectRepairMaterials, calculateRepairLineMaterials, calculateWorkingDays, defaultActuals, grindingDays, repairDays, screedDays, screedMaterialUnits, searchRowTone, weekendDaysForProgramme } from "@/lib/calculations";
 import { createRepairLine, defaultRepairCatalog } from "@/lib/repairCatalog";
 import { applyUsaWorkbookRates, createRemedialProjectInput, defaultRates, emptyInput, validationInput } from "@/lib/rates";
-import type { ProjectServiceKey, RepairCatalog } from "@/lib/types";
+import type { ProjectInput, ProjectServiceKey, RepairCatalog } from "@/lib/types";
 import { buildHandoverSummary } from "@/lib/handover";
+import { chargeableJourneyDistance, officeJourneyDistance } from "@/lib/travel";
 
 describe("FACE GmbH v2 contracting calculations", () => {
   it("calculates a detailed mixed validation project", () => {
@@ -434,6 +435,93 @@ describe("FACE GmbH v2 contracting calculations", () => {
     expect(result.budgetLines.find((line) => line.item === "Project manager subsistence")?.quantity).toBe(2);
   });
 
+  it("uses the configured one-office or two-office journey rule exactly", () => {
+    expect(officeJourneyDistance(1, 120, 0)).toBe(240);
+    expect(officeJourneyDistance(2, 120, 180)).toBe(300);
+    expect(chargeableJourneyDistance(2, 120, 180, 2, 3)).toBe(1800);
+  });
+
+  it("prices only the selected remedial travel mode", () => {
+    const driveInput: ProjectInput = {
+      ...emptyInput,
+      officeCount: 2,
+      includeGrinding: true,
+      grinding: {
+        ...emptyInput.grinding,
+        enabled: true,
+        estimatedDays: 3,
+        productionLabourMode: "in_house",
+        productionMen: 2,
+        productionTravelMode: "Drive",
+        productionTravelDays: 1,
+        productionOneWayKm: 100,
+        productionSecondaryOneWayKm: 150,
+        productionVehicles: 1,
+        productionReturnFlights: 9,
+        productionAirportTransport: "Uber",
+        productionAirportTransferReturns: 4,
+        productionDestinationTransport: "Rental Van",
+        productionRentalVehicles: 1,
+        productionRentalVehicleDays: 3,
+        surveyorLabourMode: "subcontract",
+        surveyorSubcontractors: []
+      }
+    };
+    const drive = calculateProject(driveInput, defaultRates);
+    expect(drive.proposalLines.find((row) => row.item === "Grinding production travel")?.quantity).toBe(2);
+    expect(drive.proposalLines.find((row) => row.item === "Grinding production mileage")?.quantity).toBe(250);
+    expect(drive.proposalLines.find((row) => row.item === "Grinding production return flights")?.quantity).toBe(0);
+    expect(drive.proposalLines.find((row) => row.item === "Grinding production rental van")?.quantity).toBe(0);
+
+    const fly = calculateProject({
+      ...driveInput,
+      grinding: {
+        ...driveInput.grinding,
+        productionTravelMode: "Fly",
+        productionReturnFlights: 0,
+        productionAirportTransport: "Uber",
+        productionAirportTransferReturns: 0,
+        productionDestinationTransport: "Rental Van",
+        productionRentalVehicles: 1,
+        productionRentalVehicleDays: 3
+      }
+    }, defaultRates);
+    expect(fly.proposalLines.find((row) => row.item === "Grinding production mileage")?.quantity).toBe(0);
+    expect(fly.proposalLines.find((row) => row.item === "Grinding production return flights")?.quantity).toBe(2);
+    expect(fly.proposalLines.find((row) => row.item === "Grinding production airport transfer")?.quantity).toBe(1);
+    expect(fly.proposalLines.find((row) => row.item === "Grinding production rental van")?.quantity).toBe(3);
+  });
+
+  it("ignores stale remedial travel inputs and travel nights when No travel is selected", () => {
+    const result = calculateProject({
+      ...emptyInput,
+      includeGrinding: true,
+      grinding: {
+        ...emptyInput.grinding,
+        enabled: true,
+        estimatedDays: 3,
+        productionLabourMode: "in_house",
+        productionMen: 2,
+        productionTravelMode: "None",
+        productionTravelDays: 4,
+        productionOneWayKm: 500,
+        productionVehicles: 2,
+        productionReturnFlights: 2,
+        productionAirportTransport: "Drive",
+        productionAirportParkingDays: 5,
+        productionDestinationTransport: "Rental Car",
+        productionRentalVehicles: 1,
+        productionRentalVehicleDays: 5,
+        productionHotelRequired: true,
+        productionHotelNights: 0,
+        surveyorLabourMode: "subcontract",
+        surveyorSubcontractors: []
+      }
+    }, defaultRates);
+    expect(result.proposalLines.filter((row) => row.section === "Travel" && row.quantity > 0)).toHaveLength(0);
+    expect(result.proposalLines.find((row) => row.item === "Grinding hotel production")?.quantity).toBe(4);
+  });
+
   it("uses a per-mile rate unit without changing the entered distance quantity", () => {
     const result = calculateProject({ ...emptyInput, distanceUnit: "miles", projectManagement: { ...emptyInput.projectManagement, enabled: true, days: 1, visits: 2, travelMode: "Drive", oneWayKm: 100, vehicles: 1 } }, defaultRates);
     const mileage = result.budgetLines.find((line) => line.item === "Project manager mileage");
@@ -607,6 +695,7 @@ describe("FACE GmbH v2 contracting calculations", () => {
         surveyorLabourMode: "in_house",
         surveyorCount: 1,
         surveyorDays: 6,
+        surveyorTravelMode: "Drive",
         surveyorTravelDays: 1,
         surveyorOneWayKm: 100,
         surveyorVehicles: 1,

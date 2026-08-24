@@ -1,5 +1,5 @@
 import type { CurrencyCode } from "../../company";
-import type { DistanceUnit } from "../../types";
+import type { DistanceUnit, OfficeCount } from "../../types";
 import type { SurveyAdminRates, SurveyInput } from "./types";
 import { clearInactiveSurveyQuantities } from "./rules";
 
@@ -52,9 +52,9 @@ export const defaultSurveyRates: SurveyAdminRates = {
   dailyOutputProfRunsOnly: 1000
 };
 
-export function createEmptySurveyInput(currency: CurrencyCode = "EUR", distanceUnit: DistanceUnit = "km"): SurveyInput {
+export function createEmptySurveyInput(currency: CurrencyCode = "EUR", distanceUnit: DistanceUnit = "km", officeCount: OfficeCount = 1): SurveyInput {
   return {
-    projectReference: "", client: "", location: "", revision: "1", costedBy: "", quoteCurrency: currency, distanceUnit,
+    projectReference: "", client: "", location: "", revision: "1", costedBy: "", quoteCurrency: currency, distanceUnit, officeCount,
     surveyType: "AutoStore", autoStoreArea: 0, fminRuns: 0, exotecRuns: 0, exotecArea: 0, roboticsArea: 0,
     levelSurveyArea: 0, profRunsOnly: 0, surveyorSupply: "In-house", subcontractSurveyCost: 0,
     subcontractSurveyMarkup: 0, projectManagerRequired: false, surveyorsOnSite: 0, additionalDays: 0, siteDaysOverride: null,
@@ -70,13 +70,15 @@ export function normaliseSurveyRates(saved?: Partial<SurveyAdminRates>): SurveyA
   return { ...defaultSurveyRates, ...(saved ?? {}) };
 }
 
-export function normaliseSurveyInput(saved: Partial<SurveyInput> | undefined, currency: CurrencyCode = "EUR", distanceUnit: DistanceUnit = "km"): SurveyInput {
-  const empty = createEmptySurveyInput(currency, distanceUnit);
+export function normaliseSurveyInput(saved: Partial<SurveyInput> | undefined, currency: CurrencyCode = "EUR", distanceUnit: DistanceUnit = "km", officeCount: OfficeCount = 1): SurveyInput {
+  const inferredOfficeCount: OfficeCount = saved?.officeCount === 2 || (!saved?.officeCount && Number(saved?.secondaryOfficeDistanceOneWay) > 0) ? 2 : officeCount;
+  const empty = createEmptySurveyInput(currency, distanceUnit, inferredOfficeCount);
   return clearInactiveSurveyQuantities({
     ...empty,
     ...(saved ?? {}),
     quoteCurrency: saved?.quoteCurrency ?? currency,
     distanceUnit: saved?.distanceUnit ?? distanceUnit,
+    officeCount: inferredOfficeCount,
     additionalItems: Array.isArray(saved?.additionalItems) ? saved.additionalItems : []
   });
 }

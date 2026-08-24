@@ -3,8 +3,8 @@ import "./globals.css";
 import AuthShell from "./auth-shell";
 
 export const metadata: Metadata = {
-  title: "FACE GmbH Contracting Costing",
-  description: "Grinding, screeding and repairs costing app"
+  title: "CoGri Survey & Remedial Costing",
+  description: "Secure multi-company survey, grinding, screeding and repairs costing platform"
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

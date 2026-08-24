@@ -3,6 +3,7 @@ import { distanceRateUnit } from "../../company";
 import { defaultSurveyRates, normaliseSurveyRates } from "./defaults";
 import type { SurveyAdminRates, SurveyCalculationResult, SurveyInput } from "./types";
 import { isSurveyQuantityActive } from "./rules";
+import { officeJourneyDistance } from "../../travel";
 
 const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 const safe = (value: number) => Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
@@ -31,9 +32,7 @@ export function calculateSurveySiteDays(input: SurveyInput, rates?: Partial<Surv
 }
 
 export function calculateSurveyDistance(input: SurveyInput) {
-  const primary = safe(input.primaryOfficeDistanceOneWay);
-  const secondary = safe(input.secondaryOfficeDistanceOneWay);
-  const roundTripDistance = primary > 0 && secondary > 0 ? primary + secondary : (primary || secondary) * 2;
+  const roundTripDistance = officeJourneyDistance(input.officeCount, input.primaryOfficeDistanceOneWay, input.secondaryOfficeDistanceOneWay);
   return money(roundTripDistance * safe(input.numberOfCars));
 }
 

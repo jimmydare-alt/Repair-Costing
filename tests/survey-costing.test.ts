@@ -139,6 +139,14 @@ describe("separate Survey costing module", () => {
     expect(distanceUnitCopy("miles").plural).toBe("miles");
   });
 
+  it("snapshots and applies the company's office journey configuration", () => {
+    const oneOffice = { ...inHouseSurvey(), officeCount: 1 as const, primaryOfficeDistanceOneWay: 120, secondaryOfficeDistanceOneWay: 0 };
+    const twoOffices = { ...inHouseSurvey(), officeCount: 2 as const, primaryOfficeDistanceOneWay: 120, secondaryOfficeDistanceOneWay: 180 };
+    expect(calculateSurveyProject(oneOffice, defaultSurveyRates).survey?.chargeableDistance).toBe(240);
+    expect(calculateSurveyProject(twoOffices, defaultSurveyRates).survey?.chargeableDistance).toBe(300);
+    expect(createSurveyProjectInput("EUR", "km", undefined, 2).survey?.officeCount).toBe(2);
+  });
+
   it("keeps Survey and Remedial defaults separate", () => {
     const projectInput = createSurveyProjectInput("EUR", "km");
     expect(projectInput.costingModule).toBe("survey");

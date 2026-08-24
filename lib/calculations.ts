@@ -1,6 +1,7 @@
 import { defaultRepairCatalog, materialById, repairTypeByCode } from "./repairCatalog";
 import { distanceRateUnit } from "./company";
-import type { AdminRates, Line, MaterialCalc, PLActuals, PLCategory, PLSummary, ProjectCalculations, ProjectInput, ProjectServiceKey, RepairCatalog, RepairLineItem, RepairMaterial, RepairTypeMaterialRule, Section } from "./types";
+import type { AdminRates, AirportTransport, DestinationTransport, Line, MaterialCalc, PLActuals, PLCategory, PLSummary, ProjectCalculations, ProjectInput, ProjectServiceKey, RepairCatalog, RepairLineItem, RepairMaterial, RepairTypeMaterialRule, Section, TravelMode } from "./types";
+import { chargeableJourneyDistance, effectiveReturnFlights } from "./travel";
 
 const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 const pct = (value: number) => Math.round(value * 10000) / 100;
@@ -26,6 +27,56 @@ function line(section: Section, item: string, rate: number, unit: string, quanti
 
 function rateMargin(rates: AdminRates, key: keyof AdminRates, fallback: number) {
   return num(rates.rateMargins?.[String(key)] ?? fallback);
+}
+
+type InternalTravelLineOptions = {
+  enabled: boolean;
+  prefix: string;
+  travelItem?: string;
+  mileageItem?: string;
+  source: string;
+  mode: TravelMode;
+  people: number;
+  travelDays: number;
+  travelDayRate: number;
+  travelDayMargin: number;
+  primaryOneWay: number;
+  secondaryOneWay: number;
+  vehicles: number;
+  journeys?: number;
+  mileageRate: number;
+  mileageMargin: number;
+  returnFlights: number;
+  airportTransport: AirportTransport;
+  airportTransferReturns: number;
+  airportParkingDays: number;
+  destinationTransport: DestinationTransport;
+  rentalVehicles: number;
+  rentalVehicleDays: number;
+};
+
+function internalTravelLines(input: ProjectInput, rates: AdminRates, options: InternalTravelLineOptions) {
+  const active = options.enabled && options.mode !== "None";
+  const drive = active && options.mode === "Drive";
+  const fly = active && options.mode === "Fly";
+  const people = Math.max(0, num(options.people));
+  const vehicles = Math.max(0, num(options.vehicles));
+  const mileage = drive ? chargeableJourneyDistance(input.officeCount, options.primaryOneWay, options.secondaryOneWay, vehicles, options.journeys ?? 1) : 0;
+  const flights = fly ? effectiveReturnFlights(options.returnFlights, people) : 0;
+  const airportReturns = fly && options.airportTransport === "Uber" ? num(options.airportTransferReturns) || 1 : 0;
+  const airportParking = fly && options.airportTransport === "Drive" ? num(options.airportParkingDays) * Math.max(1, vehicles) : 0;
+  const rentalVehicles = Math.max(1, num(options.rentalVehicles));
+  const rentalDays = fly && options.destinationTransport !== "None" ? rentalVehicles * num(options.rentalVehicleDays) : 0;
+  const rentalRate = options.destinationTransport === "Rental Van" ? rates.rentalVan : rates.rentalCar;
+  const rentalKey: keyof AdminRates = options.destinationTransport === "Rental Van" ? "rentalVan" : "rentalCar";
+  return [
+    line("Travel", options.travelItem ?? `${options.prefix} travel days`, options.travelDayRate, "person day", active ? people * num(options.travelDays) : 0, options.travelDayMargin, `${options.source} travel days`),
+    line("Travel", options.mileageItem ?? `${options.prefix} mileage`, options.mileageRate, distanceRateUnit(input.distanceUnit), mileage, options.mileageMargin, `${options.source} office journey x vehicles`),
+    line("Travel", `${options.prefix} return flights`, rates.returnFlight, "flight", flights, rateMargin(rates, "returnFlight", rates.flightMargin), `${options.source} return flights`),
+    line("Travel", `${options.prefix} airport transfer`, rates.airportUberReturn, "return", airportReturns, rateMargin(rates, "airportUberReturn", rates.travelMargin), `${options.source} return airport transfer`),
+    line("Travel", `${options.prefix} airport parking`, rates.airportParkingPerDay, "vehicle day", airportParking, rateMargin(rates, "airportParkingPerDay", rates.travelMargin), `${options.source} airport parking days x vehicles`),
+    line("Travel", `${options.prefix} ${options.destinationTransport === "Rental Van" ? "rental van" : "rental car"}`, rentalRate, "vehicle day", rentalDays, rateMargin(rates, rentalKey, rates.travelMargin), `${options.source} destination transport`)
+  ];
 }
 
 const nonCurrencyRateKeys = new Set(["hotelMargin", "subsistenceMargin", "subcontractMargin", "defaultMargin", "travelMargin", "flightMargin", "equipmentMargin", "materialMargin", "shippingMargin", "materialShippingMargin", "equipmentShippingMargin", "bdmBonusRate", "screedMaterialContingency", "screedMaterialWaste", "screedPrimerContingency", "screedPrimerWaste", "screedSandContingency", "screedSandWaste"]);
@@ -246,29 +297,27 @@ function grindingLines(input: ProjectInput, rates: AdminRates) {
   const surveyorDays = num(g.surveyorDays) > 0 ? num(g.surveyorDays) : days;
   const productionMen = Math.max(0, num(g.productionMen));
   const surveyorCount = Math.max(0, num(g.surveyorCount || g.surveyorsOnSite));
-  const productionHotelNightsPerTeam = num(g.productionHotelNights) || calculatedHotelNights(productionDays, g.weekendDaysPerWeek, g.productionTravelDays);
-  const surveyorHotelNightsPerTeam = num(g.surveyorHotelNights) || calculatedHotelNights(surveyorDays, g.weekendDaysPerWeek, g.surveyorTravelDays);
+  const productionHotelNightsPerTeam = num(g.productionHotelNights) || calculatedHotelNights(productionDays, g.weekendDaysPerWeek, g.productionTravelMode === "None" ? 0 : g.productionTravelDays);
+  const surveyorHotelNightsPerTeam = num(g.surveyorHotelNights) || calculatedHotelNights(surveyorDays, g.weekendDaysPerWeek, g.surveyorTravelMode === "None" ? 0 : g.surveyorTravelDays);
   const productionHotelNights = g.productionHotelRequired ? productionHotelNightsPerTeam * productionMen : 0;
   const surveyorHotelNights = g.surveyorHotelRequired ? surveyorHotelNightsPerTeam * surveyorCount : 0;
-  const productionKm = num(g.productionOneWayKm) * 2 * Math.max(0, num(g.productionVehicles));
-  const surveyorKm = num(g.surveyorOneWayKm) * 2 * Math.max(0, num(g.surveyorVehicles));
   const rows: Line[] = [
     line("Labour", "Surveyor labour", rates.grindingSurveyorDayRate, "surveyor day", useSurveyorInHouse ? surveyorCount * surveyorDays : 0, rateMargin(rates, "grindingSurveyorDayRate", 0), "Grinding surveyor labour"),
     line("Labour", "Surveyor weekend extra", rates.grindingSurveyorWeekendDayRate, "surveyor day", useSurveyorInHouse ? surveyorCount * weekendDaysForProgramme(surveyorDays, 5, g.weekendDaysPerWeek) : 0, rateMargin(rates, "grindingSurveyorWeekendDayRate", rates.defaultMargin), "Grinding surveyor weekend allowance"),
     line("Labour", "Surveyor night-shift allowance", rates.surveyorNightShiftAllowance, "surveyor night", useSurveyorInHouse && g.nightShiftRequired ? surveyorCount * num(g.surveyorNightShifts) : 0, rateMargin(rates, "surveyorNightShiftAllowance", rates.defaultMargin), "Grinding surveyor night shift allowance"),
-    line("Travel", "Surveyor travel", rates.grindingSurveyorTravelDayRate, "surveyor day", useSurveyorInHouse ? surveyorCount * num(g.surveyorTravelDays) : 0, rateMargin(rates, "grindingSurveyorTravelDayRate", 0), "Grinding surveyor travel days"),
-    line("Travel", "Surveyor mileage", rates.mileagePerKm, distanceRateUnit(input.distanceUnit), useSurveyorInHouse ? surveyorKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Grinding surveyor one-way distance x 2 x vehicles"),
     line("Hotel", "Surveyor hotel", rates.grindingHotelNightRate, "night", useSurveyorInHouse ? surveyorHotelNights : 0, rateMargin(rates, "grindingHotelNightRate", rates.hotelMargin), "Grinding surveyor hotel nights x surveyors"),
     line("Subsistence", "Surveyor subsistence", rates.subsistence, "day", useSurveyorInHouse ? surveyorHotelNights : 0, rateMargin(rates, "subsistence", rates.subsistenceMargin), "Grinding surveyor subsistence follows hotel nights"),
     line("Labour", "Grinding production labour", rates.productionLabourDayRate, "man day", useProductionInHouse ? productionMen * productionDays : 0, rateMargin(rates, "productionLabourDayRate", rates.defaultMargin), "Grinding production labour"),
     line("Labour", "Grinding production weekend extra", rates.productionWeekendDayRate, "man day", useProductionInHouse ? productionMen * weekendDaysForProgramme(productionDays, 5, g.weekendDaysPerWeek) : 0, rateMargin(rates, "productionWeekendDayRate", rates.defaultMargin), "Grinding production weekend allowance"),
     line("Labour", "Grinding production night-shift allowance", rates.productionNightShiftAllowance, "man night", useProductionInHouse && g.nightShiftRequired ? productionMen * num(g.productionNightShifts) : 0, rateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin), "Grinding production night shift allowance"),
-    line("Travel", "Grinding production travel", rates.productionLabourTravelDayRate, "man day", useProductionInHouse ? productionMen * num(g.productionTravelDays) : 0, rateMargin(rates, "productionLabourTravelDayRate", rates.travelMargin), "Grinding production travel days"),
-    line("Travel", "Grinding production mileage", rates.mileagePerKm, distanceRateUnit(input.distanceUnit), useProductionInHouse ? productionKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Grinding production one-way distance x 2 x vehicles"),
     line("Hotel", "Grinding hotel production", rates.grindingHotelNightRate, "night", useProductionInHouse ? productionHotelNights : 0, rateMargin(rates, "grindingHotelNightRate", rates.hotelMargin), "Grinding production hotel nights x men"),
     line("Subsistence", "Grinding subsistence production", rates.subsistence, "day", useProductionInHouse ? productionHotelNights : 0, rateMargin(rates, "subsistence", rates.subsistenceMargin), "Grinding production subsistence follows hotel nights"),
     line("Reports", "Engineering report", rates.grindingEngineeringReportRate, "item", useSurveyorInHouse && g.engineeringReport ? 1 : 0, rateMargin(rates, "grindingEngineeringReportRate", 0), "Grinding engineering report")
   ];
+  rows.push(
+    ...internalTravelLines(input, rates, { enabled: useSurveyorInHouse, prefix: "Grinding surveyor", travelItem: "Surveyor travel", mileageItem: "Surveyor mileage", source: "Grinding surveyor", mode: g.surveyorTravelMode, people: surveyorCount, travelDays: g.surveyorTravelDays, travelDayRate: rates.grindingSurveyorTravelDayRate, travelDayMargin: rateMargin(rates, "grindingSurveyorTravelDayRate", 0), primaryOneWay: g.surveyorOneWayKm, secondaryOneWay: g.surveyorSecondaryOneWayKm, vehicles: g.surveyorVehicles, mileageRate: rates.mileagePerKm, mileageMargin: rateMargin(rates, "mileagePerKm", rates.travelMargin), returnFlights: g.surveyorReturnFlights, airportTransport: g.surveyorAirportTransport, airportTransferReturns: g.surveyorAirportTransferReturns, airportParkingDays: g.surveyorAirportParkingDays, destinationTransport: g.surveyorDestinationTransport, rentalVehicles: g.surveyorRentalVehicles, rentalVehicleDays: g.surveyorRentalVehicleDays }),
+    ...internalTravelLines(input, rates, { enabled: useProductionInHouse, prefix: "Grinding production", travelItem: "Grinding production travel", mileageItem: "Grinding production mileage", source: "Grinding production", mode: g.productionTravelMode, people: productionMen, travelDays: g.productionTravelDays, travelDayRate: rates.productionLabourTravelDayRate, travelDayMargin: rateMargin(rates, "productionLabourTravelDayRate", rates.travelMargin), primaryOneWay: g.productionOneWayKm, secondaryOneWay: g.productionSecondaryOneWayKm, vehicles: g.productionVehicles, mileageRate: rates.mileagePerKm, mileageMargin: rateMargin(rates, "mileagePerKm", rates.travelMargin), returnFlights: g.productionReturnFlights, airportTransport: g.productionAirportTransport, airportTransferReturns: g.productionAirportTransferReturns, airportParkingDays: g.productionAirportParkingDays, destinationTransport: g.productionDestinationTransport, rentalVehicles: g.productionRentalVehicles, rentalVehicleDays: g.productionRentalVehicleDays })
+  );
   if (useSurveyorSubcontract) {
     g.surveyorSubcontractors.forEach((item) => {
       const qty = item.priceType === "day" ? item.days || surveyorDays : item.rate ? 1 : 0;
@@ -316,31 +365,29 @@ function screedLines(input: ProjectInput, rates: AdminRates) {
   const surveyorDays = num(s.surveyorDays) > 0 ? num(s.surveyorDays) : days;
   const productionMen = Math.max(0, num(s.productionMen));
   const surveyors = Math.max(0, num(s.surveyors));
-  const productionHotelNightsPerTeam = num(s.productionHotelNights) || calculatedHotelNights(productionDays, s.weekendDaysPerWeek, s.productionTravelDays);
-  const surveyorHotelNightsPerTeam = num(s.surveyorHotelNights) || calculatedHotelNights(surveyorDays, s.weekendDaysPerWeek, s.surveyorTravelDays);
+  const productionHotelNightsPerTeam = num(s.productionHotelNights) || calculatedHotelNights(productionDays, s.weekendDaysPerWeek, s.productionTravelMode === "None" ? 0 : s.productionTravelDays);
+  const surveyorHotelNightsPerTeam = num(s.surveyorHotelNights) || calculatedHotelNights(surveyorDays, s.weekendDaysPerWeek, s.surveyorTravelMode === "None" ? 0 : s.surveyorTravelDays);
   const productionHotelNights = s.productionHotelRequired ? productionHotelNightsPerTeam * productionMen : 0;
   const surveyorHotelNights = s.surveyorHotelRequired || s.hotelRequired ? surveyorHotelNightsPerTeam * surveyors : 0;
-  const productionKm = num(s.productionOneWayKm) * 2 * Math.max(0, num(s.productionVehicles));
-  const surveyorKm = num(s.surveyorOneWayKm) * 2 * Math.max(0, num(s.surveyorVehicles));
   const toolDays = useProductionInHouse ? productionDays : 0;
   const grinderCount = Math.max(0, num(s.propaneGrinders));
   const rows: Line[] = [
     line("Labour", "Screed surveyor labour", rates.screedSurveyorDayRate, "surveyor day", useSurveyorInHouse ? surveyors * surveyorDays : 0, rateMargin(rates, "screedSurveyorDayRate", 0), "Screed surveyor labour"),
     line("Labour", "Screed surveyor weekend extra", rates.screedSurveyorWeekendDayRate, "surveyor day", useSurveyorInHouse ? surveyors * weekendDaysForProgramme(surveyorDays, 5, s.weekendDaysPerWeek) : 0, rateMargin(rates, "screedSurveyorWeekendDayRate", rates.defaultMargin), "Screed surveyor weekend allowance"),
     line("Labour", "Screed surveyor night-shift allowance", rates.surveyorNightShiftAllowance, "surveyor night", useSurveyorInHouse && s.nightShiftRequired ? surveyors * num(s.surveyorNightShifts) : 0, rateMargin(rates, "surveyorNightShiftAllowance", rates.defaultMargin), "Screed surveyor night shift allowance"),
-    line("Travel", "Screed surveyor travel", rates.screedSurveyorTravelDayRate, "surveyor day", useSurveyorInHouse ? surveyors * num(s.surveyorTravelDays) : 0, rateMargin(rates, "screedSurveyorTravelDayRate", 0), "Screed surveyor travel days"),
-    line("Travel", "Screed surveyor mileage", rates.mileagePerKm, distanceRateUnit(input.distanceUnit), useSurveyorInHouse ? surveyorKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Screed surveyor one-way distance x 2 x vehicles"),
     line("Hotel", "Screed surveyor hotel", rates.screedHotelNightRate, "night", useSurveyorInHouse ? surveyorHotelNights : 0, rateMargin(rates, "screedHotelNightRate", rates.hotelMargin), "Screed surveyor hotel nights x surveyors"),
     line("Subsistence", "Screed surveyor subsistence", rates.subsistence, "day", useSurveyorInHouse ? surveyorHotelNights : 0, rateMargin(rates, "subsistence", rates.subsistenceMargin), "Screed surveyor subsistence follows hotel nights"),
     line("Reports", "Screed engineering report", rates.screedEngineeringReportRate, "item", useSurveyorInHouse && s.engineeringReport ? 1 : 0, rateMargin(rates, "screedEngineeringReportRate", 0), "Screed engineering report"),
     line("Labour", "Screed production labour", rates.productionLabourDayRate, "man day", useProductionInHouse ? productionMen * productionDays : 0, rateMargin(rates, "productionLabourDayRate", rates.defaultMargin), "Screed production labour"),
     line("Labour", "Screed production weekend extra", rates.productionWeekendDayRate, "man day", useProductionInHouse ? productionMen * weekendDaysForProgramme(productionDays, 5, s.weekendDaysPerWeek) : 0, rateMargin(rates, "productionWeekendDayRate", rates.defaultMargin), "Screed production weekend allowance"),
     line("Labour", "Screed production night-shift allowance", rates.productionNightShiftAllowance, "man night", useProductionInHouse && s.nightShiftRequired ? productionMen * num(s.productionNightShifts) : 0, rateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin), "Screed production night shift allowance"),
-    line("Travel", "Screed production travel", rates.productionLabourTravelDayRate, "man day", useProductionInHouse ? productionMen * num(s.productionTravelDays) : 0, rateMargin(rates, "productionLabourTravelDayRate", rates.travelMargin), "Screed production travel days"),
-    line("Travel", "Screed production mileage", rates.mileagePerKm, distanceRateUnit(input.distanceUnit), useProductionInHouse ? productionKm : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "Screed production one-way distance x 2 x vehicles"),
     line("Hotel", "Screed production hotel", rates.screedHotelNightRate, "night", useProductionInHouse ? productionHotelNights : 0, rateMargin(rates, "screedHotelNightRate", rates.hotelMargin), "Screed production hotel nights x men"),
     line("Subsistence", "Screed production subsistence", rates.subsistence, "day", useProductionInHouse ? productionHotelNights : 0, rateMargin(rates, "subsistence", rates.subsistenceMargin), "Screed production subsistence follows hotel nights")
   ];
+  rows.push(
+    ...internalTravelLines(input, rates, { enabled: useSurveyorInHouse, prefix: "Screed surveyor", travelItem: "Screed surveyor travel", mileageItem: "Screed surveyor mileage", source: "Screed surveyor", mode: s.surveyorTravelMode, people: surveyors, travelDays: s.surveyorTravelDays, travelDayRate: rates.screedSurveyorTravelDayRate, travelDayMargin: rateMargin(rates, "screedSurveyorTravelDayRate", 0), primaryOneWay: s.surveyorOneWayKm, secondaryOneWay: s.surveyorSecondaryOneWayKm, vehicles: s.surveyorVehicles, mileageRate: rates.mileagePerKm, mileageMargin: rateMargin(rates, "mileagePerKm", rates.travelMargin), returnFlights: s.surveyorReturnFlights, airportTransport: s.surveyorAirportTransport, airportTransferReturns: s.surveyorAirportTransferReturns, airportParkingDays: s.surveyorAirportParkingDays, destinationTransport: s.surveyorDestinationTransport, rentalVehicles: s.surveyorRentalVehicles, rentalVehicleDays: s.surveyorRentalVehicleDays }),
+    ...internalTravelLines(input, rates, { enabled: useProductionInHouse, prefix: "Screed production", travelItem: "Screed production travel", mileageItem: "Screed production mileage", source: "Screed production", mode: s.productionTravelMode, people: productionMen, travelDays: s.productionTravelDays, travelDayRate: rates.productionLabourTravelDayRate, travelDayMargin: rateMargin(rates, "productionLabourTravelDayRate", rates.travelMargin), primaryOneWay: s.productionOneWayKm, secondaryOneWay: s.productionSecondaryOneWayKm, vehicles: s.productionVehicles, mileageRate: rates.mileagePerKm, mileageMargin: rateMargin(rates, "mileagePerKm", rates.travelMargin), returnFlights: s.productionReturnFlights, airportTransport: s.productionAirportTransport, airportTransferReturns: s.productionAirportTransferReturns, airportParkingDays: s.productionAirportParkingDays, destinationTransport: s.productionDestinationTransport, rentalVehicles: s.productionRentalVehicles, rentalVehicleDays: s.productionRentalVehicleDays })
+  );
   if (useSurveyorSubcontract) {
     s.surveyorSubcontractors.forEach((item) => {
       const qty = item.priceType === "day" ? item.days || surveyorDays : item.rate ? 1 : 0;
@@ -389,18 +436,16 @@ function repairLines(input: ProjectInput, rates: AdminRates, materialCalcs: Mate
   const useInHouse = mode === "in_house" || mode === "both";
   const inHouseMen = Math.max(0, r.labourMen);
   const inHouseDays = useInHouse ? calculatedDays : 0;
-  const mobilisationKm = Math.max(0, r.mobilisationOneWayKm ?? 0) * 2 * Math.max(0, r.mobilisationVehicles ?? 0);
-  const hotelNightsPerTeam = num(r.hotelNights) || calculatedHotelNights(inHouseDays, r.weekendRequired ? r.weekendDays : 0, r.travelDays);
+  const hotelNightsPerTeam = num(r.hotelNights) || calculatedHotelNights(inHouseDays, r.weekendRequired ? r.weekendDays : 0, r.travelMode === "None" ? 0 : r.travelDays);
   const hotelRoomNights = r.hotelRequired ? hotelNightsPerTeam * inHouseMen : 0;
   const rows = [
     line("Labour", "In-house repair production labour", rates.productionLabourDayRate, "man day", inHouseMen * inHouseDays, rateMargin(rates, "productionLabourDayRate", rates.defaultMargin), "Repair labour mode + repair type output rates"),
     line("Labour", "Repair weekend extra", rates.productionWeekendDayRate, "man day", useInHouse && r.weekendRequired ? inHouseMen * weekendDaysForProgramme(inHouseDays, 5, r.weekendDays) : 0, rateMargin(rates, "productionWeekendDayRate", rates.defaultMargin), "In-house repair weekend allowance per man per weekend day"),
     line("Labour", "Repair night-shift allowance", rates.productionNightShiftAllowance, "man night", useInHouse && r.nightShiftRequired ? inHouseMen * r.nightShiftHours : 0, rateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin), "In-house repair night shift allowance per man per night"),
-    line("Travel", "Repair production travel", rates.productionLabourTravelDayRate, "man day", useInHouse ? inHouseMen * r.travelDays : 0, rateMargin(rates, "productionLabourTravelDayRate", rates.travelMargin), "In-house repair mobilisation"),
     line("Hotel", "Repair hotel", rates.hotel, "room night", useInHouse ? hotelRoomNights : 0, rateMargin(rates, "hotel", rates.hotelMargin), "Hotel nights per team x in-house men"),
     line("Subsistence", "Repair subsistence", rates.subsistence, "day", useInHouse ? hotelRoomNights : 0, rateMargin(rates, "subsistence", rates.subsistenceMargin), "Follows hotel nights: nights per team x in-house men"),
-    line("Travel", "Repair fuel", rates.repairFuelPerKm, distanceRateUnit(input.distanceUnit), useInHouse ? mobilisationKm : 0, rateMargin(rates, "repairFuelPerKm", rates.travelMargin), "One-way distance x 2 x vehicles")
   ];
+  rows.push(...internalTravelLines(input, rates, { enabled: useInHouse, prefix: "Repair production", travelItem: "Repair production travel", mileageItem: "Repair fuel", source: "In-house repair", mode: r.travelMode, people: inHouseMen, travelDays: r.travelDays, travelDayRate: rates.productionLabourTravelDayRate, travelDayMargin: rateMargin(rates, "productionLabourTravelDayRate", rates.travelMargin), primaryOneWay: r.mobilisationOneWayKm, secondaryOneWay: r.mobilisationSecondaryOneWayKm, vehicles: r.mobilisationVehicles, mileageRate: rates.repairFuelPerKm, mileageMargin: rateMargin(rates, "repairFuelPerKm", rates.travelMargin), returnFlights: r.returnFlights, airportTransport: r.airportTransport, airportTransferReturns: r.airportTransferReturns, airportParkingDays: r.airportParkingDays, destinationTransport: r.destinationTransport, rentalVehicles: r.rentalVehicles, rentalVehicleDays: r.rentalVehicleDays }));
   if (useSubcontract) {
     r.repairSubcontractors.forEach((item) => {
       const labourQty = item.priceType === "day" ? item.days : item.rate ? 1 : 0;
@@ -417,16 +462,13 @@ function projectManagementLines(input: ProjectInput, rates: AdminRates) {
   const pm = input.projectManagement;
   if (!pm.enabled) return [];
   const visits = Math.max(0, num(pm.visits));
-  const drive = pm.travelMode === "Drive";
-  const fly = pm.travelMode === "Fly";
-  return [
+  const rows = [
     line("Labour", "Project manager", rates.projectManagerDayRate, "day", num(pm.days), rateMargin(rates, "projectManagerDayRate", rates.defaultMargin), "Whole-project management"),
-    line("Travel", "Project manager travel days", rates.otherInternalTravelDayRate, "day", num(pm.travelDays), rateMargin(rates, "otherInternalTravelDayRate", rates.travelMargin), "Whole-project management travel"),
-    line("Travel", "Project manager mileage", rates.mileagePerKm, distanceRateUnit(input.distanceUnit), drive ? num(pm.oneWayKm) * 2 * Math.max(0, num(pm.vehicles)) * visits : 0, rateMargin(rates, "mileagePerKm", rates.travelMargin), "One-way distance x 2 x vehicles x visits"),
-    line("Travel", "Project manager return flights", rates.returnFlight, "flight", fly ? num(pm.returnFlights) : 0, rateMargin(rates, "returnFlight", rates.flightMargin), "Whole-project management flights"),
     line("Hotel", "Project manager hotel", rates.hotel, "night", num(pm.hotelNights), rateMargin(rates, "hotel", rates.hotelMargin), "Whole-project management hotel"),
     line("Subsistence", "Project manager subsistence", rates.subsistence, "day", num(pm.hotelNights), rateMargin(rates, "subsistence", rates.subsistenceMargin), "Subsistence follows PM hotel nights")
   ];
+  rows.push(...internalTravelLines(input, rates, { enabled: true, prefix: "Project manager", travelItem: "Project manager travel days", mileageItem: "Project manager mileage", source: "Whole-project management", mode: pm.travelMode, people: 1, travelDays: pm.travelDays, travelDayRate: rates.otherInternalTravelDayRate, travelDayMargin: rateMargin(rates, "otherInternalTravelDayRate", rates.travelMargin), primaryOneWay: pm.oneWayKm, secondaryOneWay: pm.secondaryOneWayKm, vehicles: pm.vehicles, journeys: visits, mileageRate: rates.mileagePerKm, mileageMargin: rateMargin(rates, "mileagePerKm", rates.travelMargin), returnFlights: pm.returnFlights, airportTransport: pm.airportTransport, airportTransferReturns: pm.airportTransferReturns, airportParkingDays: pm.airportParkingDays, destinationTransport: pm.destinationTransport, rentalVehicles: pm.rentalVehicles, rentalVehicleDays: pm.rentalVehicleDays }));
+  return rows;
 }
 
 export function calculateProject(input: ProjectInput, rates: AdminRates, repairCatalog: RepairCatalog = defaultRepairCatalog): ProjectCalculations {

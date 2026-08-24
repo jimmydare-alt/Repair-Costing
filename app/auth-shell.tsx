@@ -24,9 +24,9 @@ function LoginGate({ children }: { children: React.ReactNode }) {
       <main className="auth-page">
         <section className="auth-brand">
           <Image src="/cogri-group-logo.png" alt="CoGri Group" width={150} height={122} style={{ width: "150px", height: "auto" }} priority />
-          <p>REMEDIAL COSTING WORKSPACE</p>
-          <h1>Price repairs, grinding and screeding in one secure workspace.</h1>
-          <span>Build controlled project costings, delivery budgets and P&amp;L actuals with company rates, repair databases and live Supabase storage.</span>
+          <p>SURVEY &amp; REMEDIAL COSTING PLATFORM</p>
+          <h1>Build survey and remedial costings in one secure workspace.</h1>
+          <span>Price surveys, repairs, grinding and screeding with controlled company rates, delivery budgets, P&amp;L actuals and secure cloud storage.</span>
         </section>
         <section className="auth-card">
           <div className="auth-tabs">
@@ -35,7 +35,7 @@ function LoginGate({ children }: { children: React.ReactNode }) {
           </div>
           <div className="auth-card-heading">
             <p>{mode === "sign-in" ? "Welcome back" : mode === "forgot" ? "Account recovery" : "Secure account"}</p>
-            <h2>{mode === "sign-in" ? "Sign in to Repair Costing" : mode === "forgot" ? "Reset your password" : "Create your account"}</h2>
+            <h2>{mode === "sign-in" ? "Sign in to Costing Platform" : mode === "forgot" ? "Reset your password" : "Create your account"}</h2>
             <span>{mode === "forgot" ? "Enter your account email. If it is registered, Supabase will send a secure recovery link." : "Sessions are kept to this browser session. Your browser can securely save and autofill your details."}</span>
           </div>
           <div className="auth-form">
