@@ -239,9 +239,8 @@ function rowHeight(doc: PDFKit.PDFDocument, row: HandoverRow) {
   return Math.max(26, Math.ceil(Math.max(descriptionHeight, unitHeight)) + 13);
 }
 
-function addDetailPage(doc: PDFKit.PDFDocument, options: HandoverPdfOptions) {
+function addDetailPage(doc: PDFKit.PDFDocument) {
   doc.addPage();
-  drawDetailHeader(doc, options);
   return DETAIL_TOP;
 }
 
@@ -260,14 +259,14 @@ function drawSection(doc: PDFKit.PDFDocument, options: HandoverPdfOptions, title
     y += 41;
     y = drawTableHeader(doc, y, dark);
   };
-  if (y + 92 > CONTENT_BOTTOM) y = addDetailPage(doc, options);
+  if (y + 92 > CONTENT_BOTTOM) y = addDetailPage(doc);
   drawHeading();
 
   while (index < rows.length) {
     const row = rows[index];
     const height = rowHeight(doc, row);
     if (y + height + 31 > CONTENT_BOTTOM) {
-      y = addDetailPage(doc, options);
+      y = addDetailPage(doc);
       continuation = true;
       drawHeading();
     }
@@ -288,7 +287,7 @@ function drawSection(doc: PDFKit.PDFDocument, options: HandoverPdfOptions, title
 
 function drawDetails(doc: PDFKit.PDFDocument, options: HandoverPdfOptions) {
   const summary = buildHandoverSummary(options.project);
-  let y = addDetailPage(doc, options);
+  let y = addDetailPage(doc);
   doc.fillColor(INK).font("Helvetica-Bold").fontSize(17).text("Detailed delivery schedule", MARGIN, y);
   doc.fillColor(MUTED).font("Helvetica").fontSize(8.5).text("Quantities and budget costs below come directly from the saved costing revision.", MARGIN, y + 25);
   y += 54;
@@ -310,12 +309,20 @@ function drawFooters(doc: PDFKit.PDFDocument, options: HandoverPdfOptions, gener
   }
 }
 
+function drawRepeatedDetailHeaders(doc: PDFKit.PDFDocument, options: HandoverPdfOptions) {
+  const range = doc.bufferedPageRange();
+  for (let index = range.start + 1; index < range.start + range.count; index += 1) {
+    doc.switchToPage(index);
+    drawDetailHeader(doc, options);
+  }
+}
+
 export async function renderHandoverPdf(options: HandoverPdfOptions) {
   const generatedAt = options.generatedAt ?? new Date();
   const generatedLabel = new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeStyle: "short", timeZone: "Europe/London" }).format(generatedAt);
   const doc = new PDFDocument({
     size: "A4",
-    margin: 0,
+    margins: { top: DETAIL_TOP, right: 0, bottom: 0, left: 0 },
     bufferPages: true,
     info: {
       Title: `${clean(options.project.inputs.projectReference) || "Project"} Project Cost & Delivery Summary`,
@@ -332,6 +339,7 @@ export async function renderHandoverPdf(options: HandoverPdfOptions) {
 
   drawOverview(doc, options, generatedLabel);
   drawDetails(doc, options);
+  drawRepeatedDetailHeaders(doc, options);
   drawFooters(doc, options, generatedLabel);
   doc.end();
   return complete;
