@@ -25,6 +25,7 @@ import { calculateSurveyProject } from "@/lib/costing/survey/calculations";
 import { createSurveyProjectInput, syncSurveyProjectInput } from "@/lib/costing/survey/project";
 import { chargeableJourneyDistance, effectiveReturnFlights } from "@/lib/travel";
 import { reportAppError } from "@/lib/monitoring";
+import { emptyDashboardFilters, filterDashboardProjects, type DashboardFilters } from "@/lib/dashboard";
 import type { AppModuleKey, CurrencyCode, DistanceUnit, MembershipRole, Permission } from "@/lib/company";
 import type { AdditionalItem, AdminRates, AirportTransport, DestinationTransport, DetailTab, LabourMode, Line, PLCategory, PriceType, ProjectInput, ProjectRecord, ProjectStatus, ProjectTimeEntry, RateVersionRecord, RepairCatalog, RepairLabourMode, RepairLineItem, RepairMaterial, RepairMaterialCategory, RepairSubcontractor, RepairType, RepairUnitType, ScreedTeam, TravelMode, View } from "@/lib/types";
 
@@ -893,9 +894,13 @@ function Mini({ label, value }: { label: string; value: string }) {
 }
 
 function Dashboard({ projects, companyCurrency, open }: { projects: ProjectRecord[]; companyCurrency: CurrencyCode; open: (project: ProjectRecord) => void }) {
-  const draftProjects = projects.filter((project) => normaliseProjectStatus(project.status) === "Draft");
-  const pipelineProjects = projects.filter((project) => normaliseProjectStatus(project.status) === "Costing Complete");
-  const wonProjects = projects.filter((project) => ["Won", "Handover Issued"].includes(normaliseProjectStatus(project.status)));
+  const [filters, setFilters] = useState<DashboardFilters>(emptyDashboardFilters);
+  const filteredProjects = filterDashboardProjects(projects, filters);
+  const hasFilters = Boolean(filters.query.trim() || filters.module !== "All" || filters.status !== "All" || filters.service !== "All");
+  const patchFilters = (next: Partial<DashboardFilters>) => setFilters((current) => ({ ...current, ...next }));
+  const draftProjects = filteredProjects.filter((project) => normaliseProjectStatus(project.status) === "Draft");
+  const pipelineProjects = filteredProjects.filter((project) => normaliseProjectStatus(project.status) === "Costing Complete");
+  const wonProjects = filteredProjects.filter((project) => ["Won", "Handover Issued"].includes(normaliseProjectStatus(project.status)));
   const pipeline = pipelineProjects.reduce((sum, project) => sum + (project.calculations.proposalCompanyCurrency ?? project.calculations.proposalTotal), 0);
   const won = wonProjects.reduce((sum, project) => sum + (project.calculations.proposalCompanyCurrency ?? project.calculations.proposalTotal), 0);
   const commercialProjects = [...pipelineProjects, ...wonProjects];
@@ -903,22 +908,32 @@ function Dashboard({ projects, companyCurrency, open }: { projects: ProjectRecor
   const commercialProfit = commercialProjects.reduce((sum, project) => sum + ((project.calculations.proposalCompanyCurrency ?? project.calculations.proposalTotal) - (project.calculations.budgetCompanyCurrency ?? project.calculations.budgetCost)), 0);
   const weightedMarkup = commercialBudget ? commercialProfit / commercialBudget * 100 : 0;
   const moduleSummary = (["survey", "remedial"] as const).map((module) => {
-    const moduleProjects = projects.filter((project) => (project.inputs.costingModule ?? "remedial") === module);
+    const moduleProjects = filteredProjects.filter((project) => (project.inputs.costingModule ?? "remedial") === module);
     return { module, projects: moduleProjects.length, sell: moduleProjects.reduce((sum, project) => sum + project.calculations.proposalTotal, 0), budget: moduleProjects.reduce((sum, project) => sum + project.calculations.budgetCost, 0) };
   });
   return (
     <div className="grid gap-5">
+      <div className="app-card-strong p-4">
+        <div className="grid gap-3 lg:grid-cols-[minmax(260px,1fr)_170px_190px_170px_auto] lg:items-end">
+          <div className="grid min-w-0 gap-1"><label htmlFor="dashboard-project-search">Search projects</label><div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={17} /><input id="dashboard-project-search" className="w-full pl-10" placeholder="Reference, client, location or estimator" value={filters.query} onChange={(event) => patchFilters({ query: event.target.value })} /></div></div>
+          <Select label="Module" value={filters.module} options={["All", "survey", "remedial"]} onChange={(module) => patchFilters({ module: module as DashboardFilters["module"] })} />
+          <Select label="Status" value={filters.status} options={["All", "Draft", "Costing Complete", "Won", "Handover Issued", "Lost", "Completed", "Closed"]} onChange={(status) => patchFilters({ status })} />
+          <Select label="Service" value={filters.service} options={["All", "Survey", "Grinding", "Screeding", "Repairs"]} onChange={(service) => patchFilters({ service })} />
+          <button className="secondary-button" disabled={!hasFilters} onClick={() => setFilters(emptyDashboardFilters)}>Clear</button>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm text-slate-500"><span>Showing <b className="text-slate-800">{filteredProjects.length}</b> of {projects.length} projects. Dashboard figures use the filtered results.</span>{hasFilters && <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-800">Filters active</span>}</div>
+      </div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <Metric label="Draft / Review" value={String(draftProjects.length)} />
         <Metric label={`Costings Complete (${companyCurrency})`} value={money(pipeline, companyCurrency)} />
         <Metric label={`Won Backlog (${companyCurrency})`} value={money(won, companyCurrency)} />
         <Metric label="Weighted Markup" value={percent(weightedMarkup)} />
-        <Metric label="Awaiting Accounts" value={String(projects.filter((project) => project.accountsStatus === "Awaiting Accounts").length)} />
+        <Metric label="Awaiting Accounts" value={String(filteredProjects.filter((project) => project.accountsStatus === "Awaiting Accounts").length)} />
       </div>
       <div className="grid gap-4 lg:grid-cols-2">{moduleSummary.map((row) => <div className="app-card p-5" key={row.module}><div className="flex items-center justify-between gap-3"><div><div className="text-xs font-black uppercase text-[var(--brand-primary)]">{row.module} costing</div><div className="mt-1 text-xl font-bold capitalize">{row.projects} project{row.projects === 1 ? "" : "s"}</div></div><span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold uppercase text-slate-600">{row.module}</span></div><div className="mt-4 grid grid-cols-2 gap-3"><Mini label="Sell Value" value={money(row.sell, companyCurrency)} /><Mini label="Budget" value={money(row.budget, companyCurrency)} /></div></div>)}</div>
       <div className="app-card-strong">
-        <div className="panel-heading"><h2 className="text-xl font-semibold">Recent Projects</h2></div>
-        <ProjectTable projects={projects.slice(0, 10)} open={open} />
+        <div className="panel-heading"><div><h2 className="text-xl font-semibold">{hasFilters ? "Matching Projects" : "Recent Projects"}</h2><p className="text-sm text-slate-500">{filteredProjects.length > 10 ? `Showing the 10 most recent of ${filteredProjects.length} matches.` : `${filteredProjects.length} project${filteredProjects.length === 1 ? "" : "s"} shown.`}</p></div></div>
+        <ProjectTable projects={filteredProjects.slice(0, 10)} open={open} />
       </div>
     </div>
   );
@@ -2629,7 +2644,7 @@ function SearchView({ projects, deletedProjects, open, edit, restore, purge }: {
 }
 
 function ProjectTable({ projects, open, edit }: { projects: ProjectRecord[]; open: (project: ProjectRecord) => void; edit?: (project: ProjectRecord) => void }) {
-  return <div className="table-shell border-0"><table><thead><tr><th>Project</th><th>Module</th><th>Services</th><th>Status</th><th>Sell Value</th><th>Budget</th><th>Markup</th><th>Actions</th></tr></thead><tbody>{projects.map((p) => <tr key={p.id}><td><b>{p.inputs.projectReference || "Draft"}</b><div className="text-xs text-slate-500">{p.inputs.client} - {p.inputs.location}</div></td><td><span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-black uppercase text-slate-600">{p.inputs.costingModule ?? "remedial"}</span></td><td>{p.calculations.serviceSummary}</td><td>{normaliseProjectStatus(p.status)} / {p.accountsStatus}</td><td>{money(p.calculations.proposalTotal, p.inputs.quoteCurrency)}</td><td>{money(p.calculations.budgetCost, p.inputs.quoteCurrency)}</td><td>{percent(p.calculations.budgetMarkup ?? (p.calculations.budgetCost ? p.calculations.budgetProfit / p.calculations.budgetCost * 100 : 0))}</td><td><button className="secondary-button mr-2" onClick={() => open(p)}>Open</button>{edit && <button className="secondary-button" onClick={() => edit(p)}>{statusIsLocked(p.status) ? "Revise" : "Edit"}</button>}</td></tr>)}</tbody></table></div>;
+  return <div className="table-shell border-0"><table><thead><tr><th>Project</th><th>Module</th><th>Services</th><th>Status</th><th>Sell Value</th><th>Budget</th><th>Markup</th><th>Actions</th></tr></thead><tbody>{projects.map((p) => <tr key={p.id}><td><b>{p.inputs.projectReference || "Draft"}</b><div className="text-xs text-slate-500">{p.inputs.client} - {p.inputs.location}</div></td><td><span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-black uppercase text-slate-600">{p.inputs.costingModule ?? "remedial"}</span></td><td>{p.calculations.serviceSummary}</td><td>{normaliseProjectStatus(p.status)} / {p.accountsStatus}</td><td>{money(p.calculations.proposalTotal, p.inputs.quoteCurrency)}</td><td>{money(p.calculations.budgetCost, p.inputs.quoteCurrency)}</td><td>{percent(p.calculations.budgetMarkup ?? (p.calculations.budgetCost ? p.calculations.budgetProfit / p.calculations.budgetCost * 100 : 0))}</td><td><button className="secondary-button mr-2" onClick={() => open(p)}>Open</button>{edit && <button className="secondary-button" onClick={() => edit(p)}>{statusIsLocked(p.status) ? "Revise" : "Edit"}</button>}</td></tr>)}{!projects.length && <tr><td colSpan={8} className="py-10 text-center text-sm font-semibold text-slate-500">No projects match the selected filters.</td></tr>}</tbody></table></div>;
 }
 
 function numericRateMap(value: unknown, prefix = "", result = new Map<string, number>()) {
