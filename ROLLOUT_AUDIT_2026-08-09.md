@@ -40,11 +40,12 @@ This audit covers the multi-company Survey and Remedial Costing Platform: authen
 
 ## Verification
 
-- TypeScript strict check: required before release.
-- Unit and calculation suite: 98 tests passing on 24 August 2026.
-- Production build and lint: required before release.
+- TypeScript strict check: passed on 24 August 2026.
+- Unit and calculation suite: 99 tests passing on 24 August 2026.
+- ESLint and Next.js production build: passed on 24 August 2026.
 - Browser smoke suite: public production login shell passed in headless Chrome on 24 August 2026. The authenticated workflow runs when dedicated `E2E_EMAIL` and `E2E_PASSWORD` secrets are provided.
-- Database migration required for this release: `supabase/migrations/012_rollout_hardening.sql`.
+- Authenticated production checks passed for dashboard loading, blank New Project, navigation dirty-state handling, recycle-bin visibility, rate-history visibility, application-error visibility and CoGri Group/Face GmbH company switching with no browser console errors.
+- Database migration `supabase/migrations/012_rollout_hardening.sql`: applied before the production release.
 
 ## Release Gate
 
