@@ -117,5 +117,10 @@ export async function POST(request: Request) {
   doc.moveDown(1).fontSize(8).fillColor("#6c7480").text("Internal and confidential. Generated from the saved project costing revision. Verify live site conditions and supplier availability before ordering.");
   doc.end();
   const pdf = await complete;
-  return new NextResponse(new Uint8Array(pdf), { headers: { "Content-Type": "application/pdf", "Content-Disposition": `attachment; filename="${(project.inputs.projectReference || "project").replace(/[^a-z0-9-_]/gi, "-")}-delivery-summary.pdf"` } });
+  return new NextResponse(new Uint8Array(pdf), { headers: {
+    "Cache-Control": "private, no-store, max-age=0",
+    "Content-Type": "application/pdf",
+    "Content-Disposition": `attachment; filename="${(project.inputs.projectReference || "project").replace(/[^a-z0-9-_]/gi, "-")}-delivery-summary.pdf"`,
+    "X-Content-Type-Options": "nosniff"
+  } });
 }

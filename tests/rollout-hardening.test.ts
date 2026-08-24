@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { calculateProject } from "@/lib/calculations";
 import { errorMessage, errorReference } from "@/lib/monitoring";
@@ -90,5 +91,10 @@ describe("rollout hardening", () => {
     expect(restored.deletedBy).toBe("00000000-0000-0000-0000-000000000011");
     expect(restored.deletionReason).toBe("Duplicate project");
     expect(restored.calculations).toEqual(calculations);
+  });
+
+  it("keeps PDFKit external so its standard font assets are available in production", () => {
+    const nextConfig = readFileSync("next.config.mjs", "utf8");
+    expect(nextConfig).toContain('serverComponentsExternalPackages: ["pdfkit"]');
   });
 });

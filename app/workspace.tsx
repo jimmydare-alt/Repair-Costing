@@ -2346,12 +2346,7 @@ function SavedProjectSummary({ project }: { project: ProjectRecord }) {
 
 function downloadProjectCsv(project: ProjectRecord) {
   const blob = new Blob([projectCsv(project)], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `${project.inputs.projectReference || "project"}-internal-costing.csv`;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  downloadBlob(blob, `${project.inputs.projectReference || "project"}-internal-costing.csv`);
 }
 
 function SavedCosting({ project }: { project: ProjectRecord }) {
@@ -2376,8 +2371,15 @@ async function handoverPdf(project: ProjectRecord) {
   const token = client ? (await client.auth.getSession()).data.session?.access_token : "";
   if (!token) throw new Error("Your secure session has expired. Sign in again before generating a handover.");
   const response = await fetch("/api/projects/handover", { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: JSON.stringify({ projectId: project.id }) });
-  if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? "The handover PDF could not be generated.");
-  return response.blob();
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null) as { error?: string } | null;
+    throw new Error(`${payload?.error ?? "The handover PDF could not be generated."} (HTTP ${response.status})`);
+  }
+  const blob = await response.blob();
+  if (!response.headers.get("content-type")?.toLowerCase().includes("application/pdf") || blob.size < 5) {
+    throw new Error("The server returned an invalid PDF file. Please try again.");
+  }
+  return blob;
 }
 
 function downloadBlob(blob: Blob, filename: string) {
@@ -2385,13 +2387,16 @@ function downloadBlob(blob: Blob, filename: string) {
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = filename;
+  document.body.appendChild(anchor);
   anchor.click();
-  URL.revokeObjectURL(url);
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 function ProjectHandover({ project, recordHandover: record }: { project: ProjectRecord; recordHandover: (issued: boolean) => Promise<void> }) {
   const auth = useAuth();
   const [busy, setBusy] = useState<"" | "save" | "send">("");
+  const [actionError, setActionError] = useState("");
   const summary = buildHandoverSummary(project);
   const filename = `${project.inputs.projectReference || "project"}-delivery-summary.pdf`;
   const canManageHandover = hasPermission(auth.role, "projects.update");
@@ -2399,16 +2404,18 @@ function ProjectHandover({ project, recordHandover: record }: { project: Project
   const canIssue = canManageHandover && ["Won", "Handover Issued"].includes(normaliseProjectStatus(project.status));
   const savePdf = async () => {
     try {
+      setActionError("");
       setBusy("save");
       const blob = await handoverPdf(project);
       downloadBlob(blob, filename);
       await record(false);
     } catch (error) {
-      alert(error instanceof Error ? error.message : "The handover PDF could not be saved.");
+      setActionError(error instanceof Error ? error.message : "The handover PDF could not be saved.");
     } finally { setBusy(""); }
   };
   const sendPdf = async () => {
     try {
+      setActionError("");
       setBusy("send");
       const blob = await handoverPdf(project);
       const file = new File([blob], filename, { type: "application/pdf" });
@@ -2422,7 +2429,7 @@ function ProjectHandover({ project, recordHandover: record }: { project: Project
         await record(sent);
       }
     } catch (error) {
-      if (!(error instanceof DOMException && error.name === "AbortError")) alert(error instanceof Error ? error.message : "The handover could not be shared.");
+      if (!(error instanceof DOMException && error.name === "AbortError")) setActionError(error instanceof Error ? error.message : "The handover could not be shared.");
     } finally { setBusy(""); }
   };
   const rowTable = (title: string, rows: typeof summary.materials) => rows.length ? <div className="app-card p-5"><h3 className="font-bold text-slate-950">{title}</h3><div className="table-shell mt-3 border border-slate-200"><table><thead><tr><th>Description</th><th>Quantity</th><th>Budget</th></tr></thead><tbody>{rows.map((row) => <tr key={`${row.description}-${row.unit}`}><td className="font-semibold">{row.description}</td><td>{Number(row.quantity.toFixed(3))} {row.unit}</td><td className="font-bold">{money(row.budget)}</td></tr>)}</tbody></table></div></div> : null;
@@ -2434,6 +2441,7 @@ function ProjectHandover({ project, recordHandover: record }: { project: Project
       </div>
       {!canGenerate && <div className="m-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-950">Complete the costing before generating this handover.</div>}
       {canGenerate && !canIssue && <div className="mx-5 mt-5 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950">The PDF can be reviewed and saved now. Mark the project as Won before issuing it to the project manager.</div>}
+      {actionError && <div className="mx-5 mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-900" role="alert">{actionError}</div>}
       <div className="grid gap-3 p-5 sm:grid-cols-2 xl:grid-cols-4"><Mini label="Project" value={project.inputs.projectReference} /><Mini label="Services" value={project.calculations.serviceSummary} /><Mini label="Project Days" value={String(project.calculations.siteDays)} /><Mini label="Project Budget" value={money(project.calculations.budgetCost)} /></div>
     </div>
     <div className="grid gap-5 lg:grid-cols-2">
