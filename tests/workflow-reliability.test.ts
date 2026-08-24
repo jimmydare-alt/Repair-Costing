@@ -49,6 +49,34 @@ describe("rollout workflow reliability", () => {
     expect((restored.inputs as unknown as Record<string, unknown>).__costingSnapshot).toBeUndefined();
   });
 
+  it("maps legacy shared rates into new service-specific snapshot fields", () => {
+    const legacyRates = {
+      ...defaultRates,
+      grindingSurveyorDayRate: undefined,
+      screedSurveyorDayRate: undefined,
+      grindingHotelNightRate: undefined,
+      screedHotelNightRate: undefined,
+      surveyorDayRate: 777,
+      hotel: 123,
+      rateMargins: { surveyorDayRate: 0.11, hotel: 0.22 }
+    };
+    const restored = rowToProject({
+      id: "legacy-project",
+      created_at: "2026-08-12T00:00:00.000Z",
+      status: "Draft",
+      accounts_status: "Not Required",
+      inputs: { ...emptyInput, __costingSnapshot: { rates: legacyRates } },
+      calculations: calculateProject(emptyInput, defaultRates),
+      revisions: []
+    });
+    expect(restored.rateSnapshot?.grindingSurveyorDayRate).toBe(777);
+    expect(restored.rateSnapshot?.screedSurveyorDayRate).toBe(777);
+    expect(restored.rateSnapshot?.grindingHotelNightRate).toBe(123);
+    expect(restored.rateSnapshot?.screedHotelNightRate).toBe(123);
+    expect(restored.rateSnapshot?.rateMargins?.grindingSurveyorDayRate).toBe(0.11);
+    expect(restored.rateSnapshot?.rateMargins?.screedHotelNightRate).toBe(0.22);
+  });
+
   it("starts P&L site days in automatic mode", () => {
     const actuals = defaultActuals(calculateProject(emptyInput, defaultRates));
     expect(actuals.daysTakenToComplete).toBe(0);

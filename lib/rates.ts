@@ -29,6 +29,16 @@ export const defaultRateMargins: Partial<Record<keyof AdminRates, number>> = {
   surveyorTravelDayRate: 0,
   surveyorWeekendDayRate: 0,
   surveyorNightShiftAllowance: 0,
+  grindingSurveyorDayRate: 0,
+  grindingSurveyorTravelDayRate: 0,
+  grindingSurveyorWeekendDayRate: 0,
+  grindingHotelNightRate: 0.2,
+  grindingEngineeringReportRate: 0,
+  screedSurveyorDayRate: 0,
+  screedSurveyorTravelDayRate: 0,
+  screedSurveyorWeekendDayRate: 0,
+  screedHotelNightRate: 0.2,
+  screedEngineeringReportRate: 0,
   otherInternalTravelDayRate: 0.2,
   labourerDayRate: 0.2,
   weekendDayRate: 0,
@@ -66,6 +76,9 @@ export const defaultRateMargins: Partial<Record<keyof AdminRates, number>> = {
   screedExtensionCordSetDayRate: 0.3,
   screedGrindingSegmentsDayRate: 0.3,
   screedConsumablesDayRate: 0.3,
+  screedMaterialBagRate: 0.2,
+  screedPrimerUnitRate: 0.2,
+  screedSandBagRate: 0.2,
   ukSupervisorDayRate: 0.2,
   ukSupervisorFlight: 0.1,
   ukSupervisorSubsistenceDayRate: 0.2,
@@ -105,6 +118,16 @@ export const defaultRates: AdminRates = {
   surveyorTravelDayRate: 950,
   surveyorWeekendDayRate: 1500,
   surveyorNightShiftAllowance: 15,
+  grindingSurveyorDayRate: 1000,
+  grindingSurveyorTravelDayRate: 950,
+  grindingSurveyorWeekendDayRate: 1500,
+  grindingHotelNightRate: 175,
+  grindingEngineeringReportRate: 600,
+  screedSurveyorDayRate: 1000,
+  screedSurveyorTravelDayRate: 950,
+  screedSurveyorWeekendDayRate: 1500,
+  screedHotelNightRate: 175,
+  screedEngineeringReportRate: 600,
   otherInternalTravelDayRate: 575,
   labourerDayRate: 400,
   weekendDayRate: 500,
@@ -133,6 +156,8 @@ export const defaultRates: AdminRates = {
   equipmentMargin: 0.3,
   materialMargin: 0.3,
   shippingMargin: 0.3,
+  materialShippingMargin: 0.3,
+  equipmentShippingMargin: 0.3,
   grindingSmallGeneratorDayRate: 60,
   grindingGrinderDayRate: 50,
   grindingPlanerDayRate: 15,
@@ -152,6 +177,15 @@ export const defaultRates: AdminRates = {
   screedExtensionCordSetDayRate: 10,
   screedGrindingSegmentsDayRate: 100,
   screedConsumablesDayRate: 30,
+  screedMaterialBagRate: 0,
+  screedPrimerUnitRate: 0,
+  screedSandBagRate: 0,
+  screedMaterialContingency: 0,
+  screedMaterialWaste: 0,
+  screedPrimerContingency: 0,
+  screedPrimerWaste: 0,
+  screedSandContingency: 0,
+  screedSandWaste: 0,
   ukSupervisorDayRate: 687.5,
   ukSupervisorFlight: 1500,
   ukSupervisorSubsistenceDayRate: 60,
@@ -333,12 +367,18 @@ export const emptyInput: ProjectInput = {
     screedMaterialBags: 0,
     screedMaterialRate: 0,
     screedMaterialMargin: 0.2,
+    screedMaterialContingency: 0,
+    screedMaterialWaste: 0,
     primerUnits: 0,
     primerRate: 0,
     primerMargin: 0.2,
+    primerContingency: 0,
+    primerWaste: 0,
     sandBags: 0,
     sandRate: 0,
     sandMargin: 0.2,
+    sandContingency: 0,
+    sandWaste: 0,
     materialShipping: 0,
     materialShippingMargin: 0.3,
     teams: [],
@@ -398,6 +438,139 @@ export const emptyInput: ProjectInput = {
   },
   additionalItems: []
 };
+
+const usaWorkbookRateMarginOverrides: Partial<Record<keyof AdminRates, number>> = {
+  productionLabourDayRate: 0.2,
+  productionLabourTravelDayRate: 0.2,
+  grindingSurveyorDayRate: 2 / 3,
+  grindingSurveyorTravelDayRate: 1 / 6,
+  grindingSurveyorWeekendDayRate: 0,
+  grindingHotelNightRate: 0.5,
+  grindingEngineeringReportRate: 0.2,
+  screedSurveyorDayRate: 0,
+  screedSurveyorTravelDayRate: 0,
+  screedSurveyorWeekendDayRate: 0,
+  screedHotelNightRate: 0.2,
+  screedEngineeringReportRate: 0,
+  mileagePerKm: 0.2,
+  returnFlight: 0.2,
+  airportUberReturn: 0.2,
+  airportParkingPerDay: 0.2,
+  hotel: 0.2,
+  subsistence: 0.25,
+  equipmentShipping: 0.3,
+  companyCar: 0.2,
+  rentalCar: 0.2,
+  rentalVan: 0.2,
+  equipmentRental: 0.3,
+  engineeringReport: 0,
+  grindingSmallGeneratorDayRate: 0.3,
+  grindingGrinderDayRate: 0.3,
+  grindingPlanerDayRate: 0.3,
+  grindingDustVacuumDayRate: 0.3,
+  grindingExtensionCordsDayRate: 0.3,
+  grindingSegmentsDayRate: 0.3,
+  grindingConsumablesDayRate: 0.3,
+  screedSmallGeneratorDayRate: 0.3,
+  screedDiamondGrinderPropaneDayRate: 0.3,
+  screedGasPlanerDayRate: 0.3,
+  screedDustVacuumDayRate: 0.3,
+  screedExtensionCordSetDayRate: 0.3,
+  screedGrindingSegmentsDayRate: 0.3,
+  screedConsumablesDayRate: 0.3,
+  screedMaterialBagRate: 0.25,
+  screedPrimerUnitRate: 0.25,
+  screedSandBagRate: 0.25
+};
+
+export function applyUsaWorkbookRates(rates: AdminRates): AdminRates {
+  return {
+    ...rates,
+    productionLabourDayRate: 400,
+    productionLabourTravelDayRate: 400,
+    grindingSurveyorDayRate: 600,
+    grindingSurveyorTravelDayRate: 600,
+    grindingSurveyorWeekendDayRate: 360,
+    grindingHotelNightRate: 140,
+    grindingEngineeringReportRate: 500,
+    screedSurveyorDayRate: 1000,
+    screedSurveyorTravelDayRate: 950,
+    screedSurveyorWeekendDayRate: 500,
+    screedHotelNightRate: 175,
+    screedEngineeringReportRate: 600,
+    mileagePerKm: 0.79,
+    returnFlight: 950,
+    airportUberReturn: 120,
+    airportParkingPerDay: 20,
+    hotel: 175,
+    subsistence: 60,
+    equipmentShipping: 500,
+    companyCar: 50,
+    rentalCar: 100,
+    rentalVan: 120,
+    equipmentRental: 200,
+    engineeringReport: 600,
+    subcontractMargin: 0.3,
+    travelMargin: 0.2,
+    flightMargin: 0.2,
+    hotelMargin: 0.2,
+    subsistenceMargin: 0.25,
+    equipmentMargin: 0.3,
+    materialShippingMargin: 0.2,
+    equipmentShippingMargin: 0.3,
+    grindingSmallGeneratorDayRate: 60,
+    grindingGrinderDayRate: 50,
+    grindingPlanerDayRate: 15,
+    grindingDustVacuumDayRate: 50,
+    grindingExtensionCordsDayRate: 40,
+    grindingSegmentsDayRate: 100,
+    grindingConsumablesDayRate: 30,
+    screedSmallGeneratorDayRate: 60,
+    screedDiamondGrinderPropaneDayRate: 50,
+    screedGasPlanerDayRate: 125,
+    screedDustVacuumDayRate: 200,
+    screedExtensionCordSetDayRate: 10,
+    screedGrindingSegmentsDayRate: 100,
+    screedConsumablesDayRate: 30,
+    screedMaterialBagRate: 40,
+    screedPrimerUnitRate: 288,
+    screedSandBagRate: 8,
+    screedMaterialContingency: 0,
+    screedMaterialWaste: 0,
+    screedPrimerContingency: 0.05,
+    screedPrimerWaste: 0.05,
+    screedSandContingency: 0.05,
+    screedSandWaste: 0.05,
+    rateMargins: {
+      ...(rates.rateMargins ?? {}),
+      ...usaWorkbookRateMarginOverrides
+    },
+    // Survey Costing has its own admin record. Preserve the user's verified USA survey rates.
+    surveyRates: rates.surveyRates
+  };
+}
+
+export function createRemedialProjectInput(rates: AdminRates, quoteCurrency: ProjectInput["quoteCurrency"], distanceUnit: ProjectInput["distanceUnit"]): ProjectInput {
+  const blank = JSON.parse(JSON.stringify(emptyInput)) as ProjectInput;
+  blank.quoteCurrency = quoteCurrency;
+  blank.distanceUnit = distanceUnit;
+  blank.grinding.equipmentShippingMargin = rates.equipmentShippingMargin;
+  blank.screeding.screedMaterialRate = rates.screedMaterialBagRate;
+  blank.screeding.screedMaterialMargin = Number(rates.rateMargins?.screedMaterialBagRate ?? rates.materialMargin);
+  blank.screeding.screedMaterialContingency = rates.screedMaterialContingency;
+  blank.screeding.screedMaterialWaste = rates.screedMaterialWaste;
+  blank.screeding.primerRate = rates.screedPrimerUnitRate;
+  blank.screeding.primerMargin = Number(rates.rateMargins?.screedPrimerUnitRate ?? rates.materialMargin);
+  blank.screeding.primerContingency = rates.screedPrimerContingency;
+  blank.screeding.primerWaste = rates.screedPrimerWaste;
+  blank.screeding.sandRate = rates.screedSandBagRate;
+  blank.screeding.sandMargin = Number(rates.rateMargins?.screedSandBagRate ?? rates.materialMargin);
+  blank.screeding.sandContingency = rates.screedSandContingency;
+  blank.screeding.sandWaste = rates.screedSandWaste;
+  blank.screeding.materialShippingMargin = rates.materialShippingMargin;
+  blank.screeding.equipmentShippingMargin = rates.equipmentShippingMargin;
+  return blank;
+}
 
 export const validationInput: ProjectInput = {
   ...emptyInput,

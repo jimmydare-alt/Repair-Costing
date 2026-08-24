@@ -4,10 +4,10 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Calculator, Download, FileSpreadsheet, History, Printer, Save, Search, Send, Settings, Trash2 } from "lucide-react";
-import { calculatedHotelNights, calculateActualSiteDays, calculatePhaseSchedule, calculatePL, calculateProject, calculateProjectRepairMaterials, calculateRepairLineMaterials, calculateWorkingDays, defaultActuals, weekendDaysForProgramme } from "@/lib/calculations";
+import { calculatedHotelNights, calculateActualSiteDays, calculatePhaseSchedule, calculatePL, calculateProject, calculateProjectRepairMaterials, calculateRepairLineMaterials, calculateWorkingDays, defaultActuals, screedMaterialUnits, weekendDaysForProgramme } from "@/lib/calculations";
 import { money, percent, formatDateTime, setMoneyCurrency } from "@/lib/format";
 import { projectCsv } from "@/lib/export";
-import { defaultRates, emptyInput } from "@/lib/rates";
+import { applyUsaWorkbookRates, createRemedialProjectInput, defaultRates, emptyInput } from "@/lib/rates";
 import { createRepairLine, defaultRepairCatalog, repairTypeByCode, validateRepairCatalog } from "@/lib/repairCatalog";
 import { addProjectNote, addProjectTimeEntry, deleteProject, loadProjects, loadRates, loadRepairCatalog, recordProjectHandover, saveActuals, saveAdminData, saveProject, setStorageContext, updateProjectWorkflow } from "@/lib/storage";
 import { useAuth } from "@/lib/authContext";
@@ -311,12 +311,7 @@ export default function Workspace() {
       setPricingRates(loadedRates);
       setPricingCatalog(loadedRepairCatalog);
       setProjects(loadedProjects);
-      const companyBlank = cloneInput(emptyInput);
-      companyBlank.quoteCurrency = auth.activeCompany.defaultCurrency;
-      companyBlank.distanceUnit = auth.activeCompany.distanceUnit;
-      companyBlank.grinding.equipmentShippingMargin = loadedRates.shippingMargin;
-      companyBlank.screeding.materialShippingMargin = loadedRates.shippingMargin;
-      companyBlank.screeding.equipmentShippingMargin = loadedRates.shippingMargin;
+      const companyBlank = createRemedialProjectInput(loadedRates, auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit);
       const routedBlank = routeIsSurvey ? createSurveyProjectInput(auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit) : companyBlank;
       setInput(routedBlank);
       setBaselineInput(cloneInput(routedBlank));
@@ -366,14 +361,9 @@ export default function Workspace() {
   }
 
   function startNewProject() {
-    const blank = cloneInput(emptyInput);
-    blank.quoteCurrency = auth.activeCompany.defaultCurrency;
-    blank.distanceUnit = auth.activeCompany.distanceUnit;
+    const blank = createRemedialProjectInput(rates, auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit);
     blank.exchangeRateToCompanyCurrency = 1;
     blank.exchangeRateToGroupCurrency = auth.activeCompany.defaultCurrency === auth.activeCompany.reportingCurrency ? 1 : blank.exchangeRateToGroupCurrency;
-    blank.grinding.equipmentShippingMargin = rates.shippingMargin;
-    blank.screeding.materialShippingMargin = rates.shippingMargin;
-    blank.screeding.equipmentShippingMargin = rates.shippingMargin;
     setInput(blank);
     setBaselineInput(cloneInput(blank));
     setPricingRates(rates);
@@ -1249,8 +1239,8 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
   const surveyorSubcontractSell = repairSubcontractorSell(g.surveyorSubcontractors);
   const productionLabourSell = usesProductionInHouse ? g.productionMen * productionDays * rates.productionLabourDayRate * (1 + adminRateMargin(rates, "productionLabourDayRate", rates.defaultMargin)) : 0;
   const surveyorLabourSell = usesSurveyorInHouse ? (
-    g.surveyorCount * surveyorDays * rates.surveyorDayRate * (1 + adminRateMargin(rates, "surveyorDayRate", 0)) +
-    g.surveyorCount * calculatedSurveyorWeekendDays * rates.surveyorWeekendDayRate * (1 + adminRateMargin(rates, "surveyorWeekendDayRate", rates.defaultMargin)) +
+    g.surveyorCount * surveyorDays * rates.grindingSurveyorDayRate * (1 + adminRateMargin(rates, "grindingSurveyorDayRate", 0)) +
+    g.surveyorCount * calculatedSurveyorWeekendDays * rates.grindingSurveyorWeekendDayRate * (1 + adminRateMargin(rates, "grindingSurveyorWeekendDayRate", rates.defaultMargin)) +
     (g.nightShiftRequired ? g.surveyorCount * g.surveyorNightShifts * rates.surveyorNightShiftAllowance * (1 + adminRateMargin(rates, "surveyorNightShiftAllowance", rates.defaultMargin)) : 0)
   ) : 0;
   const toolDays = usesProductionInHouse ? productionDays : 0;
@@ -1464,11 +1454,14 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
   const surveyorSubcontractSell = repairSubcontractorSell(s.surveyorSubcontractors);
   const productionLabourSell = usesProductionInHouse ? s.productionMen * productionDays * rates.productionLabourDayRate * (1 + adminRateMargin(rates, "productionLabourDayRate", rates.defaultMargin)) : 0;
   const surveyorLabourSell = usesSurveyorInHouse ? (
-    s.surveyors * surveyorDays * rates.surveyorDayRate * (1 + adminRateMargin(rates, "surveyorDayRate", 0)) +
-    s.surveyors * calculatedSurveyorWeekendDays * rates.surveyorWeekendDayRate * (1 + adminRateMargin(rates, "surveyorWeekendDayRate", rates.defaultMargin)) +
+    s.surveyors * surveyorDays * rates.screedSurveyorDayRate * (1 + adminRateMargin(rates, "screedSurveyorDayRate", 0)) +
+    s.surveyors * calculatedSurveyorWeekendDays * rates.screedSurveyorWeekendDayRate * (1 + adminRateMargin(rates, "screedSurveyorWeekendDayRate", rates.defaultMargin)) +
     (s.nightShiftRequired ? s.surveyors * s.surveyorNightShifts * rates.surveyorNightShiftAllowance * (1 + adminRateMargin(rates, "surveyorNightShiftAllowance", rates.defaultMargin)) : 0)
   ) : 0;
-  const materialSell = (s.screedMaterialBags * s.screedMaterialRate * (1 + s.screedMaterialMargin)) + (s.primerUnits * s.primerRate * (1 + s.primerMargin)) + (s.sandBags * s.sandRate * (1 + s.sandMargin)) + (s.materialShipping ? s.materialShipping * (1 + s.materialShippingMargin) : 0);
+  const screedUnits = screedMaterialUnits(s.screedMaterialBags, s.screedMaterialContingency, s.screedMaterialWaste);
+  const primerTotalUnits = screedMaterialUnits(s.primerUnits, s.primerContingency, s.primerWaste);
+  const sandTotalBags = screedMaterialUnits(s.sandBags, s.sandContingency, s.sandWaste);
+  const materialSell = (screedUnits * s.screedMaterialRate * (1 + s.screedMaterialMargin)) + (primerTotalUnits * s.primerRate * (1 + s.primerMargin)) + (sandTotalBags * s.sandRate * (1 + s.sandMargin)) + (s.materialShipping ? s.materialShipping * (1 + s.materialShippingMargin) : 0);
   const toolDays = usesProductionInHouse ? productionDays : 0;
   const grinderCount = Math.max(0, s.propaneGrinders || s.productionMen);
   const grinderDays = grinderCount * toolDays;
@@ -1635,24 +1628,41 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
       </>}
       {screedPage === "Materials" && <>
         <div className="app-card-strong">
-          <div className="panel-heading"><h2 className="text-xl font-semibold">Screed Materials</h2><p className="text-sm text-slate-500">Material quantities and budget rates from the screeding costing sheet. Proposal cost applies the entered material markup.</p></div>
-          <div className="grid gap-4 p-5 sm:grid-cols-2 xl:grid-cols-4">
-            <NumberInput label="Screed Bags" value={s.screedMaterialBags} onChange={(v) => patch({ screedMaterialBags: v })} />
-            <NumberInput label="Screed Rate" value={s.screedMaterialRate} onChange={(v) => patch({ screedMaterialRate: v })} />
+          <div className="panel-heading"><h2 className="text-xl font-semibold">Screed Materials</h2><p className="text-sm text-slate-500">Enter the base quantity. Contingency and waste are added visibly before the budget and proposal totals are calculated.</p></div>
+          <div className="grid gap-5 p-5">
+            <div className="grid gap-3 border-b border-slate-200 pb-5 sm:grid-cols-2 xl:grid-cols-4">
+              <NumberInput label="Screed Base Bags" value={s.screedMaterialBags} onChange={(v) => patch({ screedMaterialBags: v })} />
+              <NumberInput label="Contingency %" value={(s.screedMaterialContingency ?? 0) * 100} onChange={(v) => patch({ screedMaterialContingency: v / 100 })} />
+              <NumberInput label="Waste %" value={(s.screedMaterialWaste ?? 0) * 100} onChange={(v) => patch({ screedMaterialWaste: v / 100 })} />
+              <Mini label="Total Screed Bags" value={`${screedUnits}`} />
+              <NumberInput label="Screed Budget / Bag" value={s.screedMaterialRate} onChange={(v) => patch({ screedMaterialRate: v })} />
               <NumberInput label="Screed Markup %" value={s.screedMaterialMargin * 100} onChange={(v) => patch({ screedMaterialMargin: v / 100 })} />
-            <Mini label="Screed Proposal Cost" value={money(s.screedMaterialBags * s.screedMaterialRate * (1 + s.screedMaterialMargin))} />
-            <NumberInput label="Primer Units" value={s.primerUnits} onChange={(v) => patch({ primerUnits: v })} />
-            <NumberInput label="Primer Rate" value={s.primerRate} onChange={(v) => patch({ primerRate: v })} />
+              <Mini label="Screed Proposal Cost" value={money(screedUnits * s.screedMaterialRate * (1 + s.screedMaterialMargin))} />
+            </div>
+            <div className="grid gap-3 border-b border-slate-200 pb-5 sm:grid-cols-2 xl:grid-cols-4">
+              <NumberInput label="Primer Base Units" value={s.primerUnits} onChange={(v) => patch({ primerUnits: v })} />
+              <NumberInput label="Contingency %" value={(s.primerContingency ?? 0) * 100} onChange={(v) => patch({ primerContingency: v / 100 })} />
+              <NumberInput label="Waste %" value={(s.primerWaste ?? 0) * 100} onChange={(v) => patch({ primerWaste: v / 100 })} />
+              <Mini label="Total Primer Units" value={`${primerTotalUnits}`} />
+              <NumberInput label="Primer Budget / Unit" value={s.primerRate} onChange={(v) => patch({ primerRate: v })} />
               <NumberInput label="Primer Markup %" value={s.primerMargin * 100} onChange={(v) => patch({ primerMargin: v / 100 })} />
-            <Mini label="Primer Proposal Cost" value={money(s.primerUnits * s.primerRate * (1 + s.primerMargin))} />
-            <NumberInput label="Sand Bags" value={s.sandBags} onChange={(v) => patch({ sandBags: v })} />
-            <NumberInput label="Sand Rate" value={s.sandRate} onChange={(v) => patch({ sandRate: v })} />
+              <Mini label="Primer Proposal Cost" value={money(primerTotalUnits * s.primerRate * (1 + s.primerMargin))} />
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <NumberInput label="Sand Base Bags" value={s.sandBags} onChange={(v) => patch({ sandBags: v })} />
+              <NumberInput label="Contingency %" value={(s.sandContingency ?? 0) * 100} onChange={(v) => patch({ sandContingency: v / 100 })} />
+              <NumberInput label="Waste %" value={(s.sandWaste ?? 0) * 100} onChange={(v) => patch({ sandWaste: v / 100 })} />
+              <Mini label="Total Sand Bags" value={`${sandTotalBags}`} />
+              <NumberInput label="Sand Budget / Bag" value={s.sandRate} onChange={(v) => patch({ sandRate: v })} />
               <NumberInput label="Sand Markup %" value={s.sandMargin * 100} onChange={(v) => patch({ sandMargin: v / 100 })} />
-            <Mini label="Sand Proposal Cost" value={money(s.sandBags * s.sandRate * (1 + s.sandMargin))} />
+              <Mini label="Sand Proposal Cost" value={money(sandTotalBags * s.sandRate * (1 + s.sandMargin))} />
+            </div>
+            <div className="grid gap-3 border-t border-slate-200 pt-5 sm:grid-cols-2 xl:grid-cols-4">
             <NumberInput label="Material Shipping" value={s.materialShipping} onChange={(v) => patch({ materialShipping: v })} />
             <NumberInput label="Shipping Markup %" value={s.materialShippingMargin * 100} onChange={(v) => patch({ materialShippingMargin: v / 100 })} />
             <Mini label="Shipping Proposal Cost" value={money(s.materialShipping * (1 + s.materialShippingMargin))} />
             <Mini label="Total Material Sell" value={money(materialSell)} />
+            </div>
           </div>
         </div>
         <ScreedPageTabs screedPage={screedPage} setScreedPage={setScreedPage} placement="bottom" />
@@ -2590,6 +2600,11 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, admi
   const resetRates = () => {
     if (window.confirm("Reset all admin rates back to the original defaults? Repair types and materials will not be changed.")) setRates(defaultRates);
   };
+  const loadUsaWorkbookRates = () => {
+    if (window.confirm("Load the verified Grinding Rev.9 and Screed Rev.7 USA rates? Survey Costing rates and all repair data will be preserved. Review the values, then press Validate & Save Admin Data.")) {
+      setRates(applyUsaWorkbookRates(rates));
+    }
+  };
   const saveValidated = () => {
     const { invalidMaterials, invalidTypes, duplicateCodes } = validateRepairCatalog(repairCatalog);
     if (invalidMaterials.length || invalidTypes.length || duplicateCodes.length) {
@@ -2615,7 +2630,10 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, admi
                 <div className="text-sm font-bold text-sky-950">Admin Rate Control</div>
                 <p className="mt-1 max-w-3xl text-sm text-sky-900">Update base rates used by new costings. Saved project calculations keep their existing values unless the project is edited and saved again.</p>
               </div>
-              <button className="secondary-button" onClick={resetRates}>Reset to Defaults</button>
+              <div className="flex flex-wrap gap-2">
+                {auth.activeCompany.name.trim().toLowerCase() === "cogri usa" && <button className="primary-button" onClick={loadUsaWorkbookRates}>Load Verified USA Workbook Rates</button>}
+                <button className="secondary-button" onClick={resetRates}>Reset to Defaults</button>
+              </div>
             </div>
             <RateSection
               title="Production Labour"
@@ -2633,17 +2651,46 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, admi
               ]}
             />
             <RateSection
-              title="Surveyor Labour"
-              description="Surveyor rates are kept separate from production workers."
-              badges={["Surveyor", "Labour"]}
+              title="Grinding Surveyor Labour"
+              description="Grinding surveyor budget rates and markups. Survey Costing uses its own separate Survey Rates page."
+              badges={["Grinding", "Surveyor"]}
               rates={rates}
               onRateChange={updateRate}
               onMarginChange={updateMarginRate}
               onItemMarginChange={updateItemMargin}
               fields={[
-                { key: "surveyorDayRate", label: "Surveyor Day Rate", suffix: "/ day" },
-                { key: "surveyorTravelDayRate", label: "Surveyor Travel Day Rate", suffix: "/ day" },
-                { key: "surveyorWeekendDayRate", label: "Surveyor Weekend Extra", suffix: "/ surveyor day" },
+                { key: "grindingSurveyorDayRate", label: "Grinding Surveyor Day Rate", suffix: "/ day" },
+                { key: "grindingSurveyorTravelDayRate", label: "Grinding Surveyor Travel Day Rate", suffix: "/ day" },
+                { key: "grindingSurveyorWeekendDayRate", label: "Grinding Surveyor Weekend Extra", suffix: "/ surveyor day" },
+                { key: "grindingHotelNightRate", label: "Grinding Hotel", suffix: "/ person night" },
+                { key: "grindingEngineeringReportRate", label: "Grinding Engineering Report", suffix: "/ report" }
+              ]}
+            />
+            <RateSection
+              title="Screeding Surveyor Labour"
+              description="Screeding surveyor budget rates and markups. These remain separate because the USA workbooks use different budget rates."
+              badges={["Screeding", "Surveyor"]}
+              rates={rates}
+              onRateChange={updateRate}
+              onMarginChange={updateMarginRate}
+              onItemMarginChange={updateItemMargin}
+              fields={[
+                { key: "screedSurveyorDayRate", label: "Screeding Surveyor Day Rate", suffix: "/ day" },
+                { key: "screedSurveyorTravelDayRate", label: "Screeding Surveyor Travel Day Rate", suffix: "/ day" },
+                { key: "screedSurveyorWeekendDayRate", label: "Screeding Surveyor Weekend Extra", suffix: "/ surveyor day" },
+                { key: "screedHotelNightRate", label: "Screeding Hotel", suffix: "/ person night" },
+                { key: "screedEngineeringReportRate", label: "Screeding Engineering Report", suffix: "/ report" }
+              ]}
+            />
+            <RateSection
+              title="Shared Surveyor Extras"
+              description="App-specific extras shared by grinding and screeding where the source workbooks have no separate rate."
+              badges={["Grinding", "Screeding"]}
+              rates={rates}
+              onRateChange={updateRate}
+              onMarginChange={updateMarginRate}
+              onItemMarginChange={updateItemMargin}
+              fields={[
                 { key: "surveyorNightShiftAllowance", label: "Surveyor Night Shift Extra", suffix: "/ surveyor night" }
               ]}
             />
@@ -2706,7 +2753,8 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, admi
                 { key: "subcontractMargin", label: "Subcontract Default Markup", margin: true, helper: "Used when subcontract costs are entered inside a costing." },
                 { key: "materialMargin", label: "Material Default Markup", margin: true, helper: "Used for repair materials and project-entered materials." },
                 { key: "equipmentMargin", label: "Equipment Default Markup", margin: true, helper: "Used when equipment costs are entered inside a costing." },
-                { key: "shippingMargin", label: "Shipping Default Markup", margin: true, helper: "Initial markup for new material and equipment shipping inputs. It remains overridable per costing." },
+                { key: "materialShippingMargin", label: "Material Shipping Default Markup", margin: true, helper: "Initial markup for new screeding material shipping inputs. It remains overridable per costing." },
+                { key: "equipmentShippingMargin", label: "Equipment Shipping Default Markup", margin: true, helper: "Initial markup for new grinding and screeding equipment shipping inputs. It remains overridable per costing." },
                 { key: "engineeringReport", label: "Engineering Report", suffix: "/ report" }
               ]}
             />
@@ -2726,6 +2774,26 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, admi
                 { key: "grindingExtensionCordsDayRate", label: "Extension Cords", suffix: "/ day" },
                 { key: "grindingSegmentsDayRate", label: "Grinding Segments", suffix: "/ grinder day" },
                 { key: "grindingConsumablesDayRate", label: "Grinding Consumables", suffix: "/ grinder day" }
+              ]}
+            />
+            <RateSection
+              title="Screeding Materials"
+              description="Default budget rates, markups and quantity uplifts used when a new screeding costing is started. New material quantities still begin at zero."
+              badges={["Screeding", "Materials"]}
+              rates={rates}
+              onRateChange={updateRate}
+              onMarginChange={updateMarginRate}
+              onItemMarginChange={updateItemMargin}
+              fields={[
+                { key: "screedMaterialBagRate", label: "Screed Material", suffix: "/ bag" },
+                { key: "screedPrimerUnitRate", label: "Primer", suffix: "/ unit" },
+                { key: "screedSandBagRate", label: "Sand", suffix: "/ bag" },
+                { key: "screedMaterialContingency", label: "Screed Contingency", percentage: true, helper: "Added to the base screed bag quantity." },
+                { key: "screedMaterialWaste", label: "Screed Waste", percentage: true, helper: "Added to the base screed bag quantity." },
+                { key: "screedPrimerContingency", label: "Primer Contingency", percentage: true, helper: "Added to the base primer quantity." },
+                { key: "screedPrimerWaste", label: "Primer Waste", percentage: true, helper: "Added to the base primer quantity." },
+                { key: "screedSandContingency", label: "Sand Contingency", percentage: true, helper: "Added to the base sand quantity." },
+                { key: "screedSandWaste", label: "Sand Waste", percentage: true, helper: "Added to the base sand quantity." }
               ]}
             />
             <RateSection
@@ -2931,6 +2999,7 @@ type AdminRateField = {
   label: string;
   suffix?: string;
   margin?: boolean;
+  percentage?: boolean;
   helper?: string;
 };
 
@@ -2954,11 +3023,11 @@ function RateSection({ title, description, badges, fields, rates, onRateChange, 
           const itemMargin = adminRateMargin(rates, field.key, 0);
           return (
             <div className="grid min-w-0 gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3" key={field.key}>
-              {field.margin ? (
+              {field.margin || field.percentage ? (
                 <>
                   <NumberInput label={field.label} value={rawValue * 100} onChange={(value) => onMarginChange(field.key, value)} />
                   <div className="flex min-h-5 flex-wrap items-center gap-2 text-xs text-slate-500">
-                    <span className="font-semibold text-emerald-700">{rawValue * 100}% default markup</span>
+                    <span className="font-semibold text-emerald-700">{rawValue * 100}% {field.margin ? "default markup" : "default uplift"}</span>
                     {field.helper && <span>{field.helper}</span>}
                   </div>
                 </>

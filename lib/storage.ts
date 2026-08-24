@@ -97,6 +97,18 @@ function normaliseRates(saved: Partial<AdminRates>): AdminRates {
   const surveyorTravelDayRate = Number(saved.surveyorTravelDayRate ?? saved.travelDayRate ?? defaultRates.surveyorTravelDayRate);
   const surveyorWeekendDayRate = Number(saved.surveyorWeekendDayRate ?? saved.surveyorDayRate ?? defaultRates.surveyorWeekendDayRate);
   const surveyorNightShiftAllowance = Number(saved.surveyorNightShiftAllowance ?? saved.productionNightShiftAllowance ?? defaultRates.surveyorNightShiftAllowance);
+  const grindingSurveyorDayRate = Number(saved.grindingSurveyorDayRate ?? saved.surveyorDayRate ?? defaultRates.grindingSurveyorDayRate);
+  const grindingSurveyorTravelDayRate = Number(saved.grindingSurveyorTravelDayRate ?? saved.surveyorTravelDayRate ?? saved.travelDayRate ?? defaultRates.grindingSurveyorTravelDayRate);
+  const grindingSurveyorWeekendDayRate = Number(saved.grindingSurveyorWeekendDayRate ?? saved.surveyorWeekendDayRate ?? saved.weekendDayRate ?? defaultRates.grindingSurveyorWeekendDayRate);
+  const grindingHotelNightRate = Number(saved.grindingHotelNightRate ?? saved.hotel ?? defaultRates.grindingHotelNightRate);
+  const grindingEngineeringReportRate = Number(saved.grindingEngineeringReportRate ?? saved.engineeringReport ?? defaultRates.grindingEngineeringReportRate);
+  const screedSurveyorDayRate = Number(saved.screedSurveyorDayRate ?? saved.surveyorDayRate ?? defaultRates.screedSurveyorDayRate);
+  const screedSurveyorTravelDayRate = Number(saved.screedSurveyorTravelDayRate ?? saved.surveyorTravelDayRate ?? saved.travelDayRate ?? defaultRates.screedSurveyorTravelDayRate);
+  const screedSurveyorWeekendDayRate = Number(saved.screedSurveyorWeekendDayRate ?? saved.surveyorWeekendDayRate ?? saved.weekendDayRate ?? defaultRates.screedSurveyorWeekendDayRate);
+  const screedHotelNightRate = Number(saved.screedHotelNightRate ?? saved.hotel ?? defaultRates.screedHotelNightRate);
+  const screedEngineeringReportRate = Number(saved.screedEngineeringReportRate ?? saved.engineeringReport ?? defaultRates.screedEngineeringReportRate);
+  const materialShippingMargin = Number(saved.materialShippingMargin ?? saved.shippingMargin ?? defaultRates.materialShippingMargin);
+  const equipmentShippingMargin = Number(saved.equipmentShippingMargin ?? saved.shippingMargin ?? defaultRates.equipmentShippingMargin);
   const grindingGrinderDayRate = Number(saved.grindingGrinderDayRate ?? saved.grindingPropaneGrinderDayRate ?? saved.grindingElectricGrinderDayRate ?? defaultRates.grindingGrinderDayRate);
   const grindingPlanerDayRate = Number(saved.grindingPlanerDayRate ?? saved.grindingConcretePlanerGasDayRate ?? defaultRates.grindingPlanerDayRate);
   const savedMargins = saved.rateMargins ?? {};
@@ -110,6 +122,16 @@ function normaliseRates(saved: Partial<AdminRates>): AdminRates {
     surveyorTravelDayRate: savedMargins.surveyorTravelDayRate ?? savedMargins.travelDayRate ?? defaultRates.rateMargins?.surveyorTravelDayRate,
     surveyorWeekendDayRate: savedMargins.surveyorWeekendDayRate ?? savedMargins.surveyorDayRate ?? defaultRates.rateMargins?.surveyorWeekendDayRate,
     surveyorNightShiftAllowance: savedMargins.surveyorNightShiftAllowance ?? savedMargins.productionNightShiftAllowance ?? defaultRates.rateMargins?.surveyorNightShiftAllowance,
+    grindingSurveyorDayRate: savedMargins.grindingSurveyorDayRate ?? savedMargins.surveyorDayRate ?? defaultRates.rateMargins?.grindingSurveyorDayRate,
+    grindingSurveyorTravelDayRate: savedMargins.grindingSurveyorTravelDayRate ?? savedMargins.surveyorTravelDayRate ?? savedMargins.travelDayRate ?? defaultRates.rateMargins?.grindingSurveyorTravelDayRate,
+    grindingSurveyorWeekendDayRate: savedMargins.grindingSurveyorWeekendDayRate ?? savedMargins.surveyorWeekendDayRate ?? savedMargins.weekendDayRate ?? defaultRates.rateMargins?.grindingSurveyorWeekendDayRate,
+    grindingHotelNightRate: savedMargins.grindingHotelNightRate ?? savedMargins.hotel ?? defaultRates.rateMargins?.grindingHotelNightRate,
+    grindingEngineeringReportRate: savedMargins.grindingEngineeringReportRate ?? savedMargins.engineeringReport ?? defaultRates.rateMargins?.grindingEngineeringReportRate,
+    screedSurveyorDayRate: savedMargins.screedSurveyorDayRate ?? savedMargins.surveyorDayRate ?? defaultRates.rateMargins?.screedSurveyorDayRate,
+    screedSurveyorTravelDayRate: savedMargins.screedSurveyorTravelDayRate ?? savedMargins.surveyorTravelDayRate ?? savedMargins.travelDayRate ?? defaultRates.rateMargins?.screedSurveyorTravelDayRate,
+    screedSurveyorWeekendDayRate: savedMargins.screedSurveyorWeekendDayRate ?? savedMargins.surveyorWeekendDayRate ?? savedMargins.weekendDayRate ?? defaultRates.rateMargins?.screedSurveyorWeekendDayRate,
+    screedHotelNightRate: savedMargins.screedHotelNightRate ?? savedMargins.hotel ?? defaultRates.rateMargins?.screedHotelNightRate,
+    screedEngineeringReportRate: savedMargins.screedEngineeringReportRate ?? savedMargins.engineeringReport ?? defaultRates.rateMargins?.screedEngineeringReportRate,
     grindingGrinderDayRate: savedMargins.grindingGrinderDayRate ?? savedMargins.grindingPropaneGrinderDayRate ?? savedMargins.grindingElectricGrinderDayRate ?? defaultRates.rateMargins?.grindingGrinderDayRate,
     grindingPlanerDayRate: savedMargins.grindingPlanerDayRate ?? savedMargins.grindingConcretePlanerGasDayRate ?? defaultRates.rateMargins?.grindingPlanerDayRate
   };
@@ -123,6 +145,18 @@ function normaliseRates(saved: Partial<AdminRates>): AdminRates {
     surveyorTravelDayRate,
     surveyorWeekendDayRate,
     surveyorNightShiftAllowance,
+    grindingSurveyorDayRate,
+    grindingSurveyorTravelDayRate,
+    grindingSurveyorWeekendDayRate,
+    grindingHotelNightRate,
+    grindingEngineeringReportRate,
+    screedSurveyorDayRate,
+    screedSurveyorTravelDayRate,
+    screedSurveyorWeekendDayRate,
+    screedHotelNightRate,
+    screedEngineeringReportRate,
+    materialShippingMargin,
+    equipmentShippingMargin,
     grindingGrinderDayRate,
     grindingPlanerDayRate,
     materialMargin: saved.materialMargin === undefined || saved.materialMargin === 0.2 ? defaultRates.materialMargin : saved.materialMargin,
@@ -258,7 +292,7 @@ function log(existing: ChangeLogEntry[] | undefined, actor: string, action: stri
 }
 
 function makeRevision(input: ProjectInput, calculations: ProjectRecord["calculations"], rates: AdminRates, repairCatalog: RepairCatalog): QuoteRevision {
-  return { id: uid(), label: input.revision || "Revision", createdAt: now(), proposalTotal: calculations.proposalTotal, budgetCost: calculations.budgetCost, budgetMargin: calculations.budgetMargin, discountPercentage: input.costingModule === "survey" ? input.survey?.discountPercentage ?? 0 : input.discountPercentage, inputs: input, calculations, rates, repairCatalog, calculationVersion: input.costingModule === "survey" ? "survey-1.0" : "remedial-5.0" };
+  return { id: uid(), label: input.revision || "Revision", createdAt: now(), proposalTotal: calculations.proposalTotal, budgetCost: calculations.budgetCost, budgetMargin: calculations.budgetMargin, discountPercentage: input.costingModule === "survey" ? input.survey?.discountPercentage ?? 0 : input.discountPercentage, inputs: input, calculations, rates, repairCatalog, calculationVersion: input.costingModule === "survey" ? "survey-1.0" : "remedial-5.1" };
 }
 
 function normaliseRepairSubcontractors(input?: Partial<ProjectInput>) {
@@ -478,7 +512,7 @@ export async function loadProjects(): Promise<ProjectRecord[]> {
     return (data ?? []).map((row) => rowToProject(row as Record<string, unknown>, actualsByProject.get(String(row.id))));
   }
   if (isSupabaseConfigured()) requireCloudContext("Loading projects");
-  return readJson<ProjectRecord[]>(PROJECTS_KEY, []).map((project) => ({ ...project, companyId: project.companyId ?? "local-face-gmbh", inputs: normaliseInput(project.inputs), actuals: normaliseActuals(project.actuals, project.calculations) }));
+  return readJson<ProjectRecord[]>(PROJECTS_KEY, []).map((project) => ({ ...project, companyId: project.companyId ?? "local-face-gmbh", inputs: normaliseInput(project.inputs), actuals: normaliseActuals(project.actuals, project.calculations), rateSnapshot: project.rateSnapshot ? normaliseRates(project.rateSnapshot) : undefined }));
 }
 
 export async function saveProject(input: ProjectInput, rates: AdminRates, existingId?: string, actor = "System", repairCatalog: RepairCatalog = defaultRepairCatalog, status: ProjectStatus = "Draft"): Promise<ProjectRecord> {
@@ -504,7 +538,7 @@ export async function saveProject(input: ProjectInput, rates: AdminRates, existi
     actuals: existing?.actuals,
     rateSnapshot: rates,
     repairCatalogSnapshot: repairCatalog,
-    calculationVersion: inputs.costingModule === "survey" ? "survey-1.0" : "remedial-5.0",
+    calculationVersion: inputs.costingModule === "survey" ? "survey-1.0" : "remedial-5.1",
     revisions: normaliseProjectStatus(status) === "Costing Complete"
       ? [...(existing?.revisions ?? []), makeRevision(inputs, calculations, rates, repairCatalog)]
       : existing?.revisions ?? [],
@@ -652,6 +686,7 @@ export function rowToProject(row: Record<string, unknown>, actuals?: PLActuals):
   const calculations = row.calculations as ProjectRecord["calculations"];
   const revisions = Array.isArray(row.revisions) ? row.revisions as QuoteRevision[] : [];
   const latestRevision = revisions[revisions.length - 1];
+  const storedRateSnapshot = __costingSnapshot?.rates ?? latestRevision?.rates;
   return {
     id: String(row.id),
     companyId: row.company_id ? String(row.company_id) : undefined,
@@ -663,7 +698,7 @@ export function rowToProject(row: Record<string, unknown>, actuals?: PLActuals):
     inputs,
     calculations,
     actuals: normaliseActuals(actuals ?? row.actuals as PLActuals | undefined, calculations),
-    rateSnapshot: __costingSnapshot?.rates ?? latestRevision?.rates,
+    rateSnapshot: storedRateSnapshot ? normaliseRates(storedRateSnapshot) : undefined,
     repairCatalogSnapshot: __costingSnapshot?.repairCatalog ?? latestRevision?.repairCatalog,
     calculationVersion: __costingSnapshot?.calculationVersion ?? latestRevision?.calculationVersion,
     markupApprovedBy: latestRevision?.markupApprovedBy,

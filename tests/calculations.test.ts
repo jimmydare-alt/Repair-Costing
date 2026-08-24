@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { calculatedHotelNights, calculateActualSiteDays, calculatePhaseSchedule, calculatePL, calculateProject, calculateProjectRepairMaterials, calculateRepairLineMaterials, calculateWorkingDays, defaultActuals, grindingDays, repairDays, screedDays, searchRowTone, weekendDaysForProgramme } from "@/lib/calculations";
+import { calculatedHotelNights, calculateActualSiteDays, calculatePhaseSchedule, calculatePL, calculateProject, calculateProjectRepairMaterials, calculateRepairLineMaterials, calculateWorkingDays, defaultActuals, grindingDays, repairDays, screedDays, screedMaterialUnits, searchRowTone, weekendDaysForProgramme } from "@/lib/calculations";
 import { createRepairLine, defaultRepairCatalog } from "@/lib/repairCatalog";
-import { defaultRates, emptyInput, validationInput } from "@/lib/rates";
+import { applyUsaWorkbookRates, createRemedialProjectInput, defaultRates, emptyInput, validationInput } from "@/lib/rates";
 import type { ProjectServiceKey, RepairCatalog } from "@/lib/types";
 import { buildHandoverSummary } from "@/lib/handover";
 
@@ -530,10 +530,97 @@ describe("FACE GmbH v2 contracting calculations", () => {
   });
 
   it("uses independent surveyor weekend and night rates", () => {
-    const rates = { ...defaultRates, surveyorWeekendDayRate: 1234, surveyorNightShiftAllowance: 77 };
+    const rates = { ...defaultRates, grindingSurveyorWeekendDayRate: 1234, surveyorNightShiftAllowance: 77 };
     const result = calculateProject({ ...emptyInput, includeGrinding: true, grinding: { ...emptyInput.grinding, enabled: true, estimatedDays: 6, weekendDaysPerWeek: 1, nightShiftRequired: true, surveyorLabourMode: "in_house", surveyorCount: 1, surveyorNightShifts: 2, productionLabourMode: "subcontract", productionSubcontractors: [] } }, rates);
     expect(result.budgetLines.find((row) => row.item === "Surveyor weekend extra")?.rate).toBe(1234);
     expect(result.budgetLines.find((row) => row.item === "Surveyor night-shift allowance")?.rate).toBe(77);
+  });
+
+  it("loads the verified USA remedial rates without changing Survey Costing rates", () => {
+    const surveyRates = { ...defaultRates.surveyRates!, surveyorBudgetDayRate: 617, surveyorMarkup: 1.127 };
+    const usa = applyUsaWorkbookRates({ ...defaultRates, surveyRates });
+    expect(usa.surveyRates).toEqual(surveyRates);
+    expect(usa.productionLabourDayRate).toBe(400);
+    expect(usa.grindingSurveyorDayRate * (1 + (usa.rateMargins?.grindingSurveyorDayRate ?? 0))).toBeCloseTo(1000, 6);
+    expect(usa.grindingSurveyorTravelDayRate * (1 + (usa.rateMargins?.grindingSurveyorTravelDayRate ?? 0))).toBeCloseTo(700, 6);
+    expect(usa.grindingHotelNightRate * (1 + (usa.rateMargins?.grindingHotelNightRate ?? 0))).toBe(210);
+    expect(usa.screedSurveyorDayRate * (1 + (usa.rateMargins?.screedSurveyorDayRate ?? 0))).toBe(1000);
+    expect(usa.screedHotelNightRate * (1 + (usa.rateMargins?.screedHotelNightRate ?? 0))).toBe(210);
+    expect(usa.mileagePerKm * (1 + (usa.rateMargins?.mileagePerKm ?? 0))).toBeCloseTo(0.948, 6);
+  });
+
+  it("prefills new USA screeding rates but keeps every material quantity at zero", () => {
+    const usa = applyUsaWorkbookRates(defaultRates);
+    const input = createRemedialProjectInput(usa, "USD", "miles");
+    expect(input.screeding.screedMaterialBags).toBe(0);
+    expect(input.screeding.primerUnits).toBe(0);
+    expect(input.screeding.sandBags).toBe(0);
+    expect(input.screeding.screedMaterialRate).toBe(40);
+    expect(input.screeding.primerRate).toBe(288);
+    expect(input.screeding.sandRate).toBe(8);
+    expect(input.screeding.primerContingency + input.screeding.primerWaste).toBeCloseTo(0.1, 6);
+    expect(calculateProject(input, usa).proposalTotal).toBe(0);
+  });
+
+  it("matches the Screed Rev.7 material quantity and proposal formulas", () => {
+    const usa = applyUsaWorkbookRates(defaultRates);
+    const blank = createRemedialProjectInput(usa, "USD", "miles");
+    const input = {
+      ...blank,
+      includeScreeding: true,
+      screeding: {
+        ...blank.screeding,
+        enabled: true,
+        productionLabourMode: "subcontract" as const,
+        surveyorLabourMode: "subcontract" as const,
+        teams: [],
+        surveyorSubcontractors: [],
+        screedMaterialBags: 100,
+        primerUnits: 10,
+        sandBags: 20
+      }
+    };
+    const result = calculateProject(input, usa);
+    expect(screedMaterialUnits(100, 0, 0)).toBe(100);
+    expect(screedMaterialUnits(10, 0.05, 0.05)).toBe(11);
+    expect(screedMaterialUnits(20, 0.05, 0.05)).toBe(22);
+    expect(result.proposalLines.find((row) => row.item === "Screed material")?.originalTotal).toBe(5000);
+    expect(result.proposalLines.find((row) => row.item === "Primer")?.originalTotal).toBe(3960);
+    expect(result.proposalLines.find((row) => row.item === "Sand")?.originalTotal).toBe(220);
+    expect(result.proposalTotal).toBe(9180);
+    expect(result.budgetCost).toBe(7344);
+  });
+
+  it("uses service-specific USA grinding surveyor rates", () => {
+    const usa = applyUsaWorkbookRates(defaultRates);
+    const blank = createRemedialProjectInput(usa, "USD", "miles");
+    const result = calculateProject({
+      ...blank,
+      includeGrinding: true,
+      grinding: {
+        ...blank.grinding,
+        enabled: true,
+        estimatedDays: 6,
+        weekendDaysPerWeek: 1,
+        productionLabourMode: "subcontract",
+        productionSubcontractors: [],
+        surveyorLabourMode: "in_house",
+        surveyorCount: 1,
+        surveyorDays: 6,
+        surveyorTravelDays: 1,
+        surveyorOneWayKm: 100,
+        surveyorVehicles: 1,
+        surveyorHotelRequired: true,
+        surveyorHotelNights: 1,
+        engineeringReport: true
+      }
+    }, usa);
+    expect(result.proposalLines.find((row) => row.item === "Surveyor labour")?.originalTotal).toBe(6000);
+    expect(result.proposalLines.find((row) => row.item === "Surveyor weekend extra")?.originalTotal).toBe(360);
+    expect(result.proposalLines.find((row) => row.item === "Surveyor travel")?.originalTotal).toBe(700);
+    expect(result.proposalLines.find((row) => row.item === "Surveyor mileage")?.originalTotal).toBe(189.6);
+    expect(result.proposalLines.find((row) => row.item === "Surveyor hotel")?.originalTotal).toBe(210);
+    expect(result.proposalLines.find((row) => row.item === "Engineering report")?.originalTotal).toBe(600);
   });
 
   it("uses per-project shipping markup and reconciles discounts exactly", () => {
