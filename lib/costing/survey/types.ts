@@ -1,5 +1,5 @@
 import type { CurrencyCode } from "../../company";
-import type { DistanceUnit, Line, OfficeCount, PLCategory, ProjectCalculations } from "../../types";
+import type { DistanceUnit, Line, OfficeCount, PackagePricingBasis, PLCategory, ProjectCalculations } from "../../types";
 
 export type SurveyType = "AutoStore" | "Fmin" | "Exotec" | "Robotics" | "Level Survey Only" | "Prof Runs Only" | "Bespoke";
 export type SurveyorSupply = "In-house" | "Subcontracted";
@@ -35,6 +35,15 @@ export type SurveyInput = {
   surveyorSupply: SurveyorSupply;
   subcontractSurveyCost: number;
   subcontractSurveyMarkup: number;
+  subcontractMobilisationCost: number;
+  subcontractMobilisationMarkup: number;
+  subcontractStandbyCost: number;
+  subcontractStandbyMarkup: number;
+  pricingBasis: PackagePricingBasis;
+  expectedStandDownDays: number;
+  productiveRateOverride: number | null;
+  standbyRateOverride: number | null;
+  rateOverrideReason: string;
   projectManagerRequired: boolean;
   surveyorsOnSite: number;
   additionalDays: number;
@@ -101,6 +110,12 @@ export type SurveyAdminRates = {
   errorPlanBudgetRate: number;
   errorPlanMarkup: number;
   defaultSubcontractMarkup: number;
+  standbySurveyorBudgetDayRate: number;
+  standbySurveyorMarkup: number;
+  standbyLabourerBudgetDayRate: number;
+  standbyLabourerMarkup: number;
+  standbySubsistenceBudgetDayRate: number;
+  standbySubsistenceMarkup: number;
   dailyOutputAutoStoreArea: number;
   dailyOutputFminRuns: number;
   dailyOutputExotecRuns: number;

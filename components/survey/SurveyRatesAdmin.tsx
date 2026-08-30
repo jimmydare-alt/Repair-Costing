@@ -18,6 +18,11 @@ const sections: Array<{ title: string; description: string; rows: RateRow[] }> =
     { label: "Project Manager Travel Day", budget: "projectManagerTravelBudgetDayRate", markup: "projectManagerTravelMarkup", unit: "/ day" },
     { label: "Weekend Surveyor Day", budget: "weekendBudgetDayRate", markup: "weekendMarkup", unit: "/ day" }
   ] },
+  { title: "Survey Stand-Down", description: "Default people and subsistence components used to calculate a survey stand-down day. Hotel and vehicle components use the shared travel rates below; equipment is excluded.", rows: [
+    { label: "Stand-Down Surveyor Day", budget: "standbySurveyorBudgetDayRate", markup: "standbySurveyorMarkup", unit: "/ surveyor day" },
+    { label: "Stand-Down Labourer Day", budget: "standbyLabourerBudgetDayRate", markup: "standbyLabourerMarkup", unit: "/ labourer day" },
+    { label: "Stand-Down Subsistence", budget: "standbySubsistenceBudgetDayRate", markup: "standbySubsistenceMarkup", unit: "/ person day" }
+  ] },
   { title: "Travel, Hotel & Subsistence", description: "The distance rate follows the active company's unit; saved projects retain the unit and rate snapshot.", rows: [
     { label: "Distance", budget: "distanceBudgetRate", markup: "distanceMarkup", unit: "/ distance unit" },
     { label: "Return Flight", budget: "returnFlightBudgetRate", markup: "returnFlightMarkup", unit: "/ flight" },

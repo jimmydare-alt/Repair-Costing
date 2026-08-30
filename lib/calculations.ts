@@ -1,7 +1,8 @@
 import { defaultRepairCatalog, materialById, repairTypeByCode } from "./repairCatalog";
 import { distanceRateUnit } from "./company";
-import type { AdminRates, AirportTransport, DestinationTransport, Line, MaterialCalc, PLActuals, PLCategory, PLSummary, ProjectCalculations, ProjectInput, ProjectServiceKey, RepairCatalog, RepairLineItem, RepairMaterial, RepairTypeMaterialRule, Section, TravelMode } from "./types";
+import type { AdminRates, AirportTransport, CommercialRateSchedule, DestinationTransport, Line, MaterialCalc, PLActuals, PLCategory, PLSummary, ProjectCalculations, ProjectInput, ProjectServiceKey, RemedialWorkPackage, RepairCatalog, RepairLineItem, RepairMaterial, RepairTypeMaterialRule, Section, TravelMode, WorkPackageCalculationSummary } from "./types";
 import { chargeableJourneyDistance, effectiveReturnFlights } from "./travel";
+import { packageProjectInput } from "./workPackages";
 
 const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 const pct = (value: number) => Math.round(value * 10000) / 100;
@@ -471,7 +472,7 @@ function projectManagementLines(input: ProjectInput, rates: AdminRates) {
   return rows;
 }
 
-export function calculateProject(input: ProjectInput, rates: AdminRates, repairCatalog: RepairCatalog = defaultRepairCatalog): ProjectCalculations {
+function calculateCombinedProject(input: ProjectInput, rates: AdminRates, repairCatalog: RepairCatalog = defaultRepairCatalog): ProjectCalculations {
   const companyExchange = num(input.exchangeRateToCompanyCurrency) > 0 ? num(input.exchangeRateToCompanyCurrency) : 1;
   const groupExchange = num(input.exchangeRateToGroupCurrency) > 0 ? num(input.exchangeRateToGroupCurrency) : 1;
   const quoteRates = ratesInQuoteCurrency(rates, companyExchange);
@@ -547,6 +548,326 @@ export function calculateProject(input: ProjectInput, rates: AdminRates, repairC
     haulageTotal,
     standbyRate: money(quoteRates.hotel * (1 + rateMargin(quoteRates, "hotel", quoteRates.hotelMargin)) + quoteRates.subsistence * (1 + rateMargin(quoteRates, "subsistence", quoteRates.subsistenceMargin)))
   };
+}
+
+function tagged(lines: Line[], workPackage: RemedialWorkPackage): Line[] {
+  return lines.map((row) => ({
+    ...row,
+    workPackageId: workPackage.id,
+    workPackageCode: workPackage.code,
+    workPackageName: workPackage.name,
+    commercialGroup: "package" as const
+  }));
+}
+
+function commonTagged(lines: Line[]): Line[] {
+  return lines.map((row) => ({ ...row, commercialGroup: "common" as const }));
+}
+
+function total(lines: Line[], key: "total" | "originalTotal" | "cost" = "total") {
+  return money(lines.reduce((sum, row) => sum + num(row[key]), 0));
+}
+
+function discountedLine(row: Line, discountPercentage: number): Line {
+  const discount = money(row.originalTotal * Math.min(100, Math.max(0, discountPercentage)) / 100);
+  return { ...row, discount, total: money(row.originalTotal - discount) };
+}
+
+function budgetVersion(row: Line): Line {
+  return { ...row, margin: 0, discount: 0, total: row.cost, originalTotal: row.cost };
+}
+
+function rateAdjustment(item: string, amount: number, source: string): Line {
+  const value = money(amount);
+  return { section: "Labour", item, rate: value, unit: "adjustment", quantity: value ? 1 : 0, cost: 0, margin: value, total: value, discount: 0, originalTotal: value, source, plCategory: "Labour" };
+}
+
+function isMobilisationLine(row: Line) {
+  return row.plCategory === "Travel" || /\btravel\b|mobilisation|mobilization|shipping|delivery|collection/i.test(row.item);
+}
+
+function isOperatingLine(row: Line) {
+  return !isMobilisationLine(row)
+    && row.section !== "Haulage"
+    && row.section !== "Reports"
+    && row.section !== "Additional items";
+}
+
+type StandbyResult = { proposalLines: Line[]; budgetLines: Line[]; budgetRate: number; proposalRate: number };
+
+function grindingStandby(workPackage: RemedialWorkPackage, rates: AdminRates, expectedDays: number): StandbyResult {
+  const g = workPackage.grinding;
+  if (!g) return { proposalLines: [], budgetLines: [], budgetRate: 0, proposalRate: 0 };
+  const rows: Line[] = [];
+  let budgetRate = 0;
+  let proposalRate = 0;
+  const add = (section: Section, item: string, budget: number, quantityPerDay: number, markup: number, plCategory: PLCategory = sectionPLCategory(section)) => {
+    const rate = Math.max(0, num(budget));
+    const quantity = Math.max(0, num(quantityPerDay));
+    if (!rate || !quantity) return;
+    budgetRate += rate * quantity;
+    proposalRate += rate * quantity * (1 + Math.max(0, num(markup)));
+    rows.push(line(section, item, rate, "stand-down day", quantity * expectedDays, markup, "Grinding stand-down schedule", plCategory));
+  };
+  const productionInHouse = g.productionLabourMode === "in_house" || g.productionLabourMode === "both";
+  const productionSubcontract = g.productionLabourMode === "subcontract" || g.productionLabourMode === "both";
+  const surveyorInHouse = g.surveyorLabourMode === "in_house" || g.surveyorLabourMode === "both";
+  const surveyorSubcontract = g.surveyorLabourMode === "subcontract" || g.surveyorLabourMode === "both";
+  const productionPeople = productionInHouse ? Math.max(0, num(g.productionMen)) : 0;
+  const surveyorPeople = surveyorInHouse ? Math.max(0, num(g.surveyorCount)) : 0;
+
+  add("Labour", "Grinding production stand-down", rates.grindingStandbyProductionDayRate, productionPeople, rateMargin(rates, "grindingStandbyProductionDayRate", rates.defaultMargin), "Labour");
+  add("Labour", "Grinding surveyor stand-down", rates.grindingStandbySurveyorDayRate, surveyorPeople, rateMargin(rates, "grindingStandbySurveyorDayRate", rates.defaultMargin), "Labour");
+  if (g.productionHotelRequired) {
+    add("Hotel", "Grinding production stand-down hotel", rates.grindingHotelNightRate, productionPeople, rateMargin(rates, "grindingHotelNightRate", rates.hotelMargin), "Hotel/Subsistence");
+    add("Subsistence", "Grinding production stand-down subsistence", rates.grindingStandbySubsistenceDayRate, productionPeople, rateMargin(rates, "grindingStandbySubsistenceDayRate", rates.subsistenceMargin), "Hotel/Subsistence");
+  }
+  if (g.surveyorHotelRequired) {
+    add("Hotel", "Grinding surveyor stand-down hotel", rates.grindingHotelNightRate, surveyorPeople, rateMargin(rates, "grindingHotelNightRate", rates.hotelMargin), "Hotel/Subsistence");
+    add("Subsistence", "Grinding surveyor stand-down subsistence", rates.grindingStandbySubsistenceDayRate, surveyorPeople, rateMargin(rates, "grindingStandbySubsistenceDayRate", rates.subsistenceMargin), "Hotel/Subsistence");
+  }
+  const addTransport = (prefix: string, active: boolean, mode: TravelMode, vehicles: number, destination: DestinationTransport, rentalVehicles: number) => {
+    if (!active) return;
+    if (mode === "Drive") add("Travel", `${prefix} stand-down company vehicle`, rates.companyCar, vehicles, rateMargin(rates, "companyCar", rates.travelMargin), "Travel");
+    if (mode === "Fly" && destination !== "None") {
+      const key: keyof AdminRates = destination === "Rental Van" ? "rentalVan" : "rentalCar";
+      add("Travel", `${prefix} stand-down ${destination.toLowerCase()}`, rates[key] as number, rentalVehicles, rateMargin(rates, key, rates.travelMargin), "Travel");
+    }
+  };
+  addTransport("Grinding production", productionInHouse, g.productionTravelMode, g.productionVehicles, g.productionDestinationTransport, g.productionRentalVehicles);
+  addTransport("Grinding surveyor", surveyorInHouse, g.surveyorTravelMode, g.surveyorVehicles, g.surveyorDestinationTransport, g.surveyorRentalVehicles);
+  if (productionSubcontract) g.productionSubcontractors.forEach((item) => add("Subcontract", `${item.name || "Grinding subcontractor"} stand-down`, num(item.standbyRate), 1, num(item.standbyMargin ?? item.margin), "Subcontract"));
+  if (surveyorSubcontract) g.surveyorSubcontractors.forEach((item) => add("Subcontract", `${item.name || "Grinding surveyor subcontractor"} stand-down`, num(item.standbyRate), 1, num(item.standbyMargin ?? item.margin), "Subcontract"));
+  return { proposalLines: rows, budgetLines: rows.map(budgetVersion), budgetRate: money(budgetRate), proposalRate: money(proposalRate) };
+}
+
+type PackageCalculation = {
+  workPackage: RemedialWorkPackage;
+  calculation: ProjectCalculations;
+  proposalLines: Line[];
+  budgetLines: Line[];
+  summary: WorkPackageCalculationSummary;
+  rateSchedule?: CommercialRateSchedule;
+};
+
+function calculateWorkPackage(parent: ProjectInput, workPackage: RemedialWorkPackage, rates: AdminRates, repairCatalog: RepairCatalog): PackageCalculation {
+  const packageInput = packageProjectInput(parent, workPackage);
+  const calculation = calculateCombinedProject(packageInput, rates, repairCatalog);
+  const keepLine = (row: Line) => workPackage.mobilisationMode === "separate"
+    || !(row.plCategory === "Travel" || (row.plCategory === "Labour" && /\btravel\b/i.test(row.item)));
+  let proposalLines = tagged(calculation.proposalLines.filter(keepLine), workPackage);
+  let budgetLines = tagged(calculation.budgetLines.filter(keepLine), workPackage);
+  let rateSchedule: CommercialRateSchedule | undefined;
+
+  if (workPackage.pricingBasis === "day_rate" && workPackage.service === "Grinding") {
+    const days = Math.max(0, calculation.siteDays);
+    const operatingProposal = proposalLines.filter(isOperatingLine);
+    const operatingBudget = budgetLines.filter(isOperatingLine);
+    const calculatedProductiveProposalRate = days ? total(operatingProposal) / days : 0;
+    const productiveBudgetRate = days ? total(operatingBudget) / days : 0;
+    const productiveProposalRate = workPackage.productiveRateOverride ?? calculatedProductiveProposalRate;
+    const productiveAdjustment = days ? money(productiveProposalRate * days - total(operatingProposal)) : 0;
+    if (productiveAdjustment) proposalLines.push(...tagged([rateAdjustment("Productive day rate adjustment", productiveAdjustment, `${workPackage.code} day-rate override`)], workPackage));
+
+    const quoteRates = ratesInQuoteCurrency(rates, num(parent.exchangeRateToCompanyCurrency) || 1);
+    const rawStandby = grindingStandby(workPackage, quoteRates, workPackage.expectedStandDownDays);
+    const discount = workPackage.discountPercentage ?? parent.discountPercentage;
+    const standbyProposalLines = rawStandby.proposalLines.map((row) => discountedLine(row, discount));
+    const discountedStandbyRate = rawStandby.proposalRate * (1 - Math.min(100, Math.max(0, discount)) / 100);
+    const standbyProposalRate = workPackage.standbyRateOverride ?? discountedStandbyRate;
+    const standbyAdjustment = workPackage.expectedStandDownDays
+      ? money(standbyProposalRate * workPackage.expectedStandDownDays - total(standbyProposalLines))
+      : 0;
+    proposalLines.push(...tagged(standbyProposalLines, workPackage));
+    budgetLines.push(...tagged(rawStandby.budgetLines, workPackage));
+    if (standbyAdjustment) proposalLines.push(...tagged([rateAdjustment("Stand-down day rate adjustment", standbyAdjustment, `${workPackage.code} stand-down override`)], workPackage));
+
+    const mobilisationProposal = total(proposalLines.filter(isMobilisationLine));
+    const mobilisationBudget = total(budgetLines.filter(isMobilisationLine));
+    rateSchedule = {
+      workPackageId: workPackage.id,
+      workPackageCode: workPackage.code,
+      workPackageName: workPackage.name,
+      service: workPackage.service,
+      pricingBasis: workPackage.pricingBasis,
+      estimatedDays: days,
+      productiveBudgetRate: money(productiveBudgetRate),
+      productiveProposalRate: money(productiveProposalRate),
+      productiveRateOverridden: workPackage.productiveRateOverride !== null,
+      mobilisationBudget,
+      mobilisationProposal,
+      standbyBudgetRate: rawStandby.budgetRate,
+      standbyProposalRate: money(standbyProposalRate),
+      standbyRateOverridden: workPackage.standbyRateOverride !== null,
+      expectedStandDownDays: workPackage.expectedStandDownDays,
+      overrideReason: workPackage.rateOverrideReason
+    };
+  }
+
+  const packageProposal = total(proposalLines);
+  const packageBudget = total(budgetLines);
+  const packageProfit = packageProposal - packageBudget;
+  const summary: WorkPackageCalculationSummary = {
+    id: workPackage.id,
+    code: workPackage.code,
+    name: workPackage.name,
+    service: workPackage.service,
+    selected: workPackage.selected,
+    pricingBasis: workPackage.pricingBasis,
+    mobilisationMode: workPackage.mobilisationMode,
+    days: calculation.siteDays,
+    startDay: workPackage.startDay,
+    proposalTotal: packageProposal,
+    budgetCost: packageBudget,
+    budgetMarkup: packageBudget ? pct(packageProfit / packageBudget) : 0,
+    materialTypes: calculation.repairMaterialCalcs.length
+  };
+  return { workPackage, calculation, proposalLines, budgetLines, summary, rateSchedule };
+}
+
+function selectedRepairMaterialBudget(input: ProjectInput, activePackages: PackageCalculation[], repairCatalog: RepairCatalog) {
+  const repairLines = activePackages.flatMap(({ workPackage }) => workPackage.service === "Repairs" ? workPackage.repairs?.repairLines ?? [] : []);
+  if (!repairLines.length) return { calculations: [] as MaterialCalc[], lines: [] as Line[] };
+  const companyExchange = num(input.exchangeRateToCompanyCurrency) > 0 ? num(input.exchangeRateToCompanyCurrency) : 1;
+  const quoteCatalog: RepairCatalog = { ...repairCatalog, materials: repairCatalog.materials.map((material) => ({ ...material, costPerUnit: money(material.costPerUnit / companyExchange) })) };
+  const calculations = calculateProjectRepairMaterials(repairLines, quoteCatalog);
+  const lines = calculations.map((calc) => ({ ...budgetVersion(line("Materials", calc.product, calc.rate, calc.unit, calc.quantity, 0, `Consolidated selected-package procurement: ${calc.formula}`, "Materials")), commercialGroup: "package" as const }));
+  return { calculations, lines };
+}
+
+function calculateSelectableProject(input: ProjectInput, rates: AdminRates, repairCatalog: RepairCatalog): ProjectCalculations {
+  const packages = input.workPackages.map((workPackage) => calculateWorkPackage(input, workPackage, rates, repairCatalog));
+  const commonInput: ProjectInput = {
+    ...input,
+    pricingMode: "combined",
+    selectionConfirmed: false,
+    workPackages: [],
+    sharedCosts: [],
+    includeGrinding: false,
+    includeScreeding: false,
+    includeRepairs: false,
+    grinding: { ...input.grinding, enabled: false },
+    screeding: { ...input.screeding, enabled: false },
+    repairs: { ...input.repairs, enabled: false },
+    bdmBonusRequired: false
+  };
+  const commonCalculation = calculateCombinedProject(commonInput, rates, repairCatalog);
+  const commonProposalLines = commonTagged([...commonCalculation.proposalLines]);
+  const commonBudgetLines = commonTagged([...commonCalculation.budgetLines]);
+  input.sharedCosts.forEach((item) => {
+    const proposal = discountedLine(line("Additional items", item.name || "Shared project cost", item.rate, item.unit, item.quantity, item.margin, "Shared project cost", item.plCategory ?? "Travel"), input.discountPercentage);
+    commonProposalLines.push(...commonTagged([proposal]));
+    commonBudgetLines.push(...commonTagged([budgetVersion(proposal)]));
+  });
+
+  const offeredProposalLines = [...commonProposalLines, ...packages.flatMap((item) => item.proposalLines)];
+  const offeredBudgetCore = [...commonBudgetLines, ...packages.flatMap((item) => item.budgetLines)];
+  const selectedPackages = packages.filter((item) => item.workPackage.selected);
+  const activePackages = input.selectionConfirmed ? selectedPackages : packages;
+  const commonIsActive = activePackages.length > 0;
+  const activeProposalLines = [...(commonIsActive ? commonProposalLines : []), ...activePackages.flatMap((item) => item.proposalLines)];
+  let activeBudgetCore = [...(commonIsActive ? commonBudgetLines : []), ...activePackages.flatMap((item) => item.budgetLines)];
+  const selectedMaterials = selectedRepairMaterialBudget(input, activePackages, repairCatalog);
+  if (input.selectionConfirmed && selectedMaterials.lines.length) {
+    activeBudgetCore = [
+      ...activeBudgetCore.filter((row) => !(row.plCategory === "Materials" && row.workPackageId && activePackages.some((item) => item.workPackage.id === row.workPackageId && item.workPackage.service === "Repairs"))),
+      ...selectedMaterials.lines
+    ];
+  }
+
+  const withBonus = (proposalLines: Line[], budgetLines: Line[]) => {
+    const proposalValue = total(proposalLines);
+    const bonus = input.bdmBonusRequired ? money(proposalValue * Math.max(0, num(rates.bdmBonusRate))) : 0;
+    return bonus ? [...budgetLines, commonTagged([budgetVersion(line("Labour", "BDM bonus", bonus, "item", 1, 0, "Optional BDM bonus", "Labour"))])[0]] : budgetLines;
+  };
+  const offeredBudgetLines = withBonus(offeredProposalLines, offeredBudgetCore);
+  const budgetLines = withBonus(activeProposalLines, activeBudgetCore);
+  const proposalLines = activeProposalLines;
+  const originalProposalTotal = total(proposalLines, "originalTotal");
+  const discountAmount = money(proposalLines.reduce((sum, row) => sum + row.discount, 0));
+  const proposalTotal = total(proposalLines);
+  const budgetCost = total(budgetLines);
+  const budgetProfit = money(proposalTotal - budgetCost);
+  const allOptionsProposalTotal = total(offeredProposalLines);
+  const allOptionsBudgetCost = total(offeredBudgetLines);
+  const selectedProposalLines = [...(selectedPackages.length ? commonProposalLines : []), ...selectedPackages.flatMap((item) => item.proposalLines)];
+  const selectedProposalTotal = total(selectedProposalLines);
+  const selectedBudgetCore = [...(selectedPackages.length ? commonBudgetLines : []), ...selectedPackages.flatMap((item) => item.budgetLines)];
+  const selectedConsolidatedMaterials = selectedRepairMaterialBudget(input, selectedPackages, repairCatalog);
+  const selectedBudgetLines = selectedConsolidatedMaterials.lines.length ? [
+    ...selectedBudgetCore.filter((row) => !(row.plCategory === "Materials" && row.workPackageId && selectedPackages.some((item) => item.workPackage.id === row.workPackageId && item.workPackage.service === "Repairs"))),
+    ...selectedConsolidatedMaterials.lines
+  ] : selectedBudgetCore;
+  const selectedBudgetCost = total(withBonus(selectedProposalLines, selectedBudgetLines));
+
+  let nextAutomaticStart = 1;
+  const phaseRows = activePackages.map((item) => {
+    const duration = Math.max(0, item.summary.days);
+    const startDay = item.workPackage.startDay > 0 ? Math.ceil(item.workPackage.startDay) : nextAutomaticStart;
+    const endDay = duration ? startDay + duration - 1 : startDay - 1;
+    nextAutomaticStart = Math.max(nextAutomaticStart, endDay + 1);
+    return { service: item.workPackage.service, calculatedDays: duration, inputDays: duration, startDay, endDay, concurrent: false, workPackageId: item.workPackage.id, label: `${item.workPackage.code}. ${item.workPackage.name}` };
+  });
+  phaseRows.forEach((row) => {
+    row.concurrent = phaseRows.some((other) => other !== row && row.calculatedDays > 0 && other.calculatedDays > 0 && row.startDay <= other.endDay && other.startDay <= row.endDay);
+  });
+  const siteDays = phaseRows.reduce((max, row) => Math.max(max, row.endDay), 0);
+  const activeServices = Array.from(new Set(activePackages.map((item) => item.workPackage.service)));
+  const rateSchedules = packages.flatMap((item) => item.rateSchedule ? [item.rateSchedule] : []);
+  const companyExchange = num(input.exchangeRateToCompanyCurrency) > 0 ? num(input.exchangeRateToCompanyCurrency) : 1;
+  const groupExchange = num(input.exchangeRateToGroupCurrency) > 0 ? num(input.exchangeRateToGroupCurrency) : 1;
+  const travelTotal = total(proposalLines.filter((row) => row.plCategory === "Travel"));
+  const haulageTotal = total(proposalLines.filter((row) => row.plCategory === "Haulage"));
+  const commonProposalTotal = total(commonProposalLines);
+  return {
+    costingModule: "remedial",
+    projectReference: input.projectReference,
+    client: input.client,
+    location: input.location,
+    serviceSummary: activeServices.join(" + ") || "Draft",
+    grindingDays: activePackages.filter((item) => item.workPackage.service === "Grinding").reduce((sum, item) => sum + item.summary.days, 0),
+    screedDays: activePackages.filter((item) => item.workPackage.service === "Screeding").reduce((sum, item) => sum + item.summary.days, 0),
+    repairDays: activePackages.filter((item) => item.workPackage.service === "Repairs").reduce((sum, item) => sum + item.summary.days, 0),
+    siteDays,
+    phaseRows,
+    proposalLines,
+    budgetLines,
+    repairMaterialCalcs: selectedMaterials.calculations,
+    originalProposalTotal,
+    discountAmount,
+    proposalTotal,
+    budgetCost,
+    budgetProfit,
+    budgetMargin: proposalTotal ? pct(budgetProfit / proposalTotal) : 0,
+    budgetMarkup: budgetCost ? pct(budgetProfit / budgetCost) : 0,
+    bdmBonusBudget: budgetLines.find((row) => row.item === "BDM bonus")?.cost ?? 0,
+    bdmBonusRate: Math.max(0, num(rates.bdmBonusRate)),
+    proposalCompanyCurrency: money(proposalTotal * companyExchange),
+    budgetCompanyCurrency: money(budgetCost * companyExchange),
+    proposalGroupCurrency: money(proposalTotal * groupExchange),
+    budgetGroupCurrency: money(budgetCost * groupExchange),
+    dailyRate: rateSchedules.length === 1 ? rateSchedules[0].productiveProposalRate : 0,
+    mobilisationRate: commonProposalTotal + total(proposalLines.filter((row) => row.workPackageId && isMobilisationLine(row))),
+    travelTotal,
+    haulageTotal,
+    standbyRate: rateSchedules.length === 1 ? rateSchedules[0].standbyProposalRate : 0,
+    pricingMode: "selectable",
+    selectionConfirmed: input.selectionConfirmed,
+    allOptionsProposalTotal,
+    selectedProposalTotal,
+    commonProposalTotal,
+    allOptionsBudgetCost,
+    selectedBudgetCost,
+    offeredProposalLines,
+    offeredBudgetLines,
+    packageSummaries: packages.map((item) => item.summary),
+    rateSchedules
+  };
+}
+
+export function calculateProject(input: ProjectInput, rates: AdminRates, repairCatalog: RepairCatalog = defaultRepairCatalog): ProjectCalculations {
+  if (input.pricingMode === "selectable" && input.workPackages.length) return calculateSelectableProject(input, rates, repairCatalog);
+  return calculateCombinedProject(input, rates, repairCatalog);
 }
 
 export function defaultActuals(calculations: ProjectCalculations): PLActuals {

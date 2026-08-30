@@ -1,10 +1,11 @@
 import type { ProjectInput } from "./types";
 
-export type BuilderStep = "Services" | "Project" | "Grinding" | "Screeding" | "Repairs" | "Phase Schedule" | "Project Management" | "Extras" | "Review";
+export type BuilderStep = "Services" | "Project" | "Packages" | "Grinding" | "Screeding" | "Repairs" | "Phase Schedule" | "Project Management" | "Extras" | "Review";
 
 export const builderStepLabels: Record<BuilderStep, string> = {
   Services: "Services",
   Project: "Project",
+  Packages: "Work Packages",
   Grinding: "Grinding",
   Screeding: "Screeding",
   Repairs: "Repairs",
@@ -15,6 +16,17 @@ export const builderStepLabels: Record<BuilderStep, string> = {
 };
 
 export function visibleBuilderSteps(input: ProjectInput): BuilderStep[] {
+  if (input.pricingMode === "selectable") {
+    return [
+      "Services",
+      "Project",
+      "Packages",
+      ...(input.workPackages.length > 1 ? ["Phase Schedule" as const] : []),
+      "Project Management",
+      "Extras",
+      "Review"
+    ];
+  }
   const serviceCount = Number(input.includeGrinding) + Number(input.includeScreeding) + Number(input.includeRepairs);
   return [
     "Services",

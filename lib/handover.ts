@@ -33,8 +33,9 @@ function lineCategory(line: Line): PLCategory {
 function aggregate(lines: Line[]) {
   const rows = new Map<string, HandoverRow>();
   lines.filter((line) => line.quantity || line.cost).forEach((line) => {
-    const key = `${line.item.toLowerCase()}|${line.unit.toLowerCase()}`;
-    const current = rows.get(key) ?? { description: line.item, quantity: 0, unit: line.unit, budget: 0 };
+    const description = line.workPackageCode ? `${line.workPackageCode}. ${line.workPackageName} - ${line.item}` : line.item;
+    const key = `${line.workPackageId ?? "common"}|${line.item.toLowerCase()}|${line.unit.toLowerCase()}`;
+    const current = rows.get(key) ?? { description, quantity: 0, unit: line.unit, budget: 0 };
     current.quantity += line.quantity;
     current.budget += line.cost;
     rows.set(key, current);
@@ -45,8 +46,9 @@ function aggregate(lines: Line[]) {
 function aggregateSubcontractors(lines: Line[]) {
   const rows = new Map<string, HandoverRow>();
   lines.filter((line) => line.quantity || line.cost).forEach((line) => {
-    const description = line.item.replace(/ mobilisation$/i, "").replace(/ price on site$/i, "");
-    const key = description.toLowerCase();
+    const baseDescription = line.item.replace(/ mobilisation$/i, "").replace(/ price on site$/i, "");
+    const description = line.workPackageCode ? `${line.workPackageCode}. ${line.workPackageName} - ${baseDescription}` : baseDescription;
+    const key = `${line.workPackageId ?? "common"}|${baseDescription.toLowerCase()}`;
     const current = rows.get(key) ?? { description, quantity: 1, unit: "package", budget: 0 };
     current.budget += line.cost;
     rows.set(key, current);

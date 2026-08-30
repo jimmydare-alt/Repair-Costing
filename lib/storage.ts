@@ -8,6 +8,7 @@ import { createBrowserSupabaseClient, isSupabaseConfigured } from "./supabaseCli
 import type { AdminRates, ChangeLogEntry, PLActuals, ProjectInput, ProjectNote, ProjectRecord, ProjectStatus, ProjectTimeEntry, QuoteRevision, RateVersionRecord, RepairCatalog } from "./types";
 import { calculateSurveyProject } from "./costing/survey/calculations";
 import { normaliseSurveyInput, normaliseSurveyRates } from "./costing/survey/defaults";
+import { normaliseWorkPackages } from "./workPackages";
 
 const PROJECTS_KEY = "face-gmbh-contracting-projects-v2";
 const RATES_KEY = "face-gmbh-contracting-rates-v2";
@@ -303,7 +304,7 @@ function log(existing: ChangeLogEntry[] | undefined, actor: string, action: stri
 }
 
 function makeRevision(input: ProjectInput, calculations: ProjectRecord["calculations"], rates: AdminRates, repairCatalog: RepairCatalog): QuoteRevision {
-  return { id: uid(), label: input.revision || "Revision", createdAt: now(), proposalTotal: calculations.proposalTotal, budgetCost: calculations.budgetCost, budgetMargin: calculations.budgetMargin, discountPercentage: input.costingModule === "survey" ? input.survey?.discountPercentage ?? 0 : input.discountPercentage, inputs: input, calculations, rates, repairCatalog, calculationVersion: input.costingModule === "survey" ? "survey-1.0" : "remedial-5.1" };
+  return { id: uid(), label: input.revision || "Revision", createdAt: now(), proposalTotal: calculations.proposalTotal, budgetCost: calculations.budgetCost, budgetMargin: calculations.budgetMargin, discountPercentage: input.costingModule === "survey" ? input.survey?.discountPercentage ?? 0 : input.discountPercentage, inputs: input, calculations, rates, repairCatalog, calculationVersion: input.costingModule === "survey" ? "survey-1.1" : "remedial-6.0" };
 }
 
 function normaliseRepairSubcontractors(input?: Partial<ProjectInput>) {
@@ -450,6 +451,11 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
     projectTravelProductionPeople: asNumber(input?.projectTravelProductionPeople, input?.projectTravelPeople ?? emptyInput.projectTravelProductionPeople),
     projectTravelSurveyorPeople: asNumber(input?.projectTravelSurveyorPeople, emptyInput.projectTravelSurveyorPeople),
     projectTravelOtherPeople: asNumber(input?.projectTravelOtherPeople, emptyInput.projectTravelOtherPeople),
+    pricingMode: input?.pricingMode === "selectable" ? "selectable" : "combined",
+    selectionConfirmed: Boolean(input?.selectionConfirmed),
+    sharedCosts: normaliseAdditionalItems(input?.sharedCosts),
+    workPackages: normaliseWorkPackages(input?.workPackages, { ...emptyInput, ...(input ?? {}) } as ProjectInput),
+    activeWorkPackageId: input?.activeWorkPackageId ?? "",
     phaseSchedule: {
       ...emptyInput.phaseSchedule,
       ...(input?.phaseSchedule ?? {}),
@@ -574,7 +580,7 @@ export async function saveProject(input: ProjectInput, rates: AdminRates, existi
     actuals: existing?.actuals,
     rateSnapshot: rates,
     repairCatalogSnapshot: repairCatalog,
-    calculationVersion: inputs.costingModule === "survey" ? "survey-1.0" : "remedial-5.1",
+    calculationVersion: inputs.costingModule === "survey" ? "survey-1.1" : "remedial-6.0",
     revisions: normaliseProjectStatus(status) === "Costing Complete"
       ? [...(existing?.revisions ?? []), makeRevision(inputs, calculations, rates, repairCatalog)]
       : existing?.revisions ?? [],

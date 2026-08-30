@@ -26,8 +26,9 @@ import { createSurveyProjectInput, syncSurveyProjectInput } from "@/lib/costing/
 import { chargeableJourneyDistance, effectiveReturnFlights } from "@/lib/travel";
 import { reportAppError } from "@/lib/monitoring";
 import { emptyDashboardFilters, filterDashboardProjects, type DashboardFilters } from "@/lib/dashboard";
+import { createSelectablePackages, createWorkPackage, packageCode, packageProjectInput, updatePackageFromProjectInput } from "@/lib/workPackages";
 import type { AppModuleKey, CurrencyCode, DistanceUnit, MembershipRole, Permission } from "@/lib/company";
-import type { AdditionalItem, AdminRates, AirportTransport, DestinationTransport, DetailTab, LabourMode, Line, PLCategory, PriceType, ProjectInput, ProjectRecord, ProjectStatus, ProjectTimeEntry, RateVersionRecord, RepairCatalog, RepairLabourMode, RepairLineItem, RepairMaterial, RepairMaterialCategory, RepairSubcontractor, RepairType, RepairUnitType, ScreedTeam, TravelMode, View } from "@/lib/types";
+import type { AdditionalItem, AdminRates, AirportTransport, DestinationTransport, DetailTab, LabourMode, Line, PLCategory, PriceType, ProjectInput, ProjectRecord, ProjectServiceKey, ProjectStatus, ProjectTimeEntry, RateVersionRecord, RemedialWorkPackage, RepairCatalog, RepairLabourMode, RepairLineItem, RepairMaterial, RepairMaterialCategory, RepairSubcontractor, RepairType, RepairUnitType, ScreedTeam, TravelMode, View } from "@/lib/types";
 
 const detailTabs: DetailTab[] = ["Summary", "Costing", "Commercial Review", "PM Handover", "Actual P&L", "Activity"];
 type AdminTab = "Rates" | "Survey Rates" | "Repair Types" | "Repair Materials";
@@ -48,6 +49,13 @@ function scrollToCostingSection(anchor = "costing-builder-content") {
 }
 
 function serviceFlags(input: ProjectInput) {
+  if (input.pricingMode === "selectable") {
+    return {
+      grinding: input.workPackages.some((item) => item.service === "Grinding"),
+      screeding: input.workPackages.some((item) => item.service === "Screeding"),
+      repairs: input.workPackages.some((item) => item.service === "Repairs")
+    };
+  }
   return {
     grinding: Boolean(input.includeGrinding && input.grinding.enabled),
     screeding: Boolean(input.includeScreeding && input.screeding.enabled),
@@ -507,7 +515,7 @@ export default function Workspace() {
   const confirmNavigation = () => !hasUnsavedWork || confirm(`${hasUnsavedAdminChanges ? "Admin data" : "This costing"} has unsaved changes. Leave and discard them?`);
   const navigateBuilder = (step: "Services" | "Grinding" | "Screeding" | "Repairs") => {
     if (view === "New Project") {
-      setInput({ ...input, uiProgress: { ...input.uiProgress, builderStep: step } });
+      setInput({ ...input, uiProgress: { ...input.uiProgress, builderStep: input.pricingMode === "selectable" && step !== "Services" ? "Packages" : step } });
       scrollToCostingSection();
       return;
     }
@@ -953,16 +961,25 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
   };
   const nextStep = () => setStep(adjacentBuilderStep(input, 1));
   const previousStep = () => setStep(adjacentBuilderStep(input, -1));
-  const readiness = repairReadiness(input, repairCatalog);
-  const grindingChecks = grindingReadiness(input);
-  const screedChecks = screedReadiness(input);
+  const selectable = input.pricingMode === "selectable";
+  const readiness = selectable ? { blockers: [], warnings: [] } : repairReadiness(input, repairCatalog);
+  const grindingChecks = selectable ? { blockers: [], warnings: [] } : grindingReadiness(input);
+  const screedChecks = selectable ? { blockers: [], warnings: [] } : screedReadiness(input);
+  const packageChecks = selectable ? [
+    ...(!input.workPackages.length ? ["Add at least one work package."] : []),
+    ...input.workPackages.filter((item) => !item.name.trim()).map((item) => `${item.code || "Package"} needs a package name.`),
+    ...input.workPackages.filter((item, index, items) => items.findIndex((candidate) => candidate.code.trim().toLowerCase() === item.code.trim().toLowerCase()) !== index).map((item) => `Package code ${item.code || "(blank)"} is duplicated.`),
+    ...(input.selectionConfirmed && !input.workPackages.some((item) => item.selected) ? ["Selection is confirmed but no work package is selected."] : []),
+    ...input.workPackages.filter((item) => (item.productiveRateOverride != null || item.standbyRateOverride != null) && !item.rateOverrideReason.trim()).map((item) => `${item.code} needs a reason for its rate override.`)
+  ] : [];
   const exactMarkup = calculations.budgetCost ? calculations.budgetProfit / calculations.budgetCost * 100 : 0;
   const projectChecks = projectReadiness(input, exactMarkup, duplicateReference, calculations.proposalTotal > 0 || calculations.budgetCost > 0, repairCatalog);
-  const approvalBlockers = [...projectChecks.blockers, ...grindingChecks.blockers, ...screedChecks.blockers, ...readiness.blockers];
-  const issueStep = (issue: string): BuilderStep => issue.toLowerCase().includes("grind") ? "Grinding" : issue.toLowerCase().includes("screed") ? "Screeding" : issue.toLowerCase().includes("repair") || issue.toLowerCase().includes("material") ? "Repairs" : issue.toLowerCase().includes("programme") || issue.toLowerCase().includes("phase") ? "Phase Schedule" : "Project";
+  const approvalBlockers = [...projectChecks.blockers, ...grindingChecks.blockers, ...screedChecks.blockers, ...readiness.blockers, ...packageChecks];
+  const issueStep = (issue: string): BuilderStep => selectable && /package|selection|rate override/i.test(issue) ? "Packages" : issue.toLowerCase().includes("grind") ? "Grinding" : issue.toLowerCase().includes("screed") ? "Screeding" : issue.toLowerCase().includes("repair") || issue.toLowerCase().includes("material") ? "Repairs" : issue.toLowerCase().includes("programme") || issue.toLowerCase().includes("phase") ? "Phase Schedule" : "Project";
   const stepState = (step: BuilderStep) => {
     if (step === "Services") return input.includeGrinding || input.includeScreeding || input.includeRepairs ? "Complete" : "Needs attention";
     if (step === "Project") return input.projectReference.trim() && input.client.trim() && input.location.trim() ? "Complete" : "In progress";
+    if (step === "Packages") return packageChecks.length ? "Needs attention" : "Complete";
     if (step === "Grinding") return grindingChecks.blockers.length ? "Needs attention" : "Complete";
     if (step === "Screeding") return screedChecks.blockers.length ? "Needs attention" : "Complete";
     if (step === "Repairs") return readiness.blockers.length ? "Needs attention" : "Complete";
@@ -1013,7 +1030,8 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
         <div className="p-5">
           {builderStep === "Services" && <ServiceStep input={input} setInput={setInput} setStep={setStep} />}
           {builderStep === "Project" && <ProjectBasics input={input} setInput={setInput} duplicateReference={duplicateReference} />}
-          {builderStep === "Phase Schedule" && <PhaseScheduleStep input={input} setInput={setInput} repairCatalog={repairCatalog} />}
+          {builderStep === "Packages" && <WorkPackagesStep input={input} setInput={setInput} rates={rates} repairCatalog={repairCatalog} calculations={calculations} />}
+          {builderStep === "Phase Schedule" && <PhaseScheduleStep input={input} setInput={setInput} repairCatalog={repairCatalog} calculations={calculations} />}
           {builderStep === "Grinding" && <GrindingForm input={input} setInput={setInput} rates={rates} />}
           {builderStep === "Screeding" && <ScreedForm input={input} setInput={setInput} rates={rates} />}
           {builderStep === "Repairs" && <RepairsForm input={input} setInput={setInput} repairCatalog={repairCatalog} rates={rates} projectMaterialCalcs={calculations.repairMaterialCalcs} />}
@@ -1038,8 +1056,24 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
 
 function ServiceStep({ input, setInput, setStep }: { input: ProjectInput; setInput: (input: ProjectInput) => void; setStep: (step: BuilderStep) => void }) {
   const service = (key: "includeGrinding" | "includeScreeding" | "includeRepairs", title: string, detail: string, step: "Grinding" | "Screeding" | "Repairs") => {
-    const checked = input[key];
+    const serviceName = title as ProjectServiceKey;
+    const checked = input.pricingMode === "selectable" ? input.workPackages.some((item) => item.service === serviceName) : input[key];
     const toggleService = () => {
+      if (input.pricingMode === "selectable") {
+        if (checked && !window.confirm(`Remove every ${serviceName} package and its costing data?`)) return;
+        const workPackages = checked
+          ? input.workPackages.filter((item) => item.service !== serviceName)
+          : [...input.workPackages, createWorkPackage(serviceName, input, input.workPackages.length)];
+        setInput({
+          ...input,
+          workPackages,
+          activeWorkPackageId: workPackages.some((item) => item.id === input.activeWorkPackageId) ? input.activeWorkPackageId : workPackages[0]?.id ?? "",
+          includeGrinding: workPackages.some((item) => item.service === "Grinding"),
+          includeScreeding: workPackages.some((item) => item.service === "Screeding"),
+          includeRepairs: workPackages.some((item) => item.service === "Repairs")
+        });
+        return;
+      }
       const next = { ...input, [key]: !checked } as ProjectInput;
       if (key === "includeGrinding") next.grinding = { ...next.grinding, enabled: !checked };
       if (key === "includeScreeding") next.screeding = { ...next.screeding, enabled: !checked };
@@ -1053,7 +1087,7 @@ function ServiceStep({ input, setInput, setStep }: { input: ProjectInput; setInp
           <button type="button" onClick={toggleService} className={`rounded-full px-3 py-1 text-xs font-bold ${checked ? "bg-sky-700 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>{checked ? "Selected" : "Add"}</button>
         </div>
         <p className="mt-2 text-sm text-slate-600">{detail}</p>
-        {checked && <button type="button" onClick={() => setStep(step)} className="mt-4 rounded-md bg-white px-3 py-2 text-sm font-bold text-sky-800 ring-1 ring-sky-200">Open detail</button>}
+        {checked && <button type="button" onClick={() => setStep(input.pricingMode === "selectable" ? "Packages" : step)} className="mt-4 rounded-md bg-white px-3 py-2 text-sm font-bold text-sky-800 ring-1 ring-sky-200">{input.pricingMode === "selectable" ? "Open packages" : "Open detail"}</button>}
       </div>
     );
   };
@@ -1061,7 +1095,15 @@ function ServiceStep({ input, setInput, setStep }: { input: ProjectInput; setInp
     <div>
       <div className="mb-5">
         <h3 className="text-2xl font-bold text-slate-950">What are we pricing?</h3>
-        <p className="mt-1 text-sm text-slate-600">Start with the services. The builder will only show the sections you choose.</p>
+        <p className="mt-1 text-sm text-slate-600">Choose one combined price for the whole job, or separate selectable work packages when the client may award only part of the scope.</p>
+      </div>
+      <div className="mb-5 grid gap-3 md:grid-cols-2">
+        <Choice active={input.pricingMode !== "selectable"} title="Combined project price" detail="One overall proposal and budget. This keeps the existing costing workflow unchanged." onClick={() => setInput({ ...input, pricingMode: "combined" })} />
+        <Choice active={input.pricingMode === "selectable"} title="Selectable work packages" detail="Each package is priced independently; shared mobilisation and project costs are charged once." onClick={() => {
+          const workPackages = input.workPackages.length ? input.workPackages : createSelectablePackages(input);
+          const sharedCosts = input.sharedCosts.length ? input.sharedCosts : [{ name: "Common mobilisation and demobilisation", rate: 0, unit: "item", quantity: 1, margin: 0.3, plCategory: "Travel" as PLCategory }];
+          setInput({ ...input, pricingMode: "selectable", workPackages, sharedCosts, activeWorkPackageId: input.activeWorkPackageId || workPackages[0]?.id || "" });
+        }} />
       </div>
       <div className="grid gap-4 lg:grid-cols-3">
         {service("includeGrinding", "Grinding", "Grinding labour, subcontract team, generators, grinders, vacuums, tooling and consumables.", "Grinding")}
@@ -1069,7 +1111,7 @@ function ServiceStep({ input, setInput, setStep }: { input: ProjectInput; setInp
         {service("includeRepairs", "Repairs", "Joint repair resources, repair material calculator, subcontractors and haulage.", "Repairs")}
       </div>
       <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-        Recommended flow: choose services, add project details, confirm the phase schedule, complete each service, add shared project management, extras and travel, then complete the commercial review.
+        {input.pricingMode === "selectable" ? "Recommended flow: choose the services above, create and price each work package, confirm any package selections, then add project-wide management and extras once." : "Recommended flow: choose services, add project details, confirm the phase schedule, complete each service, add shared project management and extras, then complete the commercial review."}
       </div>
     </div>
   );
@@ -1100,7 +1142,82 @@ function ProjectBasics({ input, setInput, duplicateReference }: { input: Project
   );
 }
 
-function PhaseScheduleStep({ input, setInput, repairCatalog }: { input: ProjectInput; setInput: (input: ProjectInput) => void; repairCatalog: RepairCatalog }) {
+function WorkPackagesStep({ input, setInput, rates, repairCatalog, calculations }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates; repairCatalog: RepairCatalog; calculations: ReturnType<typeof calculateProject> }) {
+  const packages = input.workPackages;
+  const active = packages.find((item) => item.id === input.activeWorkPackageId) ?? packages[0];
+  const setPackages = (workPackages: RemedialWorkPackage[], activeWorkPackageId = input.activeWorkPackageId) => setInput({
+    ...input,
+    workPackages,
+    activeWorkPackageId: workPackages.some((item) => item.id === activeWorkPackageId) ? activeWorkPackageId : workPackages[0]?.id ?? "",
+    includeGrinding: workPackages.some((item) => item.service === "Grinding"),
+    includeScreeding: workPackages.some((item) => item.service === "Screeding"),
+    includeRepairs: workPackages.some((item) => item.service === "Repairs")
+  });
+  const patchPackage = (id: string, next: Partial<RemedialWorkPackage>) => setPackages(packages.map((item) => item.id === id ? { ...item, ...next } : item), id);
+  const addPackage = (service: ProjectServiceKey) => {
+    let index = 0;
+    const usedCodes = new Set(packages.map((item) => item.code.trim().toLowerCase()));
+    while (usedCodes.has(packageCode(index).toLowerCase())) index += 1;
+    const added = createWorkPackage(service, input, index);
+    setPackages([...packages, added], added.id);
+  };
+  const duplicatePackage = () => {
+    if (!active) return;
+    let index = 0;
+    const usedCodes = new Set(packages.map((item) => item.code.trim().toLowerCase()));
+    while (usedCodes.has(packageCode(index).toLowerCase())) index += 1;
+    const base = createWorkPackage(active.service, input, index);
+    const duplicate = { ...JSON.parse(JSON.stringify(active)) as RemedialWorkPackage, id: base.id, code: base.code, name: `${active.name} copy`, selected: true, startDay: 0 };
+    setPackages([...packages, duplicate], duplicate.id);
+  };
+  const activeInput = active ? packageProjectInput(input, active) : null;
+  const updateActiveInput = (next: ProjectInput) => active && setPackages(packages.map((item) => item.id === active.id ? updatePackageFromProjectInput(item, next) : item), active.id);
+  const activeMaterialCalcs = activeInput ? calculateProjectRepairMaterials(activeInput.repairs.repairLines, repairCatalog) : [];
+  const activeSummary = calculations.packageSummaries?.find((item) => item.id === active?.id);
+  const activeRate = calculations.rateSchedules?.find((item) => item.workPackageId === active?.id);
+  return <div className="grid gap-5">
+    <div><h3 className="text-2xl font-bold text-slate-950">Selectable work packages</h3><p className="mt-1 text-sm text-slate-600">Price every option independently. Project management, common mobilisation and project extras are added once outside these packages.</p></div>
+    <div className="app-card border-sky-200 bg-sky-50 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3"><div><h4 className="font-bold text-slate-950">Client selection</h4><p className="mt-1 text-sm text-slate-600">Leave unconfirmed while quoting all options. Confirm only after the client chooses the packages used for the live budget and handover.</p></div><Toggle label="Selection Confirmed" checked={input.selectionConfirmed} onChange={(selectionConfirmed) => setInput({ ...input, selectionConfirmed })} /></div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">{packages.map((item) => <label className={`flex min-h-12 items-center gap-3 rounded-lg border bg-white px-3 py-2 text-sm font-bold ${input.selectionConfirmed && item.selected ? "border-emerald-300" : "border-slate-200"}`} key={item.id}><input className="h-5 w-5" type="checkbox" checked={item.selected} onChange={(event) => patchPackage(item.id, { selected: event.target.checked })} /><span>{item.code}. {item.name}</span></label>)}</div>
+    </div>
+    <div className="grid gap-4 xl:grid-cols-[290px_minmax(0,1fr)]">
+      <aside className="grid content-start gap-3">
+        <div className="app-card p-3"><div className="mb-2 text-[11px] font-black uppercase text-slate-500">Packages</div><div className="grid gap-2">{packages.map((item) => {
+          const summary = calculations.packageSummaries?.find((row) => row.id === item.id);
+          return <button className={`rounded-lg border p-3 text-left ${active?.id === item.id ? "border-sky-600 bg-sky-50" : "border-slate-200 bg-white hover:bg-slate-50"}`} onClick={() => setInput({ ...input, activeWorkPackageId: item.id })} key={item.id}><div className="flex items-center justify-between gap-2"><b>{item.code}. {item.name}</b><span className="rounded-full bg-slate-100 px-2 py-1 text-[10px] font-black uppercase text-slate-600">{item.service}</span></div><div className="mt-2 flex justify-between text-xs text-slate-500"><span>{item.pricingBasis === "day_rate" ? "Day rate" : "Fixed price"}</span><b className="text-slate-800">{money(summary?.proposalTotal ?? 0)}</b></div></button>;
+        })}{!packages.length && <div className="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500">Add the first package below.</div>}</div></div>
+        <div className="app-card p-3"><div className="mb-2 text-[11px] font-black uppercase text-slate-500">Add package</div><div className="grid gap-2">{(["Repairs", "Grinding", "Screeding"] as ProjectServiceKey[]).map((service) => <button className="secondary-button justify-start" key={service} onClick={() => addPackage(service)}>Add {service}</button>)}</div></div>
+      </aside>
+      <div className="grid min-w-0 gap-5">
+        {active && activeInput ? <>
+          <section className="app-card-strong"><div className="panel-heading flex flex-wrap items-center justify-between gap-3"><div><div className="text-xs font-black uppercase text-sky-700">Package {active.code}</div><h3 className="mt-1 text-xl font-semibold">{active.name}</h3></div><div className="flex flex-wrap gap-2"><button className="secondary-button" onClick={duplicatePackage}>Duplicate</button><button className="secondary-button border-red-200 text-red-700" onClick={() => { if (window.confirm(`Remove package ${active.code}. ${active.name} and all of its costing data?`)) setPackages(packages.filter((item) => item.id !== active.id)); }}>Remove</button></div></div><div className="grid gap-4 p-5 sm:grid-cols-2 xl:grid-cols-4"><Text label="Package Code" value={active.code} onChange={(code) => patchPackage(active.id, { code })} /><Text label="Package Name" value={active.name} onChange={(name) => patchPackage(active.id, { name })} /><Select label="Pricing Basis" value={active.pricingBasis === "day_rate" ? "Day Rate" : "Fixed Price"} options={active.service === "Grinding" ? ["Fixed Price", "Day Rate"] : ["Fixed Price"]} onChange={(value) => patchPackage(active.id, { pricingBasis: value === "Day Rate" ? "day_rate" : "fixed" })} /><Select label="Mobilisation" value={active.mobilisationMode === "shared" ? "Common / Shared" : active.mobilisationMode === "separate" ? "Separate in package" : "Not charged"} options={["Common / Shared", "Separate in package", "Not charged"]} onChange={(value) => patchPackage(active.id, { mobilisationMode: value === "Separate in package" ? "separate" : value === "Not charged" ? "none" : "shared" })} /><div className="sm:col-span-2 xl:col-span-4"><Text label="Package Description" value={active.description} onChange={(description) => patchPackage(active.id, { description })} /></div></div></section>
+          {active.pricingBasis === "day_rate" && <section className="app-card-strong"><div className="panel-heading"><h3 className="text-xl font-semibold">Commercial rate schedule</h3><p className="text-sm text-slate-500">The productive and stand-down rates are calculated from the detailed package. Overrides remain visible and require a reason.</p></div><div className="grid gap-4 p-5 sm:grid-cols-2 xl:grid-cols-4"><Mini label="Calculated Productive / Day" value={money(activeRate?.productiveProposalRate ?? 0)} /><Mini label="Mobilisation" value={money(activeRate?.mobilisationProposal ?? 0)} /><Mini label="Calculated Stand-Down / Day" value={money(activeRate?.standbyProposalRate ?? 0)} /><NumberInput label="Expected Stand-Down Days" value={active.expectedStandDownDays} onChange={(expectedStandDownDays) => patchPackage(active.id, { expectedStandDownDays })} /><NumberInput label="Productive Rate Override" value={active.productiveRateOverride ?? activeRate?.productiveProposalRate ?? 0} onChange={(value) => patchPackage(active.id, { productiveRateOverride: value === activeRate?.productiveProposalRate ? null : value })} /><NumberInput label="Stand-Down Rate Override" value={active.standbyRateOverride ?? activeRate?.standbyProposalRate ?? 0} onChange={(value) => patchPackage(active.id, { standbyRateOverride: value === activeRate?.standbyProposalRate ? null : value })} /><div className="sm:col-span-2"><Text label="Override Reason" value={active.rateOverrideReason} onChange={(rateOverrideReason) => patchPackage(active.id, { rateOverrideReason })} /></div></div></section>}
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Package Proposal" value={money(activeSummary?.proposalTotal ?? 0)} /><Metric label="Package Budget" value={money(activeSummary?.budgetCost ?? 0)} /><Metric label="Markup" value={percent(activeSummary?.budgetMarkup ?? 0)} /><Metric label="Duration" value={`${activeSummary?.days ?? 0} days`} /></div>
+          {active.service === "Grinding" && <GrindingForm input={activeInput} setInput={updateActiveInput} rates={rates} showStandby={active.pricingBasis === "day_rate"} />}
+          {active.service === "Screeding" && <ScreedForm input={activeInput} setInput={updateActiveInput} rates={rates} />}
+          {active.service === "Repairs" && <RepairsForm input={activeInput} setInput={updateActiveInput} repairCatalog={repairCatalog} rates={rates} projectMaterialCalcs={activeMaterialCalcs} />}
+          <AdditionalItems title={`${active.code}. ${active.name} additional items`} items={active.additionalItems} onChange={(additionalItems) => patchPackage(active.id, { additionalItems })} />
+        </> : <div className="app-card p-8 text-center text-sm text-slate-500">Add a package to begin pricing.</div>}
+      </div>
+    </div>
+    <AdditionalItems title="Common mobilisation and shared costs" items={input.sharedCosts} onChange={(sharedCosts) => setInput({ ...input, sharedCosts })} />
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="All Options Offered" value={money(calculations.allOptionsProposalTotal ?? calculations.proposalTotal)} /><Metric label="Common Costs" value={money(calculations.commonProposalTotal ?? 0)} /><Metric label="Selected Contract Value" value={input.selectionConfirmed ? money(calculations.selectedProposalTotal ?? 0) : "Not confirmed"} /><Metric label="Packages" value={String(packages.length)} /></div>
+  </div>;
+}
+
+function PhaseScheduleStep({ input, setInput, repairCatalog, calculations }: { input: ProjectInput; setInput: (input: ProjectInput) => void; repairCatalog: RepairCatalog; calculations: ReturnType<typeof calculateProject> }) {
+  if (input.pricingMode === "selectable") {
+    const rows = calculations.phaseRows ?? [];
+    const maxDay = Math.max(1, ...rows.map((row) => row.endDay));
+    let automaticStart = 1;
+    return <div className="grid gap-5"><div><h3 className="text-2xl font-bold text-slate-950">Package programme</h3><p className="mt-1 text-sm text-slate-600">Durations come from each package. Leave start day at 0 for automatic sequencing, or enter a day to create an overlap.</p></div><div className="grid gap-4">{input.workPackages.map((item) => {
+      const row = rows.find((candidate) => candidate.workPackageId === item.id);
+      const autoForThis = automaticStart;
+      automaticStart += row?.calculatedDays ?? 0;
+      return <div className="grid gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4 lg:grid-cols-[minmax(190px,1fr)_140px_180px_180px] lg:items-center" key={item.id}><div><div className="font-bold text-slate-950">{item.code}. {item.name}</div><div className="text-xs text-slate-500">{item.service}</div></div><Mini label="Duration" value={`${row?.calculatedDays ?? 0} days`} /><NumberInput label="Start Day (0 = automatic)" value={item.startDay} onChange={(startDay) => setInput({ ...input, workPackages: input.workPackages.map((candidate) => candidate.id === item.id ? { ...candidate, startDay: Math.max(0, Math.ceil(startDay)) } : candidate) })} /><Mini label="Programme" value={row?.calculatedDays ? `Day ${row.startDay || autoForThis} to ${row.endDay}` : "No days entered"} /></div>;
+    })}</div><div className="grid gap-4 rounded-xl border border-sky-200 bg-sky-50 p-4 sm:grid-cols-2"><Mini label="Overall Project Duration" value={`${calculations.siteDays} days`} /><Mini label="Overlap" value={rows.some((row) => row.concurrent) ? "Packages overlap" : "Sequential"} /></div></div>;
+  }
   const schedule = calculatePhaseSchedule(input, repairCatalog);
   const maxDay = Math.max(1, schedule.calculatedProjectDays);
   return (
@@ -1259,11 +1376,16 @@ function ReviewStep({ calculations, input, setInput }: { calculations: ReturnTyp
         <p className="mt-1 text-sm text-slate-600">Check the service totals, markup, optional bonus and discount before saving.</p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric label="Proposal" value={money(calculations.proposalTotal)} />
+        <Metric label={input.pricingMode === "selectable" ? "Active Contract Value" : "Proposal"} value={money(calculations.proposalTotal)} />
         <Metric label="Budget" value={money(calculations.budgetCost)} />
         <Metric label="Markup" value={percent(calculations.budgetMarkup)} />
         <Metric label="Site Days" value={String(calculations.siteDays)} />
       </div>
+      {input.pricingMode === "selectable" && <>
+        <div className="grid gap-4 sm:grid-cols-3"><Metric label="All Options Offered" value={money(calculations.allOptionsProposalTotal ?? 0)} /><Metric label="Common Costs" value={money(calculations.commonProposalTotal ?? 0)} /><Metric label="Selected Contract" value={input.selectionConfirmed ? money(calculations.selectedProposalTotal ?? 0) : "Not confirmed"} /></div>
+        <div className="table-shell"><table><thead><tr><th>Package</th><th>Service</th><th>Basis</th><th>Status</th><th>Budget</th><th>Proposal</th><th>Markup</th></tr></thead><tbody>{calculations.packageSummaries?.map((item) => <tr key={item.id}><td className="font-bold">{item.code}. {item.name}</td><td>{item.service}</td><td>{item.pricingBasis === "day_rate" ? "Day rate" : "Fixed price"}</td><td>{!input.selectionConfirmed ? "Offered" : item.selected ? "Selected" : "Not selected"}</td><td>{money(item.budgetCost)}</td><td>{money(item.proposalTotal)}</td><td className={item.budgetMarkup < 25 ? "font-bold text-amber-700" : "font-bold text-emerald-700"}>{percent(item.budgetMarkup)}</td></tr>)}</tbody></table></div>
+        {!!calculations.rateSchedules?.length && <div className="table-shell"><table><thead><tr><th>Rate Schedule</th><th>Productive / Day</th><th>Mobilisation</th><th>Stand-Down / Day</th><th>Expected Stand-Down</th><th>Override</th></tr></thead><tbody>{calculations.rateSchedules.map((row) => <tr key={row.workPackageId ?? row.workPackageName}><td className="font-bold">{row.workPackageCode ? `${row.workPackageCode}. ` : ""}{row.workPackageName}</td><td>{money(row.productiveProposalRate)}</td><td>{money(row.mobilisationProposal)}</td><td>{money(row.standbyProposalRate)}</td><td>{row.expectedStandDownDays} days</td><td>{row.productiveRateOverridden || row.standbyRateOverridden ? row.overrideReason || "Reason required" : "Calculated"}</td></tr>)}</tbody></table></div>}
+      </>}
       <div className={`rounded-xl border p-4 text-sm ${markupWarnings.length ? "border-amber-200 bg-amber-50 text-amber-950" : "border-emerald-200 bg-emerald-50 text-emerald-950"}`}>
         <div className="mb-2 font-bold uppercase">{markupWarnings.length ? "Markup checks to review" : "Markup checks passed"}</div>
         {markupWarnings.length ? <div className="grid gap-1">{markupWarnings.map((warning) => <div key={warning}>{warning}</div>)}</div> : <div>All active proposal and P&L categories are at or above 25% markup.</div>}
@@ -1336,7 +1458,7 @@ function DetailTabs({ tab, setTab, input }: { tab: DetailTab; setTab: (tab: Deta
   return <div className="flex flex-wrap gap-2 rounded-xl bg-white p-2 shadow-sm">{visibleTabs.map((item) => <button key={item} onClick={() => setTab(item)} className={`rounded-md px-3 py-2 text-sm font-bold ${tab === item ? "bg-sky-700 text-white" : "bg-slate-100 text-slate-800"}`}>{item === "PM Handover" ? "Delivery Summary" : item}</button>)}</div>;
 }
 
-function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates }) {
+function GrindingForm({ input, setInput, rates, showStandby = false }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates; showStandby?: boolean }) {
   const g = input.grinding;
   const [grindingPage, setGrindingPageState] = useState<GrindingPage>(input.uiProgress?.grindingPage ?? "Programme");
   const patch = (next: Partial<typeof g>) => setInput({ ...input, grinding: { ...g, ...next } });
@@ -1427,7 +1549,7 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
             {labourModeButton("Both", "both", productionMode, (value) => patch({ productionLabourMode: value }))}
           </div>
         </div>
-        {usesProductionSubcontract && <SubcontractLabourPanel items={g.productionSubcontractors} calculatedDays={estimatedDays} onChange={(items) => patch({ productionSubcontractors: items })} title="Grinding Production Subcontractors" description="Add each grinding subcontractor separately. Their price should include labour, equipment and normal grinding tools." addLabel="Add Grinding Subcontractor" defaultName="Grinding subcontractor" />}
+        {usesProductionSubcontract && <SubcontractLabourPanel items={g.productionSubcontractors} calculatedDays={estimatedDays} onChange={(items) => patch({ productionSubcontractors: items })} title="Grinding Production Subcontractors" description="Add each grinding subcontractor separately. Their price should include labour, equipment and normal grinding tools." addLabel="Add Grinding Subcontractor" defaultName="Grinding subcontractor" showStandby={showStandby} />}
         {usesProductionInHouse && <div className="app-card-strong">
           <div className="panel-heading"><h2 className="text-xl font-semibold">In-House Grinding Labour</h2><p className="text-sm text-slate-500">Uses the shared production labour rates from Admin. Hotel nights are per team, then multiplied by men.</p></div>
           <div className="grid gap-4 p-5">
@@ -1455,7 +1577,7 @@ function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInpu
             {labourModeButton("Both", "both", surveyorMode, (value) => patch({ surveyorLabourMode: value }))}
           </div>
         </div>
-        {usesSurveyorSubcontract && <SubcontractLabourPanel items={g.surveyorSubcontractors} calculatedDays={estimatedDays} onChange={(items) => patch({ surveyorSubcontractors: items })} title="Surveyor Subcontractors" description="Add subcontracted surveyor/supervisor support separately from production subcontractors." addLabel="Add Surveyor Subcontractor" defaultName="Surveyor subcontractor" />}
+        {usesSurveyorSubcontract && <SubcontractLabourPanel items={g.surveyorSubcontractors} calculatedDays={estimatedDays} onChange={(items) => patch({ surveyorSubcontractors: items })} title="Surveyor Subcontractors" description="Add subcontracted surveyor/supervisor support separately from production subcontractors." addLabel="Add Surveyor Subcontractor" defaultName="Surveyor subcontractor" showStandby={showStandby} />}
         {usesSurveyorInHouse && <div className="app-card-strong">
           <div className="panel-heading"><h2 className="text-xl font-semibold">In-House Surveyor Labour</h2><p className="text-sm text-slate-500">Uses the surveyor labour rates from Admin. Hotel nights are per team, then multiplied by surveyors.</p></div>
           <div className="grid gap-4 p-5">
@@ -2186,10 +2308,10 @@ function InHouseLabourPanel({ input, officeCount, distanceUnit, rates, calculate
   );
 }
 
-function SubcontractLabourPanel({ items, calculatedDays, onChange, title = "Subcontract Labour", description = "Add each subcontractor separately. Mobilisation stays in subcontract costs, not travel.", addLabel = "Add Additional Subcontractor", defaultName = "Subcontractor" }: { items: RepairSubcontractor[]; calculatedDays: number; onChange: (items: RepairSubcontractor[]) => void; title?: string; description?: string; addLabel?: string; defaultName?: string }) {
-  const currentItems = items.length ? items : [{ name: defaultName, priceType: "lump sum" as PriceType, rate: 0, days: calculatedDays || 0, margin: 0.3, mobilisationCost: 0, mobilisations: 0, mobilisationMargin: 0.3 }];
+function SubcontractLabourPanel({ items, calculatedDays, onChange, title = "Subcontract Labour", description = "Add each subcontractor separately. Mobilisation stays in subcontract costs, not travel.", addLabel = "Add Additional Subcontractor", defaultName = "Subcontractor", showStandby = false }: { items: RepairSubcontractor[]; calculatedDays: number; onChange: (items: RepairSubcontractor[]) => void; title?: string; description?: string; addLabel?: string; defaultName?: string; showStandby?: boolean }) {
+  const currentItems = items.length ? items : [{ name: defaultName, priceType: "lump sum" as PriceType, rate: 0, days: calculatedDays || 0, margin: 0.3, mobilisationCost: 0, mobilisations: 0, mobilisationMargin: 0.3, standbyRate: 0, standbyMargin: 0.3 }];
   const update = (index: number, next: Partial<RepairSubcontractor>) => onChange(currentItems.map((item, i) => i === index ? { ...item, ...next } : item));
-  const add = () => onChange([...currentItems, { name: defaultName, priceType: "lump sum", rate: 0, days: calculatedDays || 0, margin: 0.3, mobilisationCost: 0, mobilisations: 0, mobilisationMargin: 0.3 }]);
+  const add = () => onChange([...currentItems, { name: defaultName, priceType: "lump sum", rate: 0, days: calculatedDays || 0, margin: 0.3, mobilisationCost: 0, mobilisations: 0, mobilisationMargin: 0.3, standbyRate: 0, standbyMargin: 0.3 }]);
   return (
     <div className="app-card-strong">
       <div className="panel-heading">
@@ -2220,6 +2342,7 @@ function SubcontractLabourPanel({ items, calculatedDays, onChange, title = "Subc
                 <NumberInput label="Mobilisation Markup %" value={item.mobilisationMargin * 100} onChange={(v) => update(index, { mobilisationMargin: v / 100 })} />
                 <Mini label="Subcontract Sell" value={money((labourCost * (1 + item.margin)) + (mobilisationCost * (1 + item.mobilisationMargin)))} />
               </div>
+              {showStandby && <div className="grid gap-4 rounded-lg border border-sky-200 bg-sky-50 p-3 sm:grid-cols-3"><NumberInput label="Stand-Down Budget / Day" value={item.standbyRate ?? 0} onChange={(standbyRate) => update(index, { standbyRate })} /><NumberInput label="Stand-Down Markup %" value={(item.standbyMargin ?? item.margin) * 100} onChange={(value) => update(index, { standbyMargin: value / 100 })} /><Mini label="Stand-Down Sell / Day" value={money((item.standbyRate ?? 0) * (1 + (item.standbyMargin ?? item.margin)))} /></div>}
             </div>
           );
         })}
@@ -2336,10 +2459,11 @@ function ProjectDetail({ project, tab, setTab, actuals, setActuals, saveActuals,
 function SavedProjectSummary({ project }: { project: ProjectRecord }) {
   const calculations = project.calculations;
   return <div className="grid gap-5">
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Sell Value" value={money(calculations.proposalTotal)} /><Metric label="Budget" value={money(calculations.budgetCost)} /><Metric label="Markup" value={percent(calculations.budgetMarkup ?? 0)} /><Metric label="Project Days" value={String(calculations.siteDays)} /></div>
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label={project.inputs.pricingMode === "selectable" ? "Active Contract Value" : "Sell Value"} value={money(calculations.proposalTotal)} /><Metric label="Budget" value={money(calculations.budgetCost)} /><Metric label="Markup" value={percent(calculations.budgetMarkup ?? 0)} /><Metric label="Project Days" value={String(calculations.siteDays)} /></div>
+    {project.inputs.pricingMode === "selectable" && <div className="grid gap-4 sm:grid-cols-3"><Mini label="All Options Offered" value={money(calculations.allOptionsProposalTotal ?? calculations.proposalTotal)} /><Mini label="Common Costs" value={money(calculations.commonProposalTotal ?? 0)} /><Mini label="Selected Contract" value={project.inputs.selectionConfirmed ? money(calculations.selectedProposalTotal ?? calculations.proposalTotal) : "Not confirmed"} /></div>}
     <div className="grid gap-4 lg:grid-cols-2">
       <div className="app-card p-5"><h3 className="font-bold text-slate-950">Project</h3><div className="mt-3 grid gap-2 text-sm"><div><b>Reference:</b> {project.inputs.projectReference}</div><div><b>Client:</b> {project.inputs.client}</div><div><b>Location:</b> {project.inputs.location}</div><div><b>Services:</b> {calculations.serviceSummary}</div><div><b>Status:</b> {normaliseProjectStatus(project.status)} / {project.accountsStatus}</div><div><b>Calculation:</b> {project.calculationVersion ?? "Legacy snapshot"}</div></div></div>
-      {calculations.phaseRows?.length > 1 && <div className="app-card p-5"><h3 className="font-bold text-slate-950">Phase Programme</h3><div className="mt-3 grid gap-2">{calculations.phaseRows.map((row) => <div key={row.service} className="flex flex-wrap justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm"><b>{row.service}</b><span>Day {row.startDay} to {row.endDay}{row.concurrent ? " / overlaps" : ""}</span></div>)}</div></div>}
+      {calculations.phaseRows?.length > 1 && <div className="app-card p-5"><h3 className="font-bold text-slate-950">Phase Programme</h3><div className="mt-3 grid gap-2">{calculations.phaseRows.map((row) => <div key={row.workPackageId ?? row.service} className="flex flex-wrap justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm"><b>{row.label ?? row.service}</b><span>Day {row.startDay} to {row.endDay}{row.concurrent ? " / overlaps" : ""}</span></div>)}</div></div>}
     </div>
   </div>;
 }
@@ -2363,7 +2487,11 @@ function SavedCommercialReview({ project }: { project: ProjectRecord }) {
     const profit = proposal - budget;
     return { category, proposal, budget, profit, markup: budget ? profit / budget * 100 : 0 };
   }).filter((row) => row.proposal || row.budget);
-  return <div className="grid gap-5"><div className={`rounded-xl border p-4 ${calculations.budgetMarkup < 25 ? "border-amber-200 bg-amber-50 text-amber-950" : "border-emerald-200 bg-emerald-50 text-emerald-950"}`}><b>{calculations.budgetMarkup < 25 ? `Markup check: ${percent(calculations.budgetMarkup)}, below 25%` : `Commercial check passed: ${percent(calculations.budgetMarkup)} markup`}</b>{calculations.budgetMarkup < 25 && <div className="mt-2 text-sm">This is a warning only and does not block the costing.</div>}</div><div className="table-shell"><table><thead><tr><th>Category</th><th>Budget</th><th>Proposal</th><th>Profit</th><th>Markup</th></tr></thead><tbody>{rows.map((row) => <tr key={row.category}><td className="font-bold">{row.category}</td><td>{money(row.budget)}</td><td>{money(row.proposal)}</td><td>{money(row.profit)}</td><td className={row.markup < 25 ? "font-bold text-red-700" : "font-bold text-emerald-700"}>{percent(row.markup)}</td></tr>)}</tbody></table></div></div>;
+  return <div className="grid gap-5">
+    {project.inputs.pricingMode === "selectable" && <><div className="grid gap-4 sm:grid-cols-3"><Metric label="All Options Offered" value={money(calculations.allOptionsProposalTotal ?? calculations.proposalTotal)} /><Metric label="Common Costs" value={money(calculations.commonProposalTotal ?? 0)} /><Metric label="Selected Contract" value={project.inputs.selectionConfirmed ? money(calculations.selectedProposalTotal ?? calculations.proposalTotal) : "Not confirmed"} /></div><div className="table-shell"><table><thead><tr><th>Package</th><th>Service</th><th>Basis</th><th>Status</th><th>Budget</th><th>Proposal</th><th>Markup</th></tr></thead><tbody>{calculations.packageSummaries?.map((item) => <tr key={item.id}><td className="font-bold">{item.code}. {item.name}</td><td>{item.service}</td><td>{item.pricingBasis === "day_rate" ? "Day rate" : "Fixed price"}</td><td>{!project.inputs.selectionConfirmed ? "Offered" : item.selected ? "Selected" : "Not selected"}</td><td>{money(item.budgetCost)}</td><td>{money(item.proposalTotal)}</td><td className={item.budgetMarkup < 25 ? "font-bold text-amber-700" : "font-bold text-emerald-700"}>{percent(item.budgetMarkup)}</td></tr>)}</tbody></table></div></>}
+    <div className={`rounded-xl border p-4 ${calculations.budgetMarkup < 25 ? "border-amber-200 bg-amber-50 text-amber-950" : "border-emerald-200 bg-emerald-50 text-emerald-950"}`}><b>{calculations.budgetMarkup < 25 ? `Markup check: ${percent(calculations.budgetMarkup)}, below 25%` : `Commercial check passed: ${percent(calculations.budgetMarkup)} markup`}</b>{calculations.budgetMarkup < 25 && <div className="mt-2 text-sm">This is a warning only and does not block the costing.</div>}</div>
+    <div className="table-shell"><table><thead><tr><th>Category</th><th>Budget</th><th>Proposal</th><th>Profit</th><th>Markup</th></tr></thead><tbody>{rows.map((row) => <tr key={row.category}><td className="font-bold">{row.category}</td><td>{money(row.budget)}</td><td>{money(row.proposal)}</td><td>{money(row.profit)}</td><td className={row.markup < 25 ? "font-bold text-red-700" : "font-bold text-emerald-700"}>{percent(row.markup)}</td></tr>)}</tbody></table></div>
+  </div>;
 }
 
 async function handoverPdf(project: ProjectRecord) {
@@ -2401,8 +2529,9 @@ function ProjectHandover({ project, recordHandover: record }: { project: Project
   const summary = buildHandoverSummary(project);
   const filename = `${project.inputs.projectReference || "project"}-delivery-summary.pdf`;
   const canManageHandover = hasPermission(auth.role, "projects.update");
-  const canGenerate = canManageHandover && ["Costing Complete", "Won", "Handover Issued"].includes(normaliseProjectStatus(project.status));
-  const canIssue = canManageHandover && ["Won", "Handover Issued"].includes(normaliseProjectStatus(project.status));
+  const selectionReady = project.inputs.pricingMode !== "selectable" || project.inputs.selectionConfirmed;
+  const canGenerate = canManageHandover && selectionReady && ["Costing Complete", "Won", "Handover Issued"].includes(normaliseProjectStatus(project.status));
+  const canIssue = canManageHandover && selectionReady && ["Won", "Handover Issued"].includes(normaliseProjectStatus(project.status));
   const savePdf = async () => {
     try {
       setActionError("");
@@ -2445,7 +2574,8 @@ function ProjectHandover({ project, recordHandover: record }: { project: Project
         <div><div className="text-xs font-bold uppercase text-red-700">Internal and confidential</div><h2 className="mt-1 text-xl font-semibold">Project Cost & Delivery Summary</h2><p className="text-sm text-slate-500">Budget-only delivery handover generated from the completed costing revision.</p></div>
         <div className="handover-actions flex flex-wrap gap-2"><button className="secondary-button" onClick={() => window.print()} disabled={!canGenerate}><Printer size={16} />Print</button><button className="secondary-button" onClick={savePdf} disabled={!canGenerate || Boolean(busy)}><Download size={16} />{busy === "save" ? "Generating..." : "Save PDF"}</button><button className="primary-button" onClick={sendPdf} disabled={!canIssue || Boolean(busy)}><Send size={16} />{busy === "send" ? "Preparing..." : "Send to PM"}</button></div>
       </div>
-      {!canGenerate && <div className="m-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-950">Complete the costing before generating this handover.</div>}
+      {!selectionReady && <div className="m-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-950">Confirm the client-selected work packages before generating the operational handover. This does not block completing the commercial costing.</div>}
+      {selectionReady && !canGenerate && <div className="m-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm font-bold text-amber-950">Complete the costing before generating this handover.</div>}
       {canGenerate && !canIssue && <div className="mx-5 mt-5 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950">The PDF can be reviewed and saved now. Mark the project as Won before issuing it to the project manager.</div>}
       {actionError && <div className="mx-5 mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-bold text-red-900" role="alert">{actionError}</div>}
       {actionMessage && <div className="mx-5 mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-bold text-emerald-900" role="status">{actionMessage}</div>}
@@ -2453,7 +2583,7 @@ function ProjectHandover({ project, recordHandover: record }: { project: Project
     </div>
     <div className="grid gap-5 lg:grid-cols-2">
       <div className="app-card p-5"><h3 className="font-bold text-slate-950">Actions Before Site</h3><div className="mt-3 grid gap-2 text-sm">{summary.actions.map((action) => <div className="rounded-lg bg-slate-50 px-3 py-2" key={action}>{action}</div>)}</div></div>
-      {project.calculations.phaseRows.length > 1 && <div className="app-card p-5"><h3 className="font-bold text-slate-950">Phase Programme</h3><div className="mt-3 grid gap-2 text-sm">{project.calculations.phaseRows.map((row) => <div className="flex justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2" key={row.service}><b>{row.service}</b><span>Day {row.startDay} to {row.endDay}{row.concurrent ? " / overlaps" : ""}</span></div>)}</div></div>}
+      {project.calculations.phaseRows.length > 1 && <div className="app-card p-5"><h3 className="font-bold text-slate-950">Phase Programme</h3><div className="mt-3 grid gap-2 text-sm">{project.calculations.phaseRows.map((row) => <div className="flex justify-between gap-3 rounded-lg bg-slate-50 px-3 py-2" key={row.workPackageId ?? row.service}><b>{row.label ?? row.service}</b><span>Day {row.startDay} to {row.endDay}{row.concurrent ? " / overlaps" : ""}</span></div>)}</div></div>}
     </div>
     {rowTable("Materials to Procure", summary.materials)}
     {rowTable("Subcontract Work Packages", summary.subcontractors)}
@@ -2659,7 +2789,7 @@ function SearchView({ projects, deletedProjects, open, edit, restore, purge }: {
 }
 
 function ProjectTable({ projects, open, edit }: { projects: ProjectRecord[]; open: (project: ProjectRecord) => void; edit?: (project: ProjectRecord) => void }) {
-  return <div className="table-shell border-0"><table><thead><tr><th>Project</th><th>Module</th><th>Services</th><th>Status</th><th>Sell Value</th><th>Budget</th><th>Markup</th><th>Actions</th></tr></thead><tbody>{projects.map((p) => <tr key={p.id}><td><b>{p.inputs.projectReference || "Draft"}</b><div className="text-xs text-slate-500">{p.inputs.client} - {p.inputs.location}</div></td><td><span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-black uppercase text-slate-600">{p.inputs.costingModule ?? "remedial"}</span></td><td>{p.calculations.serviceSummary}</td><td>{normaliseProjectStatus(p.status)} / {p.accountsStatus}</td><td>{money(p.calculations.proposalTotal, p.inputs.quoteCurrency)}</td><td>{money(p.calculations.budgetCost, p.inputs.quoteCurrency)}</td><td>{percent(p.calculations.budgetMarkup ?? (p.calculations.budgetCost ? p.calculations.budgetProfit / p.calculations.budgetCost * 100 : 0))}</td><td><button className="secondary-button mr-2" onClick={() => open(p)}>Open</button>{edit && <button className="secondary-button" onClick={() => edit(p)}>{statusIsLocked(p.status) ? "Revise" : "Edit"}</button>}</td></tr>)}{!projects.length && <tr><td colSpan={8} className="py-10 text-center text-sm font-semibold text-slate-500">No projects match the selected filters.</td></tr>}</tbody></table></div>;
+  return <div className="table-shell border-0"><table><thead><tr><th>Project</th><th>Module</th><th>Services</th><th>Status</th><th>Sell Value</th><th>Budget</th><th>Markup</th><th>Actions</th></tr></thead><tbody>{projects.map((p) => <tr key={p.id}><td><b>{p.inputs.projectReference || "Draft"}</b><div className="text-xs text-slate-500">{p.inputs.client} - {p.inputs.location}</div></td><td><span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-black uppercase text-slate-600">{p.inputs.costingModule ?? "remedial"}</span></td><td>{p.calculations.serviceSummary}</td><td>{normaliseProjectStatus(p.status)} / {p.accountsStatus}</td><td>{p.inputs.pricingMode === "selectable" ? <><b className="block">Offered {money(p.calculations.allOptionsProposalTotal ?? p.calculations.proposalTotal, p.inputs.quoteCurrency)}</b><span className="text-xs text-slate-500">Selected {p.inputs.selectionConfirmed ? money(p.calculations.selectedProposalTotal ?? p.calculations.proposalTotal, p.inputs.quoteCurrency) : "not confirmed"}</span></> : money(p.calculations.proposalTotal, p.inputs.quoteCurrency)}</td><td>{money(p.calculations.budgetCost, p.inputs.quoteCurrency)}</td><td>{percent(p.calculations.budgetMarkup ?? (p.calculations.budgetCost ? p.calculations.budgetProfit / p.calculations.budgetCost * 100 : 0))}</td><td><button className="secondary-button mr-2" onClick={() => open(p)}>Open</button>{edit && <button className="secondary-button" onClick={() => edit(p)}>{statusIsLocked(p.status) ? "Revise" : "Edit"}</button>}</td></tr>)}{!projects.length && <tr><td colSpan={8} className="py-10 text-center text-sm font-semibold text-slate-500">No projects match the selected filters.</td></tr>}</tbody></table></div>;
 }
 
 function numericRateMap(value: unknown, prefix = "", result = new Map<string, number>()) {
@@ -2862,6 +2992,20 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, admi
                 { key: "screedSurveyorWeekendDayRate", label: "Screeding Surveyor Weekend Extra", suffix: "/ surveyor day" },
                 { key: "screedHotelNightRate", label: "Screeding Hotel", suffix: "/ person night" },
                 { key: "screedEngineeringReportRate", label: "Screeding Engineering Report", suffix: "/ report" }
+              ]}
+            />
+            <RateSection
+              title="Grinding Stand-Down"
+              description="Default people and subsistence components for a grinding stand-down day. Hotel and transport use the shared rates below. Equipment is excluded."
+              badges={["Grinding", "Day Rate"]}
+              rates={rates}
+              onRateChange={updateRate}
+              onMarginChange={updateMarginRate}
+              onItemMarginChange={updateItemMargin}
+              fields={[
+                { key: "grindingStandbySurveyorDayRate", label: "Stand-Down Surveyor Day", suffix: "/ surveyor day" },
+                { key: "grindingStandbyProductionDayRate", label: "Stand-Down Production Labour", suffix: "/ man day" },
+                { key: "grindingStandbySubsistenceDayRate", label: "Stand-Down Subsistence", suffix: "/ person day" }
               ]}
             />
             <RateSection
@@ -3241,6 +3385,10 @@ function AuditPanel({ calculations }: { calculations: ReturnType<typeof calculat
 function Text({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   const id = useId();
   return <div className="grid min-w-0 gap-1"><label htmlFor={id}>{label}</label><input id={id} value={value} onChange={(e) => onChange(e.target.value)} /></div>;
+}
+
+function Choice({ active, title, detail, onClick }: { active: boolean; title: string; detail: string; onClick: () => void }) {
+  return <button type="button" className={`min-h-[86px] rounded-xl border p-4 text-left ${active ? "border-sky-600 bg-sky-50 ring-1 ring-sky-200" : "border-slate-200 bg-white hover:bg-slate-50"}`} onClick={onClick}><b className="block text-sm text-slate-950">{title}</b><span className="mt-1 block text-xs font-normal leading-5 text-slate-500">{detail}</span></button>;
 }
 
 function NumberInput({ label, value, onChange, min = 0, max, step = "any" }: { label: string; value: number; onChange: (v: number) => void; min?: number; max?: number; step?: number | "any" }) {

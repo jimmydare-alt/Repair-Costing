@@ -84,13 +84,39 @@ export function calculateSurveyProject(input: SurveyInput, savedRates?: Partial<
   const shippingQty = input.equipmentShippingRequired || (travelPackageRequired && input.travelMode === "Fly") ? 2 * safe(input.numberOfProfs) : 0;
   const equipmentDays = days * safe(input.numberOfProfs);
   const surveyorMarkup = input.potentialRemedials ? rates.surveyorRemedialsMarkup : rates.surveyorMarkup;
+  const dayRateProject = input.pricingBasis === "day_rate";
+  const subcontractQuantity = subcontracted ? (dayRateProject ? days : input.subcontractSurveyCost > 0 ? 1 : 0) : 0;
+  const expectedStandDownDays = dayRateProject ? safe(input.expectedStandDownDays) : 0;
+  const standbyPeople = subcontracted ? 0 : surveyors + labourers;
+  const standbyTransportQuantity = subcontracted ? 0 : safe(input.numberOfCars);
+  const standbyProposalLines: Line[] = [];
+  let standbyBudgetPerDay = 0;
+  let standbyProposalPerDay = 0;
+  const addStandby = (section: Section, item: string, budgetRate: number, quantityPerDay: number, markup: number, plCategory: PLCategory) => {
+    if (budgetRate <= 0 || quantityPerDay <= 0) return;
+    standbyBudgetPerDay += budgetRate * quantityPerDay;
+    standbyProposalPerDay += budgetRate * quantityPerDay * (1 + Math.max(0, markup));
+    standbyProposalLines.push(proposalLine(section, item, budgetRate, "stand-down day", quantityPerDay * expectedStandDownDays, markup, plCategory));
+  };
+  if (dayRateProject && subcontracted) addStandby("Subcontract", "Subcontracted Survey Stand-down", input.subcontractStandbyCost, 1, input.subcontractStandbyMarkup, "Subcontract");
+  if (dayRateProject && !subcontracted) {
+    addStandby("Labour", "Surveyor Stand-down", rates.standbySurveyorBudgetDayRate, surveyors, rates.standbySurveyorMarkup, "Labour");
+    addStandby("Labour", "Labourer Stand-down", rates.standbyLabourerBudgetDayRate, labourers, rates.standbyLabourerMarkup, "Labour");
+    if (input.hotelRequired) {
+      addStandby("Hotel", "Stand-down Hotel", rates.hotelBudgetNightRate, standbyPeople, rates.hotelMarkup, "Hotel/Subsistence");
+      addStandby("Subsistence", "Stand-down Subsistence", rates.standbySubsistenceBudgetDayRate, standbyPeople, rates.standbySubsistenceMarkup, "Hotel/Subsistence");
+    }
+    if (input.travelMode === "Drive") addStandby("Travel", "Stand-down Company Car", rates.companyCarBudgetDayRate, standbyTransportQuantity, rates.companyCarMarkup, "Travel");
+    if (input.travelMode === "Fly") addStandby("Travel", "Stand-down Rental Car", rates.carRentalBudgetDayRate, standbyTransportQuantity, rates.carRentalMarkup, "Travel");
+  }
 
   const proposalLines: Line[] = [
     proposalLine("Labour", "Surveyor", rates.surveyorBudgetDayRate, "day", surveyorDays, surveyorMarkup, "Labour"),
     proposalLine("Labour", "Labourer", rates.labourerBudgetDayRate, "day", labourerDays, rates.labourerMarkup, "Labour"),
     proposalLine("Labour", "Project Manager", rates.projectManagerBudgetDayRate, "day", pmDays, rates.projectManagerMarkup, "Labour"),
     proposalLine("Labour", "Weekend Surveyor", rates.weekendBudgetDayRate, "day", weekendSurveyorDays, rates.weekendMarkup, "Labour"),
-    proposalLine("Subcontract", "Subcontracted Survey Package", safe(input.subcontractSurveyCost), "item", subcontracted && input.subcontractSurveyCost > 0 ? 1 : 0, safe(input.subcontractSurveyMarkup), "Subcontract"),
+    proposalLine("Subcontract", dayRateProject ? "Subcontracted Survey Productive Day" : "Subcontracted Survey Package", safe(input.subcontractSurveyCost), dayRateProject ? "day" : "item", subcontractQuantity, safe(input.subcontractSurveyMarkup), "Subcontract"),
+    proposalLine("Subcontract", "Subcontracted Survey Mobilisation", safe(input.subcontractMobilisationCost), "item", dayRateProject && subcontracted && input.subcontractMobilisationCost > 0 ? 1 : 0, safe(input.subcontractMobilisationMarkup), "Subcontract"),
     proposalLine("Labour", "Surveyor Travel", rates.surveyorTravelBudgetDayRate, "day", surveyorTravelDays, rates.surveyorTravelMarkup, "Labour"),
     proposalLine("Labour", "Labourer Travel", rates.labourerTravelBudgetDayRate, "day", labourerTravelDays, rates.labourerTravelMarkup, "Labour"),
     proposalLine("Labour", "Project Manager Travel", rates.projectManagerTravelBudgetDayRate, "day", pmTravelDays, rates.projectManagerTravelMarkup, "Labour"),
@@ -110,8 +136,45 @@ export function calculateSurveyProject(input: SurveyInput, savedRates?: Partial<
     proposalLine("Subsistence", "Labourer Subsistence", rates.subsistenceBudgetDayRate, "day", labourerSubsistenceDays, rates.subsistenceMarkup, "Hotel/Subsistence"),
     proposalLine("Reports", "Engineering Report", rates.engineeringReportBudgetRate, "item", input.surveyReport ? 1 : 0, rates.engineeringReportMarkup, "Labour"),
     proposalLine("Reports", "Error Plan", rates.errorPlanBudgetRate, "item", input.errorPlan ? 1 : 0, rates.errorPlanMarkup, "Labour"),
-    ...input.additionalItems.map((item) => proposalLine("Additional items", item.name, item.rate, item.unit, item.quantity, item.markup, item.plCategory))
+    ...input.additionalItems.map((item) => proposalLine("Additional items", item.name, item.rate, item.unit, item.quantity, item.markup, item.plCategory)),
+    ...standbyProposalLines
   ];
+
+  const productiveBudgetRate = dayRateProject
+    ? subcontracted
+      ? safe(input.subcontractSurveyCost)
+      : money(
+        rates.surveyorBudgetDayRate * surveyors
+        + rates.labourerBudgetDayRate * labourers
+        + (days ? rates.weekendBudgetDayRate * weekendSurveyorDays / days : 0)
+        + (input.hotelRequired ? rates.hotelBudgetNightRate * standbyPeople : 0)
+        + (input.hotelRequired ? rates.subsistenceBudgetDayRate * standbyPeople : 0)
+        + rates.equipmentRentalBudgetDayRate * safe(input.numberOfProfs)
+        + (input.travelMode === "Drive" ? rates.companyCarBudgetDayRate * safe(input.numberOfCars) : rates.carRentalBudgetDayRate * safe(input.numberOfCars))
+      )
+    : 0;
+  const calculatedProductiveProposalRate = dayRateProject
+    ? subcontracted
+      ? money(safe(input.subcontractSurveyCost) * (1 + safe(input.subcontractSurveyMarkup)))
+      : money(
+        rates.surveyorBudgetDayRate * (1 + surveyorMarkup) * surveyors
+        + rates.labourerBudgetDayRate * (1 + rates.labourerMarkup) * labourers
+        + (days ? rates.weekendBudgetDayRate * (1 + rates.weekendMarkup) * weekendSurveyorDays / days : 0)
+        + (input.hotelRequired ? rates.hotelBudgetNightRate * (1 + rates.hotelMarkup) * standbyPeople : 0)
+        + (input.hotelRequired ? rates.subsistenceBudgetDayRate * (1 + rates.subsistenceMarkup) * standbyPeople : 0)
+        + rates.equipmentRentalBudgetDayRate * (1 + rates.equipmentRentalMarkup) * safe(input.numberOfProfs)
+        + (input.travelMode === "Drive" ? rates.companyCarBudgetDayRate * (1 + rates.companyCarMarkup) * safe(input.numberOfCars) : rates.carRentalBudgetDayRate * (1 + rates.carRentalMarkup) * safe(input.numberOfCars))
+      )
+    : 0;
+  const calculatedStandbyBudgetRate = money(standbyBudgetPerDay);
+  const calculatedStandbyProposalRate = money(standbyProposalPerDay);
+  const discountFactor = 1 - Math.min(100, safe(input.discountPercentage)) / 100;
+  const productiveProposalRate = input.productiveRateOverride ?? money(calculatedProductiveProposalRate * discountFactor);
+  const standbyProposalRate = input.standbyRateOverride ?? money(calculatedStandbyProposalRate * discountFactor);
+  const productiveTargetBeforeDiscount = discountFactor > 0 ? productiveProposalRate / discountFactor : productiveProposalRate;
+  const standbyTargetBeforeDiscount = discountFactor > 0 ? standbyProposalRate / discountFactor : standbyProposalRate;
+  if (dayRateProject && days && input.productiveRateOverride !== null) proposalLines.push(proposalLine("Labour", "Productive day rate adjustment", 0, "adjustment", 1, 0, "Labour", money((productiveTargetBeforeDiscount - calculatedProductiveProposalRate) * days)));
+  if (dayRateProject && expectedStandDownDays && input.standbyRateOverride !== null) proposalLines.push(proposalLine("Labour", "Stand-down day rate adjustment", 0, "adjustment", 1, 0, "Labour", money((standbyTargetBeforeDiscount - calculatedStandbyProposalRate) * expectedStandDownDays)));
 
   const budgetLines = proposalLines.map((item) => budgetLine(item.section, item.item, item.rate, item.unit, item.quantity, item.plCategory));
   const originalProposalTotal = money(proposalLines.reduce((sum, item) => sum + item.total, 0));
@@ -126,9 +189,12 @@ export function calculateSurveyProject(input: SurveyInput, savedRates?: Partial<
   const budgetProfit = money(proposalTotal - budgetCost);
   const budgetMargin = proposalTotal ? money(budgetProfit / proposalTotal * 100) : 0;
   const budgetMarkup = budgetCost ? money(budgetProfit / budgetCost * 100) : 0;
-  const dailyRate = money(discountedLines.filter((item) => ["Labour", "Hotel", "Subsistence", "Equipment"].includes(item.section)).reduce((sum, item) => sum + (item.quantity ? item.total / item.quantity : 0), 0));
-  const mobilisationRate = money(discountedLines.filter((item) => ["Travel", "Haulage", "Reports", "Additional items"].includes(item.section)).reduce((sum, item) => sum + item.total, 0));
-  const standbyRate = money(rates.hotelBudgetNightRate * (1 + rates.hotelMarkup) + rates.subsistenceBudgetDayRate * (1 + rates.subsistenceMarkup));
+  const surveyPackageSell = discountedLines.filter((item) => !item.item.includes("Project Manager") && item.section !== "Reports" && item.section !== "Additional items" && !item.item.includes("Stand-down")).reduce((sum, item) => sum + item.total, 0);
+  const surveyPackageBudget = budgetLines.filter((item) => !item.item.includes("Project Manager") && item.section !== "Reports" && item.section !== "Additional items" && !item.item.includes("Stand-down")).reduce((sum, item) => sum + item.total, 0);
+  const dailyRate = dayRateProject ? money(productiveProposalRate) : money(discountedLines.filter((item) => ["Labour", "Hotel", "Subsistence", "Equipment"].includes(item.section)).reduce((sum, item) => sum + (item.quantity ? item.total / item.quantity : 0), 0));
+  const mobilisationRate = dayRateProject ? money(Math.max(0, surveyPackageSell - productiveProposalRate * days)) : money(discountedLines.filter((item) => ["Travel", "Haulage", "Reports", "Additional items"].includes(item.section)).reduce((sum, item) => sum + item.total, 0));
+  const mobilisationBudget = dayRateProject ? money(Math.max(0, surveyPackageBudget - productiveBudgetRate * days)) : 0;
+  const standbyRate = dayRateProject ? money(standbyProposalRate) : 0;
   const details = { surveyType: input.surveyType, calculatedDayRequirement, calculatedSiteDays, siteDaysOverridden: hasSiteDaysOverride && days !== calculatedSiteDays, totalDaysOnSite: days, hotelNights, chargeableDistance: distance, distanceUnit: input.distanceUnit, surveyorDays, projectManagerDays: pmDays, labourerDays, surveyorTravelDays, projectManagerTravelDays: pmTravelDays, labourerTravelDays };
 
   const result: ProjectCalculations = {
@@ -138,7 +204,9 @@ export function calculateSurveyProject(input: SurveyInput, savedRates?: Partial<
     discountAmount, proposalTotal, budgetCost, budgetProfit, budgetMargin, budgetMarkup, bdmBonusBudget: 0, bdmBonusRate: 0,
     proposalCompanyCurrency: proposalTotal, budgetCompanyCurrency: budgetCost, proposalGroupCurrency: proposalTotal,
     budgetGroupCurrency: budgetCost, dailyRate, mobilisationRate, travelTotal: money(discountedLines.filter((item) => item.plCategory === "Travel").reduce((sum, item) => sum + item.total, 0)),
-    haulageTotal: money(discountedLines.filter((item) => item.plCategory === "Haulage").reduce((sum, item) => sum + item.total, 0)), standbyRate, survey: details
+    haulageTotal: money(discountedLines.filter((item) => item.plCategory === "Haulage").reduce((sum, item) => sum + item.total, 0)), standbyRate,
+    rateSchedules: dayRateProject ? [{ workPackageName: `Survey - ${input.surveyType}`, service: "Survey", pricingBasis: "day_rate", estimatedDays: days, productiveBudgetRate, productiveProposalRate: dailyRate, productiveRateOverridden: input.productiveRateOverride !== null, mobilisationBudget, mobilisationProposal: mobilisationRate, standbyBudgetRate: calculatedStandbyBudgetRate, standbyProposalRate: standbyRate, standbyRateOverridden: input.standbyRateOverride !== null, expectedStandDownDays, overrideReason: input.rateOverrideReason }] : [],
+    survey: details
   };
   return result as SurveyCalculationResult;
 }

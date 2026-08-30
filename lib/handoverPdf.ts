@@ -81,13 +81,18 @@ function revisionLabel(project: ProjectRecord) {
 
 function labourApproach(project: ProjectRecord) {
   const modes: string[] = [];
-  if (project.inputs.includeGrinding && project.inputs.grinding.enabled) {
-    modes.push(project.inputs.grinding.productionLabourMode, project.inputs.grinding.surveyorLabourMode);
+  if (project.inputs.pricingMode === "selectable") {
+    project.inputs.workPackages.filter((item) => !project.inputs.selectionConfirmed || item.selected).forEach((item) => {
+      if (item.grinding) modes.push(item.grinding.productionLabourMode, item.grinding.surveyorLabourMode);
+      if (item.screeding) modes.push(item.screeding.productionLabourMode, item.screeding.surveyorLabourMode);
+      if (item.repairs) modes.push(item.repairs.labourMode);
+    });
   }
-  if (project.inputs.includeScreeding && project.inputs.screeding.enabled) {
-    modes.push(project.inputs.screeding.productionLabourMode, project.inputs.screeding.surveyorLabourMode);
+  if (project.inputs.pricingMode !== "selectable") {
+    if (project.inputs.includeGrinding && project.inputs.grinding.enabled) modes.push(project.inputs.grinding.productionLabourMode, project.inputs.grinding.surveyorLabourMode);
+    if (project.inputs.includeScreeding && project.inputs.screeding.enabled) modes.push(project.inputs.screeding.productionLabourMode, project.inputs.screeding.surveyorLabourMode);
+    if (project.inputs.includeRepairs && project.inputs.repairs.enabled) modes.push(project.inputs.repairs.labourMode);
   }
-  if (project.inputs.includeRepairs && project.inputs.repairs.enabled) modes.push(project.inputs.repairs.labourMode);
   if (project.inputs.costingModule === "survey" && project.inputs.survey?.surveyorSupply) modes.push(project.inputs.survey.surveyorSupply);
   const normalised = modes.map((mode) => clean(mode).toLowerCase());
   const inHouse = normalised.some((mode) => mode.includes("in_house") || mode.includes("in-house") || mode === "both");

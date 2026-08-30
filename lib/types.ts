@@ -13,6 +13,9 @@ export type PLCategory = "Labour" | "Subcontract" | "Materials" | "Equipment" | 
 export type ProjectServiceKey = "Grinding" | "Screeding" | "Repairs";
 export type CostingModule = "remedial" | "survey";
 export type DistanceUnit = "km" | "miles";
+export type RemedialPricingMode = "combined" | "selectable";
+export type PackagePricingBasis = "fixed" | "day_rate";
+export type PackageMobilisationMode = "shared" | "separate" | "none";
 
 export type PhaseSchedule = {
   order: ProjectServiceKey[];
@@ -333,6 +336,29 @@ export type RepairSubcontractor = {
   mobilisationCost: number;
   mobilisations: number;
   mobilisationMargin: number;
+  standbyRate?: number;
+  standbyMargin?: number;
+};
+
+export type RemedialWorkPackage = {
+  id: string;
+  code: string;
+  name: string;
+  description: string;
+  service: ProjectServiceKey;
+  pricingBasis: PackagePricingBasis;
+  mobilisationMode: PackageMobilisationMode;
+  selected: boolean;
+  startDay: number;
+  expectedStandDownDays: number;
+  productiveRateOverride: number | null;
+  standbyRateOverride: number | null;
+  rateOverrideReason: string;
+  discountPercentage: number | null;
+  grinding?: GrindingScope;
+  screeding?: ScreedScope;
+  repairs?: RepairsScope;
+  additionalItems: AdditionalItem[];
 };
 
 export type RepairsScope = {
@@ -391,6 +417,11 @@ export type ProjectInput = {
   revision: string;
   costedBy: string;
   projectType: string;
+  pricingMode: RemedialPricingMode;
+  selectionConfirmed: boolean;
+  sharedCosts: AdditionalItem[];
+  workPackages: RemedialWorkPackage[];
+  activeWorkPackageId: string;
   includeGrinding: boolean;
   includeScreeding: boolean;
   includeRepairs: boolean;
@@ -440,6 +471,9 @@ export type AdminRates = {
   grindingSurveyorWeekendDayRate: number;
   grindingHotelNightRate: number;
   grindingEngineeringReportRate: number;
+  grindingStandbySurveyorDayRate: number;
+  grindingStandbyProductionDayRate: number;
+  grindingStandbySubsistenceDayRate: number;
   screedSurveyorDayRate: number;
   screedSurveyorTravelDayRate: number;
   screedSurveyorWeekendDayRate: number;
@@ -548,6 +582,45 @@ export type Line = {
   originalTotal: number;
   source: string;
   plCategory: PLCategory;
+  workPackageId?: string;
+  workPackageCode?: string;
+  workPackageName?: string;
+  commercialGroup?: "common" | "package";
+};
+
+export type CommercialRateSchedule = {
+  workPackageId?: string;
+  workPackageCode?: string;
+  workPackageName: string;
+  service: "Survey" | ProjectServiceKey;
+  pricingBasis: PackagePricingBasis;
+  estimatedDays: number;
+  productiveBudgetRate: number;
+  productiveProposalRate: number;
+  productiveRateOverridden: boolean;
+  mobilisationBudget: number;
+  mobilisationProposal: number;
+  standbyBudgetRate: number;
+  standbyProposalRate: number;
+  standbyRateOverridden: boolean;
+  expectedStandDownDays: number;
+  overrideReason: string;
+};
+
+export type WorkPackageCalculationSummary = {
+  id: string;
+  code: string;
+  name: string;
+  service: ProjectServiceKey;
+  selected: boolean;
+  pricingBasis: PackagePricingBasis;
+  mobilisationMode: PackageMobilisationMode;
+  days: number;
+  startDay: number;
+  proposalTotal: number;
+  budgetCost: number;
+  budgetMarkup: number;
+  materialTypes: number;
 };
 
 export type MaterialCalc = {
@@ -570,7 +643,7 @@ export type ProjectCalculations = {
   screedDays: number;
   repairDays: number;
   siteDays: number;
-  phaseRows: Array<{ service: ProjectServiceKey; calculatedDays: number; inputDays: number; startDay: number; endDay: number; concurrent: boolean }>;
+  phaseRows: Array<{ service: ProjectServiceKey; calculatedDays: number; inputDays: number; startDay: number; endDay: number; concurrent: boolean; workPackageId?: string; label?: string }>;
   proposalLines: Line[];
   budgetLines: Line[];
   repairMaterialCalcs: MaterialCalc[];
@@ -592,6 +665,17 @@ export type ProjectCalculations = {
   travelTotal: number;
   haulageTotal: number;
   standbyRate: number;
+  pricingMode?: RemedialPricingMode;
+  selectionConfirmed?: boolean;
+  allOptionsProposalTotal?: number;
+  selectedProposalTotal?: number;
+  commonProposalTotal?: number;
+  allOptionsBudgetCost?: number;
+  selectedBudgetCost?: number;
+  offeredProposalLines?: Line[];
+  offeredBudgetLines?: Line[];
+  packageSummaries?: WorkPackageCalculationSummary[];
+  rateSchedules?: CommercialRateSchedule[];
   survey?: import("./costing/survey/types").SurveyCalculationDetails;
 };
 
