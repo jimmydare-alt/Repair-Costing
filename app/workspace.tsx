@@ -223,10 +223,15 @@ function projectReadiness(input: ProjectInput, budgetMarkupExact: number, duplic
   const blockers: string[] = [];
   const warnings: string[] = [];
   void repairCatalog;
-  if (!input.includeGrinding && !input.includeScreeding && !input.includeRepairs) warnings.push("No service has been selected.");
-  if (input.includeGrinding && !input.grinding.enabled) warnings.push("Grinding is selected but its costing section is not enabled.");
-  if (input.includeScreeding && !input.screeding.enabled) warnings.push("Screeding is selected but its costing section is not enabled.");
-  if (input.includeRepairs && !input.repairs.enabled) warnings.push("Repairs are selected but their costing section is not enabled.");
+  const hasSelectedService = input.pricingMode === "selectable"
+    ? input.workPackages.length > 0
+    : input.includeGrinding || input.includeScreeding || input.includeRepairs;
+  if (!hasSelectedService) warnings.push("No service has been selected.");
+  if (input.pricingMode !== "selectable") {
+    if (input.includeGrinding && !input.grinding.enabled) warnings.push("Grinding is selected but its costing section is not enabled.");
+    if (input.includeScreeding && !input.screeding.enabled) warnings.push("Screeding is selected but its costing section is not enabled.");
+    if (input.includeRepairs && !input.repairs.enabled) warnings.push("Repairs are selected but their costing section is not enabled.");
+  }
   if (!input.projectReference.trim()) warnings.push("Project reference is blank.");
   if (!input.client.trim()) warnings.push("Client name is blank.");
   if (!input.location.trim()) warnings.push("Project location is blank.");
