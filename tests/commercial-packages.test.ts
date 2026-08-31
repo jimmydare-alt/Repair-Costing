@@ -232,6 +232,42 @@ describe("selectable remedial work packages", () => {
     expect(reopened.calculations.proposalTotal).toBe(calculations.proposalTotal);
   });
 
+  it("restores mobilisation summaries from legacy saved lines without repricing the project", () => {
+    const parent = selectableBase();
+    const packageBase = grindingPackage(parent, 0, "Legacy package");
+    const workPackage = {
+      ...packageBase,
+      grinding: {
+        ...packageBase.grinding!,
+        productionSubcontractors: [{ ...packageBase.grinding!.productionSubcontractors[0], mobilisationCost: 500, mobilisations: 1, mobilisationMargin: 0.3 }]
+      }
+    };
+    const inputs = { ...parent, workPackages: [workPackage], activeWorkPackageId: workPackage.id };
+    const calculations = calculateProject(inputs, defaultRates);
+    const legacyProposalLines = calculations.proposalLines.map(({ costKind: _costKind, ...row }) => row);
+    const legacyBudgetLines = calculations.budgetLines.map(({ costKind: _costKind, ...row }) => row);
+    const proposalTotal = calculations.proposalTotal;
+    const budgetCost = calculations.budgetCost;
+    const reopened = rowToProject({
+      id: "legacy-mobilisation",
+      company_id: "company-1",
+      created_at: "2026-08-01T00:00:00.000Z",
+      status: "Costing Complete",
+      accounts_status: "Not Required",
+      inputs,
+      calculations: { ...calculations, proposalLines: legacyProposalLines, budgetLines: legacyBudgetLines, mobilisationBudget: undefined },
+      revisions: [],
+      notes: [],
+      change_log: []
+    });
+    expect(reopened.calculations.proposalTotal).toBe(proposalTotal);
+    expect(reopened.calculations.budgetCost).toBe(budgetCost);
+    expect(reopened.calculations.mobilisationRate).toBe(770);
+    expect(reopened.calculations.mobilisationBudget).toBe(600);
+    expect(reopened.calculations.proposalLines.find((row) => row.item === "Common mobilisation")?.costKind).toBe("mobilisation");
+    expect(reopened.calculations.proposalLines.find((row) => row.item === "Legacy package production mobilisation")?.costKind).toBe("mobilisation");
+  });
+
   it("round-trips post-costing client selection metadata separately from the offered inputs", () => {
     const parent = selectableBase();
     const workPackage = grindingPackage(parent, 0, "Awarded package");

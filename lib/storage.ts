@@ -1,6 +1,6 @@
 "use client";
 
-import { calculateActualSiteDays, calculateProject } from "./calculations";
+import { calculateActualSiteDays, calculateProject, normaliseStoredCalculations } from "./calculations";
 import { defaultRates, emptyInput } from "./rates";
 import { createRepairLine, defaultRepairCatalog } from "./repairCatalog";
 import { allowedStatusTransitions, normaliseProjectStatus } from "./workflow";
@@ -753,7 +753,8 @@ export function rowToProject(row: Record<string, unknown>, actuals?: PLActuals):
   const storedInputs = (row.inputs ?? {}) as StoredProjectInput;
   const { __costingSnapshot, ...inputValues } = storedInputs;
   const inputs = normaliseInput(inputValues);
-  const calculations = row.calculations as ProjectRecord["calculations"];
+  const storedCalculations = row.calculations as ProjectRecord["calculations"];
+  const calculations = inputs.costingModule === "survey" ? storedCalculations : normaliseStoredCalculations(storedCalculations);
   const revisions = Array.isArray(row.revisions) ? row.revisions as QuoteRevision[] : [];
   const latestRevision = revisions[revisions.length - 1];
   const storedRateSnapshot = __costingSnapshot?.rates ?? latestRevision?.rates;

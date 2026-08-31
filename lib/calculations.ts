@@ -586,15 +586,43 @@ function rateAdjustment(item: string, amount: number, source: string, costKind: 
   return { section: "Labour", item, rate: value, unit: "adjustment", quantity: value ? 1 : 0, cost: 0, margin: value, total: value, discount: 0, originalTotal: value, source, plCategory: "Labour", costKind };
 }
 
+function inferredCostKind(row: Line): NonNullable<Line["costKind"]> {
+  if (row.costKind) return row.costKind;
+
+  const description = `${row.item} ${row.source}`.toLowerCase();
+  if (/stand[ -]?down|standby/.test(description)) return "stand_down";
+  if (/project manager|whole-project management/.test(description)) return "operating";
+  if (/mobilisation|mobilization|demobilisation|demobilization/.test(description)) return "mobilisation";
+  if (row.plCategory === "Equipment" && /shipping|delivery|collection/.test(description)) return "mobilisation";
+  if (row.plCategory === "Travel" && /grinding|screed|repair/.test(description)) return "mobilisation";
+  return "operating";
+}
+
+function withInferredCostKind(row: Line): Line {
+  return row.costKind ? row : { ...row, costKind: inferredCostKind(row) };
+}
+
 function isMobilisationLine(row: Line) {
-  return row.costKind === "mobilisation";
+  return inferredCostKind(row) === "mobilisation";
 }
 
 function isOperatingLine(row: Line) {
-  return row.costKind !== "mobilisation" && row.costKind !== "stand_down"
+  return inferredCostKind(row) === "operating"
     && row.section !== "Haulage"
     && row.section !== "Reports"
     && row.section !== "Additional items";
+}
+
+export function normaliseStoredCalculations(calculations: ProjectCalculations): ProjectCalculations {
+  const proposalLines = (calculations.proposalLines ?? []).map(withInferredCostKind);
+  const budgetLines = (calculations.budgetLines ?? []).map(withInferredCostKind);
+  return {
+    ...calculations,
+    proposalLines,
+    budgetLines,
+    mobilisationRate: total(proposalLines.filter(isMobilisationLine)),
+    mobilisationBudget: total(budgetLines.filter(isMobilisationLine))
+  };
 }
 
 type StandbyResult = { proposalLines: Line[]; budgetLines: Line[]; budgetRate: number; proposalRate: number };

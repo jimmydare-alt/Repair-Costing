@@ -165,6 +165,7 @@ describe("separate Survey costing module", () => {
     expect(reopened.inputs.survey?.autoStoreArea).toBe(6500);
     expect(reopened.rateSnapshot?.surveyRates?.surveyorBudgetDayRate).toBe(550);
     expect(reopened.calculations.costingModule).toBe("survey");
+    expect(reopened.calculations.mobilisationRate).toBe(calculations.mobilisationRate);
     expect(reopened.timeEntries?.[0].workType).toBe("Survey");
   });
 
