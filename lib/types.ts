@@ -586,6 +586,7 @@ export type Line = {
   workPackageCode?: string;
   workPackageName?: string;
   commercialGroup?: "common" | "package";
+  costKind?: "operating" | "mobilisation" | "stand_down";
 };
 
 export type CommercialRateSchedule = {
@@ -662,6 +663,7 @@ export type ProjectCalculations = {
   budgetGroupCurrency: number;
   dailyRate: number;
   mobilisationRate: number;
+  mobilisationBudget?: number;
   travelTotal: number;
   haulageTotal: number;
   standbyRate: number;
@@ -776,6 +778,13 @@ export type ProjectTimeEntry = {
   createdAt: string;
 };
 
+export type PackageSelection = {
+  selectedPackageIds: string[];
+  confirmedAt: string;
+  confirmedBy: string;
+  reason: string;
+};
+
 export type ProjectRecord = {
   id: string;
   companyId?: string;
@@ -799,6 +808,7 @@ export type ProjectRecord = {
   notes?: ProjectNote[];
   changeLog?: ChangeLogEntry[];
   timeEntries?: ProjectTimeEntry[];
+  packageSelection?: PackageSelection;
 };
 
 export type RateVersionRecord = {

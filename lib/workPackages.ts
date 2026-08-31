@@ -36,7 +36,7 @@ export function createWorkPackage(service: ProjectServiceKey, source: ProjectInp
     description: "",
     service,
     pricingBasis: "fixed",
-    mobilisationMode: "shared",
+    mobilisationMode: "separate",
     selected: true,
     startDay: 0,
     expectedStandDownDays: 0,

@@ -114,6 +114,26 @@ describe("selectable remedial work packages", () => {
     expect(separate.proposalTotal).toBeGreaterThan(shared.proposalTotal);
   });
 
+  it("suppresses only duplicated internal mobilisation and keeps supplier mobilisation in subcontract", () => {
+    const parent = selectableBase();
+    const item = grindingPackage(parent, 0, "Supplier package");
+    const workPackage: RemedialWorkPackage = {
+      ...item,
+      mobilisationMode: "shared",
+      grinding: {
+        ...item.grinding!,
+        productionSubcontractors: [{ ...subcontractor("Grinding supplier", 100, 2), mobilisationCost: 500, mobilisations: 1, mobilisationMargin: 0.3 }]
+      }
+    };
+    const result = calculateProject({ ...parent, sharedCosts: [], workPackages: [workPackage] }, defaultRates);
+    const supplierMobilisation = result.proposalLines.find((line) => line.item === "Grinding supplier mobilisation");
+    expect(supplierMobilisation?.plCategory).toBe("Subcontract");
+    expect(supplierMobilisation?.costKind).toBe("mobilisation");
+    expect(supplierMobilisation?.cost).toBe(500);
+    expect(result.mobilisationBudget).toBe(500);
+    expect(calculatePL(result, defaultActuals(result)).rows.find((row) => row.item === "Labour Subcontract")?.budget).toBe(750);
+  });
+
   it("supports overlapping package phases without adding their durations together", () => {
     const parent = selectableBase();
     const first = { ...grindingPackage(parent, 0, "Area one"), startDay: 1, grinding: { ...grindingPackage(parent, 0, "Area one").grinding!, estimatedDays: 5 } };
@@ -210,6 +230,21 @@ describe("selectable remedial work packages", () => {
     expect(reopened.inputs.pricingMode).toBe("selectable");
     expect(reopened.inputs.workPackages[0].name).toBe("Saved package");
     expect(reopened.calculations.proposalTotal).toBe(calculations.proposalTotal);
+  });
+
+  it("round-trips post-costing client selection metadata separately from the offered inputs", () => {
+    const parent = selectableBase();
+    const workPackage = grindingPackage(parent, 0, "Awarded package");
+    const inputs = { ...parent, workPackages: [workPackage], activeWorkPackageId: workPackage.id };
+    const calculations = calculateProject(inputs, defaultRates);
+    const project: ProjectRecord = {
+      id: "selection-1", companyId: "company-1", createdAt: "2026-08-30T00:00:00.000Z", status: "Costing Complete", accountsStatus: "Not Required", inputs, calculations, revisions: [],
+      packageSelection: { selectedPackageIds: [workPackage.id], confirmedAt: "2026-08-31T10:00:00.000Z", confirmedBy: "accounts@example.com", reason: "Client award" }
+    };
+    const reopened = rowToProject(projectToRow(project, "00000000-0000-0000-0000-000000000001"));
+    expect(reopened.inputs.selectionConfirmed).toBe(false);
+    expect(reopened.packageSelection?.selectedPackageIds).toEqual([workPackage.id]);
+    expect(reopened.packageSelection?.reason).toBe("Client award");
   });
 
   it("reconciles the selected package budget into every P&L category and overall total", () => {

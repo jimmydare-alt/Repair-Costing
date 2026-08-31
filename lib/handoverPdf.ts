@@ -82,7 +82,8 @@ function revisionLabel(project: ProjectRecord) {
 function labourApproach(project: ProjectRecord) {
   const modes: string[] = [];
   if (project.inputs.pricingMode === "selectable") {
-    project.inputs.workPackages.filter((item) => !project.inputs.selectionConfirmed || item.selected).forEach((item) => {
+    const selectedIds = new Set(project.packageSelection?.selectedPackageIds ?? []);
+    project.inputs.workPackages.filter((item) => !project.packageSelection || selectedIds.has(item.id)).forEach((item) => {
       if (item.grinding) modes.push(item.grinding.productionLabourMode, item.grinding.surveyorLabourMode);
       if (item.screeding) modes.push(item.screeding.productionLabourMode, item.screeding.surveyorLabourMode);
       if (item.repairs) modes.push(item.repairs.labourMode);

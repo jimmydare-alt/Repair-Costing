@@ -5,7 +5,7 @@ import { defaultRates, emptyInput } from "./rates";
 import { createRepairLine, defaultRepairCatalog } from "./repairCatalog";
 import { allowedStatusTransitions, normaliseProjectStatus } from "./workflow";
 import { createBrowserSupabaseClient, isSupabaseConfigured } from "./supabaseClient";
-import type { AdminRates, ChangeLogEntry, PLActuals, ProjectInput, ProjectNote, ProjectRecord, ProjectStatus, ProjectTimeEntry, QuoteRevision, RateVersionRecord, RepairCatalog } from "./types";
+import type { AdminRates, ChangeLogEntry, PackageSelection, PLActuals, ProjectInput, ProjectNote, ProjectRecord, ProjectStatus, ProjectTimeEntry, QuoteRevision, RateVersionRecord, RepairCatalog } from "./types";
 import { calculateSurveyProject } from "./costing/survey/calculations";
 import { normaliseSurveyInput, normaliseSurveyRates } from "./costing/survey/defaults";
 import { normaliseWorkPackages } from "./workPackages";
@@ -580,7 +580,7 @@ export async function saveProject(input: ProjectInput, rates: AdminRates, existi
     actuals: existing?.actuals,
     rateSnapshot: rates,
     repairCatalogSnapshot: repairCatalog,
-    calculationVersion: inputs.costingModule === "survey" ? "survey-1.1" : "remedial-6.0",
+    calculationVersion: inputs.costingModule === "survey" ? "survey-1.1" : "remedial-6.1",
     revisions: normaliseProjectStatus(status) === "Costing Complete"
       ? [...(existing?.revisions ?? []), makeRevision(inputs, calculations, rates, repairCatalog)]
       : existing?.revisions ?? [],
@@ -745,6 +745,7 @@ type StoredProjectInput = Partial<ProjectInput> & {
     repairCatalog?: RepairCatalog;
     calculationVersion?: string;
     timeEntries?: ProjectTimeEntry[];
+    packageSelection?: PackageSelection;
   };
 };
 
@@ -756,6 +757,9 @@ export function rowToProject(row: Record<string, unknown>, actuals?: PLActuals):
   const revisions = Array.isArray(row.revisions) ? row.revisions as QuoteRevision[] : [];
   const latestRevision = revisions[revisions.length - 1];
   const storedRateSnapshot = __costingSnapshot?.rates ?? latestRevision?.rates;
+  const legacySelection = inputs.pricingMode === "selectable" && inputs.selectionConfirmed
+    ? { selectedPackageIds: inputs.workPackages.filter((item) => item.selected).map((item) => item.id), confirmedAt: String(row.updated_at ?? row.created_at ?? now()), confirmedBy: "Legacy selection", reason: "Migrated from costing selection" }
+    : undefined;
   return {
     id: String(row.id),
     companyId: row.company_id ? String(row.company_id) : undefined,
@@ -778,7 +782,8 @@ export function rowToProject(row: Record<string, unknown>, actuals?: PLActuals):
     revisions,
     notes: Array.isArray(row.notes) ? row.notes as ProjectNote[] : [],
     changeLog: Array.isArray(row.change_log) ? row.change_log as ChangeLogEntry[] : [],
-    timeEntries: Array.isArray(__costingSnapshot?.timeEntries) ? __costingSnapshot.timeEntries : []
+    timeEntries: Array.isArray(__costingSnapshot?.timeEntries) ? __costingSnapshot.timeEntries : [],
+    packageSelection: __costingSnapshot?.packageSelection ?? legacySelection
   };
 }
 
@@ -804,7 +809,8 @@ export function projectToRow(project: ProjectRecord, userId: string) {
         rates: project.rateSnapshot,
         repairCatalog: project.repairCatalogSnapshot,
         calculationVersion: project.calculationVersion,
-        timeEntries: project.timeEntries ?? []
+        timeEntries: project.timeEntries ?? [],
+        packageSelection: project.packageSelection
       }
     },
     calculations: project.calculations,
@@ -814,6 +820,54 @@ export function projectToRow(project: ProjectRecord, userId: string) {
     change_log: project.changeLog ?? [],
     updated_at: now()
   };
+}
+
+export async function saveProjectPackageSelection(projectId: string, selectedPackageIds: string[], actor = "System", reason = "") {
+  const projects = await loadProjects();
+  const current = projects.find((project) => project.id === projectId);
+  if (!current) throw new Error("The selected project no longer exists.");
+  if (current.inputs.pricingMode !== "selectable") throw new Error("This project does not use selectable work packages.");
+  const validIds = new Set(current.inputs.workPackages.map((item) => item.id));
+  const selectedIds = Array.from(new Set(selectedPackageIds.filter((id) => validIds.has(id))));
+  if (!selectedIds.length) throw new Error("Select at least one work package before confirming the client award.");
+  if (current.packageSelection && !reason.trim()) throw new Error("Add a reason before changing a confirmed client selection.");
+
+  const confirmedAt = now();
+  const confirmedBy = actorName(actor);
+  const packageSelection: PackageSelection = { selectedPackageIds: selectedIds, confirmedAt, confirmedBy, reason: reason.trim() };
+  const calculationInput: ProjectInput = {
+    ...current.inputs,
+    selectionConfirmed: true,
+    workPackages: current.inputs.workPackages.map((item) => ({ ...item, selected: selectedIds.includes(item.id) }))
+  };
+  const calculations = calculateProject(calculationInput, current.rateSnapshot ?? defaultRates, current.repairCatalogSnapshot ?? defaultRepairCatalog);
+  const selectedLabels = current.inputs.workPackages.filter((item) => selectedIds.includes(item.id)).map((item) => `${item.code}. ${item.name}`).join(", ");
+  const updated: ProjectRecord = {
+    ...current,
+    calculations,
+    packageSelection,
+    updatedBy: confirmedBy,
+    changeLog: log(current.changeLog, confirmedBy, current.packageSelection ? "Client package selection changed" : "Client package selection confirmed", `${selectedLabels}${reason.trim() ? ` / ${reason.trim()}` : ""}`)
+  };
+
+  const supabase = await supabaseContext();
+  if (supabase) {
+    const row = projectToRow(updated, supabase.session.user.id);
+    const { error } = await supabase.client.from("projects").update({
+      proposal_price: row.proposal_price,
+      budget_cost: row.budget_cost,
+      inputs: row.inputs,
+      calculations: row.calculations,
+      change_log: row.change_log,
+      updated_by: supabase.session.user.id,
+      updated_at: confirmedAt
+    }).eq("id", projectId).eq("company_id", supabase.companyId);
+    if (error) throw new Error(`Could not save the client package selection: ${error.message}`);
+    return updated;
+  }
+  if (isSupabaseConfigured()) requireCloudContext("Saving a client package selection");
+  writeJson(PROJECTS_KEY, projects.map((project) => project.id === projectId ? updated : project));
+  return updated;
 }
 
 export async function addProjectTimeEntry(projectId: string, entry: Omit<ProjectTimeEntry, "id" | "projectId" | "createdAt">) {

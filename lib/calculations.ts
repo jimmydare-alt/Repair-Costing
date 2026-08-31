@@ -19,11 +19,11 @@ function sectionPLCategory(section: Section): PLCategory {
   return "Labour";
 }
 
-function line(section: Section, item: string, rate: number, unit: string, quantity: number, marginRate: number, source: string, plCategory: PLCategory = sectionPLCategory(section)): Line {
+function line(section: Section, item: string, rate: number, unit: string, quantity: number, marginRate: number, source: string, plCategory: PLCategory = sectionPLCategory(section), costKind: Line["costKind"] = "operating"): Line {
   const cost = money(num(rate) * num(quantity));
   const margin = money(cost * num(marginRate));
   const total = money(cost + margin);
-  return { section, item, rate: num(rate), unit, quantity: num(quantity), cost, margin, total, discount: 0, originalTotal: total, source, plCategory };
+  return { section, item, rate: num(rate), unit, quantity: num(quantity), cost, margin, total, discount: 0, originalTotal: total, source, plCategory, costKind };
 }
 
 function rateMargin(rates: AdminRates, key: keyof AdminRates, fallback: number) {
@@ -54,6 +54,7 @@ type InternalTravelLineOptions = {
   destinationTransport: DestinationTransport;
   rentalVehicles: number;
   rentalVehicleDays: number;
+  costKind?: Line["costKind"];
 };
 
 function internalTravelLines(input: ProjectInput, rates: AdminRates, options: InternalTravelLineOptions) {
@@ -70,13 +71,14 @@ function internalTravelLines(input: ProjectInput, rates: AdminRates, options: In
   const rentalDays = fly && options.destinationTransport !== "None" ? rentalVehicles * num(options.rentalVehicleDays) : 0;
   const rentalRate = options.destinationTransport === "Rental Van" ? rates.rentalVan : rates.rentalCar;
   const rentalKey: keyof AdminRates = options.destinationTransport === "Rental Van" ? "rentalVan" : "rentalCar";
+  const costKind = options.costKind ?? "mobilisation";
   return [
-    line("Travel", options.travelItem ?? `${options.prefix} travel days`, options.travelDayRate, "person day", active ? people * num(options.travelDays) : 0, options.travelDayMargin, `${options.source} travel days`),
-    line("Travel", options.mileageItem ?? `${options.prefix} mileage`, options.mileageRate, distanceRateUnit(input.distanceUnit), mileage, options.mileageMargin, `${options.source} office journey x vehicles`),
-    line("Travel", `${options.prefix} return flights`, rates.returnFlight, "flight", flights, rateMargin(rates, "returnFlight", rates.flightMargin), `${options.source} return flights`),
-    line("Travel", `${options.prefix} airport transfer`, rates.airportUberReturn, "return", airportReturns, rateMargin(rates, "airportUberReturn", rates.travelMargin), `${options.source} return airport transfer`),
-    line("Travel", `${options.prefix} airport parking`, rates.airportParkingPerDay, "vehicle day", airportParking, rateMargin(rates, "airportParkingPerDay", rates.travelMargin), `${options.source} airport parking days x vehicles`),
-    line("Travel", `${options.prefix} ${options.destinationTransport === "Rental Van" ? "rental van" : "rental car"}`, rentalRate, "vehicle day", rentalDays, rateMargin(rates, rentalKey, rates.travelMargin), `${options.source} destination transport`)
+    line("Travel", options.travelItem ?? `${options.prefix} travel days`, options.travelDayRate, "person day", active ? people * num(options.travelDays) : 0, options.travelDayMargin, `${options.source} travel days`, "Travel", costKind),
+    line("Travel", options.mileageItem ?? `${options.prefix} mileage`, options.mileageRate, distanceRateUnit(input.distanceUnit), mileage, options.mileageMargin, `${options.source} office journey x vehicles`, "Travel", costKind),
+    line("Travel", `${options.prefix} return flights`, rates.returnFlight, "flight", flights, rateMargin(rates, "returnFlight", rates.flightMargin), `${options.source} return flights`, "Travel", costKind),
+    line("Travel", `${options.prefix} airport transfer`, rates.airportUberReturn, "return", airportReturns, rateMargin(rates, "airportUberReturn", rates.travelMargin), `${options.source} return airport transfer`, "Travel", costKind),
+    line("Travel", `${options.prefix} airport parking`, rates.airportParkingPerDay, "vehicle day", airportParking, rateMargin(rates, "airportParkingPerDay", rates.travelMargin), `${options.source} airport parking days x vehicles`, "Travel", costKind),
+    line("Travel", `${options.prefix} ${options.destinationTransport === "Rental Van" ? "rental van" : "rental car"}`, rentalRate, "vehicle day", rentalDays, rateMargin(rates, rentalKey, rates.travelMargin), `${options.source} destination transport`, "Travel", costKind)
   ];
 }
 
@@ -323,7 +325,7 @@ function grindingLines(input: ProjectInput, rates: AdminRates) {
     g.surveyorSubcontractors.forEach((item) => {
       const qty = item.priceType === "day" ? item.days || surveyorDays : item.rate ? 1 : 0;
       rows.push(line("Subcontract", item.name || "Grinding surveyor subcontractor", item.rate, item.priceType, qty, item.margin, "Grinding surveyor subcontract labour"));
-      rows.push(line("Subcontract", `${item.name || "Grinding surveyor subcontractor"} mobilisation`, item.mobilisationCost, "mobilisation", item.mobilisations, item.mobilisationMargin, "Grinding surveyor subcontract mobilisation"));
+      rows.push(line("Subcontract", `${item.name || "Grinding surveyor subcontractor"} mobilisation`, item.mobilisationCost, "mobilisation", item.mobilisations, item.mobilisationMargin, "Grinding surveyor subcontract mobilisation", "Subcontract", "mobilisation"));
     });
   }
   if (useProductionSubcontract) {
@@ -332,21 +334,21 @@ function grindingLines(input: ProjectInput, rates: AdminRates) {
     subcontractors.forEach((item) => {
       const qty = item.priceType === "day" ? item.days || days : item.rate ? 1 : 0;
       rows.push(line("Subcontract", item.name || "Grinding subcontractor", item.rate, item.priceType, qty, item.margin, "Grinding subcontract labour incl. standard labour/equipment"));
-      rows.push(line("Subcontract", `${item.name || "Grinding subcontractor"} mobilisation`, item.mobilisationCost, "mobilisation", item.mobilisations, item.mobilisationMargin, "Grinding subcontract mobilisation"));
+      rows.push(line("Subcontract", `${item.name || "Grinding subcontractor"} mobilisation`, item.mobilisationCost, "mobilisation", item.mobilisations, item.mobilisationMargin, "Grinding subcontract mobilisation", "Subcontract", "mobilisation"));
     });
   }
   rows.push(
     line("Equipment", "10000 watt generator", rates.grindingSmallGeneratorDayRate, "generator day", useProductionInHouse && g.generatorRequired ? Math.max(0, num(g.generatorCount)) * productionDays : 0, rateMargin(rates, "grindingSmallGeneratorDayRate", rates.equipmentMargin), "Grinding generator quantity x production days"),
     line("Equipment", "Large generator rental", g.largeGeneratorRate, "day", useProductionInHouse && g.largeGeneratorRequired ? productionDays : 0, rates.equipmentMargin, "Grinding production days"),
-    line("Equipment", "Large generator delivery", g.largeGeneratorDelivery, "item", useProductionInHouse && g.largeGeneratorRequired ? 1 : 0, rates.equipmentMargin, "Grinding generator delivery"),
-    line("Equipment", "Large generator collection", g.largeGeneratorCollection, "item", useProductionInHouse && g.largeGeneratorRequired ? 1 : 0, rates.equipmentMargin, "Grinding generator collection"),
+    line("Equipment", "Large generator delivery", g.largeGeneratorDelivery, "item", useProductionInHouse && g.largeGeneratorRequired ? 1 : 0, rates.equipmentMargin, "Grinding generator delivery", "Equipment", "mobilisation"),
+    line("Equipment", "Large generator collection", g.largeGeneratorCollection, "item", useProductionInHouse && g.largeGeneratorRequired ? 1 : 0, rates.equipmentMargin, "Grinding generator collection", "Equipment", "mobilisation"),
     line("Equipment", "Grinders", rates.grindingGrinderDayRate, "grinder day", useProductionInHouse ? productionMen * productionDays : 0, rateMargin(rates, "grindingGrinderDayRate", rates.equipmentMargin), "Grinding production days x men"),
     line("Equipment", "Planers", rates.grindingPlanerDayRate, "planer day", useProductionInHouse && g.gasPlaners ? g.gasPlaners * productionDays : 0, rateMargin(rates, "grindingPlanerDayRate", rates.equipmentMargin), "Grinding production days"),
     line("Equipment", "Vacuums", rates.grindingDustVacuumDayRate, "vacuum day", useProductionInHouse && g.dustVacuums ? g.dustVacuums * productionDays : 0, rateMargin(rates, "grindingDustVacuumDayRate", rates.equipmentMargin), "Grinding production days"),
     line("Equipment", "Extension cords", rates.grindingExtensionCordsDayRate, "day", useProductionInHouse && g.extensionCordsRequired ? productionDays : 0, rateMargin(rates, "grindingExtensionCordsDayRate", rates.equipmentMargin), "Grinding production days"),
     line("Materials", "Grinding segments", rates.grindingSegmentsDayRate, "grinder day", useProductionInHouse && g.grindingSegmentsRequired ? productionMen * productionDays : 0, rateMargin(rates, "grindingSegmentsDayRate", rates.equipmentMargin), "Grinding production days x men"),
     line("Materials", "Grinding consumables", rates.grindingConsumablesDayRate, "grinder day", useProductionInHouse && g.consumablesRequired ? productionMen * productionDays : 0, rateMargin(rates, "grindingConsumablesDayRate", rates.equipmentMargin), "Grinding production days x men"),
-    line("Equipment", "Grinding equipment shipping", g.equipmentShipping, "round trip", useProductionInHouse && g.equipmentShipping ? 1 : 0, num(g.equipmentShippingMargin ?? rates.equipmentShippingMargin), "Grinding equipment shipping")
+    line("Equipment", "Grinding equipment shipping", g.equipmentShipping, "round trip", useProductionInHouse && g.equipmentShipping ? 1 : 0, num(g.equipmentShippingMargin ?? rates.equipmentShippingMargin), "Grinding equipment shipping", "Equipment", "mobilisation")
   );
   if (useProductionInHouse) g.additionalTools.forEach((item) => rows.push(line("Equipment", item.name || "Additional grinding tool", item.rate, "item", item.rate ? 1 : 0, item.margin, "Grinding additional tool", "Equipment")));
   return rows;
@@ -393,7 +395,7 @@ function screedLines(input: ProjectInput, rates: AdminRates) {
     s.surveyorSubcontractors.forEach((item) => {
       const qty = item.priceType === "day" ? item.days || surveyorDays : item.rate ? 1 : 0;
       rows.push(line("Subcontract", item.name || "Screed surveyor subcontractor", item.rate, item.priceType, qty, item.margin, "Screed surveyor subcontract labour"));
-      rows.push(line("Subcontract", `${item.name || "Screed surveyor subcontractor"} mobilisation`, item.mobilisationCost, "mobilisation", item.mobilisations, item.mobilisationMargin, "Screed surveyor subcontract mobilisation"));
+      rows.push(line("Subcontract", `${item.name || "Screed surveyor subcontractor"} mobilisation`, item.mobilisationCost, "mobilisation", item.mobilisations, item.mobilisationMargin, "Screed surveyor subcontract mobilisation", "Subcontract", "mobilisation"));
     });
   }
   if (useProductionSubcontract) {
@@ -404,7 +406,7 @@ function screedLines(input: ProjectInput, rates: AdminRates) {
       const activityDays = preparationDays + screedingDays + grindingDays;
       const scope = [team.prep && "preparation", team.screed && "screeding", team.grind && "grinding"].filter(Boolean).join(", ");
       const label = `Screed subcontractor ${index + 1}${team.contractorName ? ` - ${team.contractorName}` : ""}`;
-      rows.push(line("Subcontract", `${label} mobilisation`, team.mobilisation, "mobilisation", team.mobilisation ? 1 : 0, num(team.mobilisationMargin ?? rates.subcontractMargin), `Screed subcontract mobilisation${scope ? ` (${scope})` : ""}`));
+      rows.push(line("Subcontract", `${label} mobilisation`, team.mobilisation, "mobilisation", team.mobilisation ? 1 : 0, num(team.mobilisationMargin ?? rates.subcontractMargin), `Screed subcontract mobilisation${scope ? ` (${scope})` : ""}`, "Subcontract", "mobilisation"));
       rows.push(line("Subcontract", `${label} price on site`, team.rate, team.priceType, team.priceType === "day" ? activityDays : team.rate ? 1 : 0, num(team.margin ?? rates.subcontractMargin), `Screed subcontract rate${scope ? ` (${scope})` : ""}`));
     });
   }
@@ -415,15 +417,15 @@ function screedLines(input: ProjectInput, rates: AdminRates) {
     line("Materials", "Shipping of materials", s.materialShipping, "return", s.materialShipping ? 1 : 0, num(s.materialShippingMargin ?? rates.materialShippingMargin), "Screed material shipping"),
     line("Equipment", "Screed generator", rates.screedSmallGeneratorDayRate, "day", useProductionInHouse ? s.generatorDays : 0, rateMargin(rates, "screedSmallGeneratorDayRate", rates.equipmentMargin), "Screed generator"),
     line("Equipment", "Screed large generator rental", s.largeGeneratorRate, "day", useProductionInHouse && s.largeGeneratorRequired ? Math.ceil(productionDays) : 0, rates.equipmentMargin, "Screed large generator"),
-    line("Equipment", "Screed large generator delivery", s.largeGeneratorDelivery, "item", useProductionInHouse && s.largeGeneratorRequired ? 1 : 0, rates.equipmentMargin, "Screed large generator delivery"),
-    line("Equipment", "Screed large generator collection", s.largeGeneratorCollection, "item", useProductionInHouse && s.largeGeneratorRequired ? 1 : 0, rates.equipmentMargin, "Screed large generator collection"),
+    line("Equipment", "Screed large generator delivery", s.largeGeneratorDelivery, "item", useProductionInHouse && s.largeGeneratorRequired ? 1 : 0, rates.equipmentMargin, "Screed large generator delivery", "Equipment", "mobilisation"),
+    line("Equipment", "Screed large generator collection", s.largeGeneratorCollection, "item", useProductionInHouse && s.largeGeneratorRequired ? 1 : 0, rates.equipmentMargin, "Screed large generator collection", "Equipment", "mobilisation"),
     line("Equipment", "Screed grinders", rates.screedDiamondGrinderPropaneDayRate, "grinder day", useProductionInHouse ? grinderCount * toolDays : 0, rateMargin(rates, "screedDiamondGrinderPropaneDayRate", rates.equipmentMargin), "Screed grinders"),
     line("Equipment", "Screed planers", rates.screedGasPlanerDayRate, "planer day", useProductionInHouse ? s.gasPlaners * toolDays : 0, rateMargin(rates, "screedGasPlanerDayRate", rates.equipmentMargin), "Screed planers"),
     line("Equipment", "Screed vacuums", rates.screedDustVacuumDayRate, "vacuum day", useProductionInHouse ? s.dustVacuums * toolDays : 0, rateMargin(rates, "screedDustVacuumDayRate", rates.equipmentMargin), "Screed vacuums"),
     line("Equipment", "Screed extension cords", rates.screedExtensionCordSetDayRate, "set day", useProductionInHouse ? s.extensionCordSets * toolDays : 0, rateMargin(rates, "screedExtensionCordSetDayRate", rates.equipmentMargin), "Screed extension cords"),
     line("Materials", "Screed grinding segments", rates.screedGrindingSegmentsDayRate, "grinder day", useProductionInHouse && s.grindingSegmentsRequired ? grinderCount * toolDays : 0, rateMargin(rates, "screedGrindingSegmentsDayRate", rates.equipmentMargin), "Screed grinding segments"),
     line("Materials", "Screed consumables", rates.screedConsumablesDayRate, "grinder day", useProductionInHouse && s.consumablesRequired ? Math.max(1, grinderCount) * toolDays : 0, rateMargin(rates, "screedConsumablesDayRate", rates.equipmentMargin), "Screed consumables"),
-    line("Equipment", "Screed equipment shipping", s.equipmentShipping, "round trip", useProductionInHouse && s.equipmentShipping ? 1 : 0, num(s.equipmentShippingMargin ?? rates.equipmentShippingMargin), "Screed equipment shipping")
+    line("Equipment", "Screed equipment shipping", s.equipmentShipping, "round trip", useProductionInHouse && s.equipmentShipping ? 1 : 0, num(s.equipmentShippingMargin ?? rates.equipmentShippingMargin), "Screed equipment shipping", "Equipment", "mobilisation")
   );
   return rows;
 }
@@ -451,7 +453,7 @@ function repairLines(input: ProjectInput, rates: AdminRates, materialCalcs: Mate
     r.repairSubcontractors.forEach((item) => {
       const labourQty = item.priceType === "day" ? item.days : item.rate ? 1 : 0;
       rows.push(line("Subcontract", item.name || "Repair subcontractor", item.rate, item.priceType, labourQty, item.margin, "Repair subcontract labour incl. standard labour/equipment"));
-      rows.push(line("Subcontract", `${item.name || "Repair subcontractor"} mobilisation`, item.mobilisationCost, "mobilisation", item.mobilisations, item.mobilisationMargin, "Repair subcontract mobilisation"));
+      rows.push(line("Subcontract", `${item.name || "Repair subcontractor"} mobilisation`, item.mobilisationCost, "mobilisation", item.mobilisations, item.mobilisationMargin, "Repair subcontract mobilisation", "Subcontract", "mobilisation"));
     });
   }
   materialCalcs.forEach((calc) => rows.push(line("Materials", calc.product, calc.rate, calc.unit, calc.quantity, rates.materialMargin, calc.formula)));
@@ -468,7 +470,7 @@ function projectManagementLines(input: ProjectInput, rates: AdminRates) {
     line("Hotel", "Project manager hotel", rates.hotel, "night", num(pm.hotelNights), rateMargin(rates, "hotel", rates.hotelMargin), "Whole-project management hotel"),
     line("Subsistence", "Project manager subsistence", rates.subsistence, "day", num(pm.hotelNights), rateMargin(rates, "subsistence", rates.subsistenceMargin), "Subsistence follows PM hotel nights")
   ];
-  rows.push(...internalTravelLines(input, rates, { enabled: true, prefix: "Project manager", travelItem: "Project manager travel days", mileageItem: "Project manager mileage", source: "Whole-project management", mode: pm.travelMode, people: 1, travelDays: pm.travelDays, travelDayRate: rates.otherInternalTravelDayRate, travelDayMargin: rateMargin(rates, "otherInternalTravelDayRate", rates.travelMargin), primaryOneWay: pm.oneWayKm, secondaryOneWay: pm.secondaryOneWayKm, vehicles: pm.vehicles, journeys: visits, mileageRate: rates.mileagePerKm, mileageMargin: rateMargin(rates, "mileagePerKm", rates.travelMargin), returnFlights: pm.returnFlights, airportTransport: pm.airportTransport, airportTransferReturns: pm.airportTransferReturns, airportParkingDays: pm.airportParkingDays, destinationTransport: pm.destinationTransport, rentalVehicles: pm.rentalVehicles, rentalVehicleDays: pm.rentalVehicleDays }));
+  rows.push(...internalTravelLines(input, rates, { enabled: true, prefix: "Project manager", travelItem: "Project manager travel days", mileageItem: "Project manager mileage", source: "Whole-project management", mode: pm.travelMode, people: 1, travelDays: pm.travelDays, travelDayRate: rates.otherInternalTravelDayRate, travelDayMargin: rateMargin(rates, "otherInternalTravelDayRate", rates.travelMargin), primaryOneWay: pm.oneWayKm, secondaryOneWay: pm.secondaryOneWayKm, vehicles: pm.vehicles, journeys: visits, mileageRate: rates.mileagePerKm, mileageMargin: rateMargin(rates, "mileagePerKm", rates.travelMargin), returnFlights: pm.returnFlights, airportTransport: pm.airportTransport, airportTransferReturns: pm.airportTransferReturns, airportParkingDays: pm.airportParkingDays, destinationTransport: pm.destinationTransport, rentalVehicles: pm.rentalVehicles, rentalVehicleDays: pm.rentalVehicleDays, costKind: "operating" }));
   return rows;
 }
 
@@ -512,10 +514,11 @@ function calculateCombinedProject(input: ProjectInput, rates: AdminRates, repair
   const budgetMargin = proposalTotal ? pct(budgetProfit / proposalTotal) : 0;
   const budgetMarkup = budgetCost ? pct(budgetProfit / budgetCost) : 0;
   const services = [input.includeGrinding && input.grinding.enabled && "Grinding", input.includeScreeding && input.screeding.enabled && "Screeding", input.includeRepairs && input.repairs.enabled && "Repairs"].filter(Boolean).join(" + ") || "Draft";
-  const dailyRate = money(proposalLines.filter((row) => !["Travel", "Subcontract", "Haulage", "Reports", "Additional items"].includes(row.section)).reduce((sum, row) => sum + row.total, 0) / Math.max(1, siteDays));
+  const dailyRate = money(proposalLines.filter(isOperatingLine).reduce((sum, row) => sum + row.total, 0) / Math.max(1, siteDays));
   const travelTotal = money(proposalLines.filter((row) => row.plCategory === "Travel").reduce((sum, row) => sum + row.total, 0));
   const haulageTotal = money(proposalLines.filter((row) => row.plCategory === "Haulage").reduce((sum, row) => sum + row.total, 0));
-  const mobilisationRate = travelTotal;
+  const mobilisationRate = money(proposalLines.filter(isMobilisationLine).reduce((sum, row) => sum + row.total, 0));
+  const mobilisationBudget = money(budgetLines.filter(isMobilisationLine).reduce((sum, row) => sum + row.total, 0));
   return {
     projectReference: input.projectReference,
     client: input.client,
@@ -544,9 +547,10 @@ function calculateCombinedProject(input: ProjectInput, rates: AdminRates, repair
     budgetGroupCurrency: money(budgetCost * groupExchange),
     dailyRate,
     mobilisationRate,
+    mobilisationBudget,
     travelTotal,
     haulageTotal,
-    standbyRate: money(quoteRates.hotel * (1 + rateMargin(quoteRates, "hotel", quoteRates.hotelMargin)) + quoteRates.subsistence * (1 + rateMargin(quoteRates, "subsistence", quoteRates.subsistenceMargin)))
+    standbyRate: 0
   };
 }
 
@@ -577,17 +581,17 @@ function budgetVersion(row: Line): Line {
   return { ...row, margin: 0, discount: 0, total: row.cost, originalTotal: row.cost };
 }
 
-function rateAdjustment(item: string, amount: number, source: string): Line {
+function rateAdjustment(item: string, amount: number, source: string, costKind: Line["costKind"] = "operating"): Line {
   const value = money(amount);
-  return { section: "Labour", item, rate: value, unit: "adjustment", quantity: value ? 1 : 0, cost: 0, margin: value, total: value, discount: 0, originalTotal: value, source, plCategory: "Labour" };
+  return { section: "Labour", item, rate: value, unit: "adjustment", quantity: value ? 1 : 0, cost: 0, margin: value, total: value, discount: 0, originalTotal: value, source, plCategory: "Labour", costKind };
 }
 
 function isMobilisationLine(row: Line) {
-  return row.plCategory === "Travel" || /\btravel\b|mobilisation|mobilization|shipping|delivery|collection/i.test(row.item);
+  return row.costKind === "mobilisation";
 }
 
 function isOperatingLine(row: Line) {
-  return !isMobilisationLine(row)
+  return row.costKind !== "mobilisation" && row.costKind !== "stand_down"
     && row.section !== "Haulage"
     && row.section !== "Reports"
     && row.section !== "Additional items";
@@ -607,7 +611,7 @@ function grindingStandby(workPackage: RemedialWorkPackage, rates: AdminRates, ex
     if (!rate || !quantity) return;
     budgetRate += rate * quantity;
     proposalRate += rate * quantity * (1 + Math.max(0, num(markup)));
-    rows.push(line(section, item, rate, "stand-down day", quantity * expectedDays, markup, "Grinding stand-down schedule", plCategory));
+    rows.push(line(section, item, rate, "stand-down day", quantity * expectedDays, markup, "Grinding stand-down schedule", plCategory, "stand_down"));
   };
   const productionInHouse = g.productionLabourMode === "in_house" || g.productionLabourMode === "both";
   const productionSubcontract = g.productionLabourMode === "subcontract" || g.productionLabourMode === "both";
@@ -654,7 +658,7 @@ function calculateWorkPackage(parent: ProjectInput, workPackage: RemedialWorkPac
   const packageInput = packageProjectInput(parent, workPackage);
   const calculation = calculateCombinedProject(packageInput, rates, repairCatalog);
   const keepLine = (row: Line) => workPackage.mobilisationMode === "separate"
-    || !(row.plCategory === "Travel" || (row.plCategory === "Labour" && /\btravel\b/i.test(row.item)));
+    || !(row.costKind === "mobilisation" && row.plCategory === "Travel");
   let proposalLines = tagged(calculation.proposalLines.filter(keepLine), workPackage);
   let budgetLines = tagged(calculation.budgetLines.filter(keepLine), workPackage);
   let rateSchedule: CommercialRateSchedule | undefined;
@@ -680,7 +684,7 @@ function calculateWorkPackage(parent: ProjectInput, workPackage: RemedialWorkPac
       : 0;
     proposalLines.push(...tagged(standbyProposalLines, workPackage));
     budgetLines.push(...tagged(rawStandby.budgetLines, workPackage));
-    if (standbyAdjustment) proposalLines.push(...tagged([rateAdjustment("Stand-down day rate adjustment", standbyAdjustment, `${workPackage.code} stand-down override`)], workPackage));
+    if (standbyAdjustment) proposalLines.push(...tagged([rateAdjustment("Stand-down day rate adjustment", standbyAdjustment, `${workPackage.code} stand-down override`, "stand_down")], workPackage));
 
     const mobilisationProposal = total(proposalLines.filter(isMobilisationLine));
     const mobilisationBudget = total(budgetLines.filter(isMobilisationLine));
@@ -847,7 +851,8 @@ function calculateSelectableProject(input: ProjectInput, rates: AdminRates, repa
     proposalGroupCurrency: money(proposalTotal * groupExchange),
     budgetGroupCurrency: money(budgetCost * groupExchange),
     dailyRate: rateSchedules.length === 1 ? rateSchedules[0].productiveProposalRate : 0,
-    mobilisationRate: commonProposalTotal + total(proposalLines.filter((row) => row.workPackageId && isMobilisationLine(row))),
+    mobilisationRate: total(proposalLines.filter(isMobilisationLine)),
+    mobilisationBudget: total(budgetLines.filter(isMobilisationLine)),
     travelTotal,
     haulageTotal,
     standbyRate: rateSchedules.length === 1 ? rateSchedules[0].standbyProposalRate : 0,
