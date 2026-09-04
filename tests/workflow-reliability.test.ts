@@ -9,15 +9,15 @@ import type { ProjectRecord } from "@/lib/types";
 describe("rollout workflow reliability", () => {
   it("keeps one ordered builder path and skips unselected services", () => {
     const input = { ...emptyInput, includeGrinding: true, grinding: { ...emptyInput.grinding, enabled: true }, uiProgress: { ...emptyInput.uiProgress, builderStep: "Project" } };
-    expect(visibleBuilderSteps(input)).toEqual(["Services", "Project", "Grinding", "Project Management", "Extras", "Review"]);
+    expect(visibleBuilderSteps(input)).toEqual(["Project", "Services", "Grinding", "Project Management", "Extras", "Review"]);
     expect(resolveBuilderStep(input)).toBe("Project");
-    expect(adjacentBuilderStep(input, 1)).toBe("Grinding");
+    expect(adjacentBuilderStep(input, 1)).toBe("Services");
     expect(adjacentBuilderStep({ ...input, uiProgress: { ...input.uiProgress, builderStep: "Grinding" } }, 1)).toBe("Project Management");
   });
 
   it("falls back safely if a saved step is no longer selected", () => {
     const input = { ...emptyInput, uiProgress: { ...emptyInput.uiProgress, builderStep: "Repairs" } };
-    expect(resolveBuilderStep(input)).toBe("Services");
+    expect(resolveBuilderStep(input)).toBe("Project");
   });
 
   it("does not treat builder navigation as an unsaved costing change", () => {

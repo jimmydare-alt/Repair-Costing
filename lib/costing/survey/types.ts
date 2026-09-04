@@ -7,6 +7,7 @@ export type SurveyTravelMode = "Drive" | "Fly";
 export type SurveyAirportTransport = "N/A" | "Drive" | "Uber";
 
 export type SurveyAdditionalItem = {
+  id?: string;
   name: string;
   rate: number;
   unit: string;

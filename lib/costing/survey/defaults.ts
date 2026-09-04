@@ -88,6 +88,6 @@ export function normaliseSurveyInput(saved: Partial<SurveyInput> | undefined, cu
     quoteCurrency: saved?.quoteCurrency ?? currency,
     distanceUnit: saved?.distanceUnit ?? distanceUnit,
     officeCount: inferredOfficeCount,
-    additionalItems: Array.isArray(saved?.additionalItems) ? saved.additionalItems : []
+    additionalItems: Array.isArray(saved?.additionalItems) ? saved.additionalItems.map((item, index) => ({ ...item, id: item.id ?? `survey-extra-${index}` })) : []
   });
 }

@@ -50,10 +50,10 @@ describe("selectable remedial work packages", () => {
     const result = calculateProject(emptyInput, defaultRates);
     expect(result.pricingMode).toBeUndefined();
     expect(result.proposalTotal).toBe(0);
-    expect(visibleBuilderSteps(emptyInput)).toEqual(["Services", "Project", "Project Management", "Extras", "Review"]);
+    expect(visibleBuilderSteps(emptyInput)).toEqual(["Project", "Services", "Project Management", "Extras", "Review"]);
     const selectable = selectableBase();
     const onePackage = grindingPackage(selectable, 0, "Only package");
-    expect(visibleBuilderSteps({ ...selectable, workPackages: [onePackage] })).toEqual(["Services", "Project", "Packages", "Project Management", "Extras", "Review"]);
+    expect(visibleBuilderSteps({ ...selectable, workPackages: [onePackage] })).toEqual(["Project", "Services", "Packages", "Project Management", "Extras", "Review"]);
     expect(visibleBuilderSteps({ ...selectable, workPackages: [onePackage, grindingPackage(selectable, 1, "Second package")] })).toContain("Phase Schedule");
   });
 

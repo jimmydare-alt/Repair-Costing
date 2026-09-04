@@ -3,6 +3,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { Session, SupabaseClient } from "@supabase/supabase-js";
 import { approvedBrandVariables } from "./branding";
+import { needsWorkspaceReset } from "./sessionLifecycle";
 import { createBrowserSupabaseClient, isSupabaseConfigured } from "./supabaseClient";
 import { canSelectCompany, defaultCompanies, enabledNavigation, type AppModuleKey, type Company, type MembershipRole } from "./company";
 
@@ -58,20 +59,23 @@ async function loadCompanies(client: SupabaseClient, userId: string) {
     ? await client.from("profiles").select("is_super_admin,status").eq("id", userId).maybeSingle()
     : null;
   const profile = profileResult.data ?? legacyProfileResult?.data;
+  if (profileResult.error && legacyProfileResult?.error) throw legacyProfileResult.error;
   const accountStatus = profile?.status === "suspended" || profile?.status === "archived" || profile?.status === "invited" ? profile.status : "active";
   const defaultCompanyId = profileResult.data?.default_company_id ? String(profileResult.data.default_company_id) : "";
   if (accountStatus !== "active") return { companies: [], role: "viewer" as MembershipRole, modules: [] as AppModuleKey[], defaultCompanyId, accountStatus };
   const superAdmin = Boolean(profile?.is_super_admin);
   if (superAdmin) {
-    const { data: companies } = await client.from("companies").select("*").eq("status", "active").order("name");
+    const { data: companies, error } = await client.from("companies").select("*").eq("status", "active").order("name");
+    if (error) throw error;
     const parsed = (companies ?? []).map((row) => companyFromRow(row as Record<string, unknown>));
     return { companies: parsed, role: "super_admin" as MembershipRole, modules: defaultModulesForRole("super_admin"), defaultCompanyId, accountStatus };
   }
-  const { data: memberships } = await client
+  const { data: memberships, error } = await client
     .from("company_memberships")
     .select("role,status,companies(*)")
     .eq("user_id", userId)
     .eq("status", "active");
+  if (error) throw error;
   const rows = memberships ?? [];
   const accessibleCompanies = rows.map((row: any) => companyFromRow(row.companies)).filter((company) => company.status === "active");
   const defaultCompany = accessibleCompanies.find((company) => company.id === defaultCompanyId) ?? accessibleCompanies[0];
@@ -132,6 +136,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [role, setRole] = useState<MembershipRole>("super_admin");
   const [enabledModules, setEnabledModules] = useState<AppModuleKey[]>(defaultModulesForRole("super_admin"));
   const companySwitchToken = useRef(0);
+  const activeCompanyIdRef = useRef(activeCompanyId);
+  activeCompanyIdRef.current = activeCompanyId;
 
   async function refreshCompanies() {
     if (!client || !session?.user) return;
@@ -151,55 +157,50 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     let live = true;
-    client.auth.getSession().then(async ({ data, error }) => {
-      if (!live) return;
-      if (error) {
-        setSession(null);
-        setLoading(false);
-        return;
-      }
-      setSession(data.session);
-      if (data.session?.user) {
-        const loaded = await loadCompanies(client, data.session.user.id);
-        if (!live) return;
-        setCompanies(loaded.companies);
-        setAccountStatus(loaded.accountStatus);
-        const cookieCompany = typeof document !== "undefined" ? document.cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)?.[1] : undefined;
-        const requestedCompany = cookieCompany ? decodeURIComponent(cookieCompany) : "";
-        const nextActive = preferredCompanyId(loaded, requestedCompany);
-        const nextRole = await loadRoleForCompany(client, data.session.user.id, nextActive, loaded.role);
-        setRole(nextRole);
-        setEnabledModules(await loadCompanyModules(client, nextActive, nextRole));
-        setActiveCompanyId(nextActive);
-      }
-      setLoading(false);
-    }).catch(() => { if (live) setLoading(false); });
+    let currentUserId: string | null = null;
+    let requestVersion = 0;
     const { data: listener } = client.auth.onAuthStateChange((_event, nextSession) => {
+      if (!live) return;
+      const nextUserId = nextSession?.user.id ?? null;
+      const reset = needsWorkspaceReset(currentUserId, nextUserId);
+      currentUserId = nextUserId;
+      const version = ++requestVersion;
+      const switchToken = companySwitchToken.current;
       setSession(nextSession);
       if (!nextSession) {
-        setCompanies(defaultCompanies);
+        setCompanies([]);
         setAccountStatus("active");
         setActiveCompanyId(defaultCompanies[1].id);
-        setRole("super_admin");
-        setEnabledModules(defaultModulesForRole("super_admin"));
+        setRole("viewer");
+        setEnabledModules([]);
         setLoading(false);
         return;
       }
-      setLoading(true);
+      // Token renewal and tab refocus must not unmount an in-progress costing.
+      if (reset) setLoading(true);
       setTimeout(() => {
         void loadCompanies(client, nextSession.user.id).then(async (loaded) => {
-          if (!live) return;
-          setCompanies(loaded.companies);
-          setAccountStatus(loaded.accountStatus);
+          if (!live || version !== requestVersion) return;
           const cookieCompany = typeof document !== "undefined" ? document.cookie.match(/(?:^|;\s*)active_company_id=([^;]+)/)?.[1] : undefined;
-          const requestedCompany = cookieCompany ? decodeURIComponent(cookieCompany) : "";
+          const requestedCompany = reset ? (cookieCompany ? decodeURIComponent(cookieCompany) : "") : activeCompanyIdRef.current;
           const nextActive = preferredCompanyId(loaded, requestedCompany);
           const nextRole = await loadRoleForCompany(client, nextSession.user.id, nextActive, loaded.role);
-          if (!live) return;
+          const modules = await loadCompanyModules(client, nextActive, nextRole);
+          if (!live || version !== requestVersion || switchToken !== companySwitchToken.current) return;
+          setCompanies(loaded.companies);
+          setAccountStatus(loaded.accountStatus);
           setActiveCompanyId(nextActive);
           setRole(nextRole);
-          setEnabledModules(await loadCompanyModules(client, nextActive, nextRole));
-        }).finally(() => { if (live) setLoading(false); });
+          setEnabledModules(modules);
+        }).catch(() => {
+          // Initial access fails closed; transient background errors keep the last
+          // confirmed view. Every data operation remains protected by server RLS.
+          if (live && version === requestVersion && reset) {
+            setCompanies([]);
+            setRole("viewer");
+            setEnabledModules([]);
+          }
+        }).finally(() => { if (live && version === requestVersion) setLoading(false); });
       }, 0);
     });
     return () => {

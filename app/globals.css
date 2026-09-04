@@ -2,6 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
+.draft-save-status { position: fixed; right: 20px; bottom: 12px; z-index: 45; max-width: calc(100vw - 40px); padding: 7px 12px; border: 1px solid #d1d5db; border-radius: 8px; background: #fff; color: #374151; font-size: 12px; box-shadow: 0 2px 8px #0000000d; pointer-events: none; }
+.pricing-snapshot-status { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 0; color: #4b5563; font-size: 12px; }
+.pricing-dialog { width: min(680px, calc(100vw - 32px)); max-height: 85vh; overflow: auto; border: 1px solid #d1d5db; border-radius: 14px; padding: 24px; background: #fff; color: #111827; }
+.pricing-dialog::backdrop { background: #00000066; }
+.repair-allocation-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(75px, .3fr) minmax(150px, .5fr); gap: 16px; align-items: center; padding: 12px 0; border-bottom: 1px solid #e5e7eb; }
+.repair-price-breakdown .table-shell { max-width: 100%; }
+@media (max-width: 640px) { .repair-allocation-row { grid-template-columns: minmax(0, 1fr); gap: 8px; } }
+@media print { .draft-save-status, .pricing-snapshot-status { display: none; } }
+
 :root {
   color-scheme: light;
   --cogri-red: #c8102e;

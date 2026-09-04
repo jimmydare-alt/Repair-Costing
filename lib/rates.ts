@@ -285,7 +285,7 @@ export const emptyInput: ProjectInput = {
   },
   bdmBonusRequired: false,
   markupOverrideReason: "",
-  uiProgress: { builderStep: "Services", grindingPage: "Programme", screedPage: "Programme", repairPage: "Details" },
+  uiProgress: { builderStep: "Project", grindingPage: "Programme", screedPage: "Programme", repairPage: "Details" },
   grinding: {
     enabled: false,
     estimatedDays: 0,

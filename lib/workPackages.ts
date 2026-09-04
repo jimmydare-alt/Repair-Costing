@@ -117,12 +117,13 @@ export function packageProjectInput(parent: ProjectInput, workPackage: RemedialW
     additionalItems: clone(workPackage.additionalItems),
     bdmBonusRequired: false,
     discountPercentage: workPackage.discountPercentage ?? parent.discountPercentage,
-    uiProgress: { ...parent.uiProgress, builderStep: workPackage.service }
+    uiProgress: { ...workPackage.uiProgress, builderStep: workPackage.service }
   };
 }
 
 export function updatePackageFromProjectInput(workPackage: RemedialWorkPackage, input: ProjectInput): RemedialWorkPackage {
-  if (workPackage.service === "Grinding") return { ...workPackage, grinding: clone(input.grinding), additionalItems: clone(input.additionalItems) };
-  if (workPackage.service === "Screeding") return { ...workPackage, screeding: clone(input.screeding), additionalItems: clone(input.additionalItems) };
-  return { ...workPackage, repairs: clone(input.repairs), additionalItems: clone(input.additionalItems) };
+  const updated = { ...workPackage, uiProgress: input.uiProgress, additionalItems: clone(input.additionalItems) };
+  if (workPackage.service === "Grinding") return { ...updated, grinding: clone(input.grinding) };
+  if (workPackage.service === "Screeding") return { ...updated, screeding: clone(input.screeding) };
+  return { ...updated, repairs: clone(input.repairs) };
 }

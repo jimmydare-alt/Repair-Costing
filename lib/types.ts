@@ -323,6 +323,7 @@ export type RepairLineItem = {
   manualMaterialQty: number;
   outputPerDay: number;
   materialSelections: RepairLineMaterialSelection[];
+  labourAllocationWeight?: number | null;
 };
 
 export type RepairLabourMode = LabourMode;
@@ -341,6 +342,7 @@ export type RepairSubcontractor = {
 };
 
 export type RemedialWorkPackage = {
+  uiProgress?: ProjectInput["uiProgress"];
   id: string;
   code: string;
   name: string;
@@ -449,6 +451,7 @@ export type ProjectInput = {
     grindingPage?: "Programme" | "Labour" | "Tools & Review";
     screedPage?: "Programme" | "Labour" | "Materials" | "Tools & Review";
     repairPage?: "Details" | "Labour" | "Review";
+    surveyStep?: "Project" | "Scope" | "Team" | "Travel & Stay" | "Extras & Review";
   };
   grinding: GrindingScope;
   screeding: ScreedScope;
@@ -625,6 +628,7 @@ export type WorkPackageCalculationSummary = {
 };
 
 export type MaterialCalc = {
+  materialId?: string;
   product: string;
   quantity: number;
   unit: string;
@@ -635,6 +639,7 @@ export type MaterialCalc = {
 };
 
 export type ProjectCalculations = {
+  repairPricing?: import("./repairPricing").RepairPriceBreakdown[];
   costingModule?: CostingModule;
   projectReference: string;
   client: string;

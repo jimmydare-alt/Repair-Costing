@@ -21,6 +21,9 @@ import { SurveyBuilder } from "@/components/survey/SurveyBuilder";
 import { SurveyRatesAdmin } from "@/components/survey/SurveyRatesAdmin";
 import { CompanyAdminView as CompanyAdminPanel } from "@/components/company-admin/CompanyAdminView";
 import { NumericField } from "@/components/ui/NumericField";
+import { PricingSnapshotPanel } from "@/components/PricingSnapshotPanel";
+import { RepairPriceTable } from "@/components/RepairPriceTable";
+import { CommercialRateEditor } from "@/components/CommercialRateEditor";
 import { createEmptySurveyInput, normaliseSurveyRates } from "@/lib/costing/survey/defaults";
 import { calculateSurveyProject } from "@/lib/costing/survey/calculations";
 import { createSurveyProjectInput, syncSurveyProjectInput } from "@/lib/costing/survey/project";
@@ -282,11 +285,17 @@ export default function Workspace() {
   const [saveState, setSaveState] = useState<"idle" | "autosaving" | "saving" | "saved">("idle");
   const [lastSavedAt, setLastSavedAt] = useState("");
   const autosaveInFlight = useRef(false);
+  const pendingAutosave = useRef<{ generation: number; promise: Promise<ProjectRecord> } | null>(null);
+  const manualSaveInFlight = useRef(false);
+  const editGeneration = useRef(0);
+  const latestView = useRef(view);
+  latestView.current = view;
   const [workspaceLoaded, setWorkspaceLoaded] = useState(false);
   const [adminTab, setAdminTab] = useState<AdminTab>(routeAdminTab);
   const companyLoadToken = useRef(0);
   const [actuals, setActuals] = useState(defaultActuals(calculateProject(emptyInput, defaultRates, defaultRepairCatalog)));
-  const calculations = useMemo(() => calculateProject(input, pricingRates, pricingCatalog), [input, pricingRates, pricingCatalog]);
+  const calculations = useMemo(() => input.costingModule === "survey" && input.survey ? calculateSurveyProject(input.survey, pricingRates.surveyRates) : calculateProject(input, pricingRates, pricingCatalog), [input, pricingRates, pricingCatalog]);
+  const currentAdminCalculation = useMemo(() => input.costingModule === "survey" && input.survey ? calculateSurveyProject(input.survey, rates.surveyRates) : calculateProject(input, rates, repairCatalog), [input, rates, repairCatalog]);
   const selected = projects.find((project) => project.id === selectedId);
   const selectedCalcs = selected?.calculations ?? calculations;
   const pl = calculatePL(selectedCalcs, selected?.actuals ?? actuals);
@@ -295,6 +304,8 @@ export default function Workspace() {
   const moduleBlocked = routeModule && (!auth.enabledModules.includes(routeModule) || !hasPermission(auth.role, routePermission));
   const displayCurrency = view === "New Project" ? input.quoteCurrency : view === "Project Detail" && selected ? selected.inputs.quoteCurrency : auth.activeCompany.defaultCurrency;
   const hasUnsavedChanges = view === "New Project" && !costingInputsEqual(input, baselineInput);
+  const hasPendingDraftChanges = view === "New Project" && JSON.stringify(input) !== JSON.stringify(baselineInput);
+  const hasCompanyAccess = auth.companies.some((company) => company.id === auth.activeCompany.id);
   const hasUnsavedAdminChanges = view === "Admin Rates" && (JSON.stringify(rates) !== JSON.stringify(baselineRates) || JSON.stringify(repairCatalog) !== JSON.stringify(baselineRepairCatalog));
   const hasUnsavedWork = hasUnsavedChanges || hasUnsavedAdminChanges;
   const duplicateProjectReference = Boolean(input.projectReference.trim()) && projects.some((project) => project.id !== editingId && project.inputs.projectReference.trim().toLowerCase() === input.projectReference.trim().toLowerCase());
@@ -324,6 +335,7 @@ export default function Workspace() {
       userId: auth.session?.user.id
     });
     const loadToken = ++companyLoadToken.current;
+    editGeneration.current += 1;
     setWorkspaceLoading(true);
     setWorkspaceLoaded(false);
     setWorkspaceError("");
@@ -349,7 +361,9 @@ export default function Workspace() {
       setWorkspaceLoaded(true);
     }).catch((error: unknown) => { if (loadToken === companyLoadToken.current) setWorkspaceError(error instanceof Error ? error.message : "Could not load the company workspace."); }).finally(() => { if (loadToken === companyLoadToken.current) setWorkspaceLoading(false); });
     return () => { if (loadToken === companyLoadToken.current) companyLoadToken.current += 1; };
-  }, [auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit, auth.activeCompany.id, auth.activeCompany.officeCount, auth.companies.length, auth.configured, auth.session, auth.session?.user.email, auth.session?.user.id, routeIsSurvey]);
+  // Company preferences are defaults for new projects, not reasons to reset an open draft.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.activeCompany.id, auth.configured, auth.session?.user.id, hasCompanyAccess, routeIsSurvey]);
 
   useEffect(() => {
     if (!routeProjectId) return;
@@ -369,7 +383,12 @@ export default function Workspace() {
       const numericRevision = Number.parseInt(editable.revision, 10);
       editable.revision = Number.isFinite(numericRevision) ? String(numericRevision + 1) : `${editable.revision || "1"}.1`;
     }
-    if (routeEditStep) editable.uiProgress = { ...editable.uiProgress, builderStep: routeEditStep };
+    editGeneration.current += 1;
+    if (routeEditStep) {
+      const packageStep = editable.pricingMode === "selectable" && ["Grinding", "Screeding", "Repairs"].includes(routeEditStep);
+      editable.uiProgress = { ...editable.uiProgress, builderStep: packageStep ? "Packages" : routeEditStep };
+      if (packageStep) editable.activeWorkPackageId = editable.workPackages.find((item) => item.service === routeEditStep)?.id ?? editable.activeWorkPackageId;
+    }
     setInput(editable);
     setBaselineInput(cloneInput(project.inputs));
     setPricingRates(project.rateSnapshot ?? rates);
@@ -392,6 +411,7 @@ export default function Workspace() {
   }
 
   function startNewProject() {
+    editGeneration.current += 1;
     const blank = createRemedialProjectInput(rates, auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit, auth.activeCompany.officeCount);
     blank.exchangeRateToCompanyCurrency = 1;
     blank.exchangeRateToGroupCurrency = auth.activeCompany.defaultCurrency === auth.activeCompany.reportingCurrency ? 1 : blank.exchangeRateToGroupCurrency;
@@ -410,6 +430,7 @@ export default function Workspace() {
   }
 
   function startNewSurveyProject() {
+    editGeneration.current += 1;
     const blank = createSurveyProjectInput(auth.activeCompany.defaultCurrency, auth.activeCompany.distanceUnit, undefined, auth.activeCompany.officeCount);
     setInput(blank);
     setBaselineInput(cloneInput(blank));
@@ -426,47 +447,64 @@ export default function Workspace() {
   }
 
   async function saveCurrentProject(status: ProjectStatus = "Draft") {
+    if (manualSaveInFlight.current) return;
+    manualSaveInFlight.current = true;
+    const generation = editGeneration.current;
     try {
       setSaveState("saving");
       setWorkspaceError("");
-      const saved = await saveProject(input, pricingRates, editingId || undefined, auth.session?.user.email ?? "James Dare", pricingCatalog, status);
+      const pending = pendingAutosave.current;
+      const autosaved = pending?.generation === generation ? await pending.promise : undefined;
+      if (generation !== editGeneration.current) return;
+      setSaveState("saving");
+      const saved = await saveProject(input, pricingRates, editingId || autosaved?.id || undefined, auth.session?.user.email ?? "James Dare", pricingCatalog, status);
+      if (generation !== editGeneration.current || latestView.current !== "New Project") return;
       setBaselineInput(cloneInput(saved.inputs));
       setSelectedId(saved.id);
-      setEditingId("");
+      setEditingId(saved.id);
       await refresh();
+      if (generation !== editGeneration.current || latestView.current !== "New Project") return;
       setView("Project Detail");
       setDetailTab("Summary");
       setSaveState("saved");
       setLastSavedAt(new Date().toISOString());
       router.push(`/projects/${encodeURIComponent(saved.id)}`);
     } catch (error) {
+      if (generation !== editGeneration.current) return;
       setWorkspaceError(error instanceof Error ? error.message : "The project could not be saved.");
       setSaveState("idle");
-    }
+    } finally { manualSaveInFlight.current = false; }
   }
 
   useEffect(() => {
-    if (view !== "New Project" || !workspaceLoaded || !hasUnsavedChanges || duplicateProjectReference || !input.projectReference.trim() || saveState === "saving" || saveState === "autosaving") return;
+    if (view !== "New Project" || !workspaceLoaded || !hasPendingDraftChanges || duplicateProjectReference || !input.projectReference.trim() || saveState === "saving" || saveState === "autosaving") return;
     const timer = window.setTimeout(() => {
-      if (autosaveInFlight.current) return;
+      if (autosaveInFlight.current || manualSaveInFlight.current) return;
       autosaveInFlight.current = true;
       setSaveState("autosaving");
       const existingId = editingId || undefined;
-      void saveProject(input, pricingRates, existingId, auth.session?.user.email ?? "System", pricingCatalog, "Draft", { autosave: true }).then((saved) => {
-        setBaselineInput(cloneInput(saved.inputs));
+      const generation = editGeneration.current;
+      const saving = saveProject(input, pricingRates, existingId, auth.session?.user.email ?? "System", pricingCatalog, "Draft", { autosave: true });
+      pendingAutosave.current = { generation, promise: saving };
+      void saving.then((saved) => {
+        if (generation !== editGeneration.current || latestView.current !== "New Project") return;
+        setBaselineInput(cloneInput(input));
         setEditingId(saved.id);
         setSelectedId(saved.id);
         setProjects((current) => [saved, ...current.filter((project) => project.id !== saved.id)]);
         setLastSavedAt(new Date().toISOString());
-        setSaveState("saved");
-        if (!existingId) router.replace(`${saved.inputs.costingModule === "survey" ? "/survey/new-project" : "/new-project"}/${encodeURIComponent(saved.id)}`);
+        if (!manualSaveInFlight.current) setSaveState("saved");
+        if (!existingId) window.history.replaceState(null, "", `${saved.inputs.costingModule === "survey" ? "/survey/new-project" : "/new-project"}/${encodeURIComponent(saved.id)}`);
       }).catch((error) => {
+        if (generation !== editGeneration.current || latestView.current !== "New Project") return;
         setWorkspaceError(error instanceof Error ? error.message : "The draft could not be autosaved.");
         setSaveState("idle");
-      }).finally(() => { autosaveInFlight.current = false; });
+      }).finally(() => { autosaveInFlight.current = false; if (pendingAutosave.current?.promise === saving) pendingAutosave.current = null; });
     }, 30000);
     return () => window.clearTimeout(timer);
-  }, [auth.session?.user.email, duplicateProjectReference, editingId, hasUnsavedChanges, input, pricingCatalog, pricingRates, router, saveState, view, workspaceLoaded]);
+  }, [auth.session?.user.email, duplicateProjectReference, editingId, hasPendingDraftChanges, input, pricingCatalog, pricingRates, saveState, view, workspaceLoaded]);
+
+  useEffect(() => () => { editGeneration.current += 1; }, []);
 
   useEffect(() => {
     if (!workspaceError || workspaceError.includes("Reference ERR-")) return;
@@ -499,7 +537,7 @@ export default function Workspace() {
       router.push(`/survey/new-project/${encodeURIComponent(project.id)}${locked ? "/revision" : ""}`);
       return;
     }
-    const stepSegment = requestedStep && ["Grinding", "Screeding", "Repairs"].includes(requestedStep) ? `/${requestedStep.toLowerCase()}` : "";
+    const stepSegment = requestedStep && ["Project", "Grinding", "Screeding", "Repairs"].includes(requestedStep) ? `/${requestedStep.toLowerCase()}` : "";
     router.push(`/new-project/${encodeURIComponent(project.id)}${stepSegment}${locked ? "/revision" : ""}`);
   }
 
@@ -519,14 +557,11 @@ export default function Workspace() {
   const selectedModuleBlocked = Boolean(selected && !moduleEnabled(selected.inputs.costingModule ?? "remedial"));
   const activeBuilderStep = input.uiProgress?.builderStep as BuilderStep | undefined;
   const confirmNavigation = () => !hasUnsavedWork || confirm(`${hasUnsavedAdminChanges ? "Admin data" : "This costing"} has unsaved changes. Leave and discard them?`);
-  const navigateBuilder = (step: "Services" | "Grinding" | "Screeding" | "Repairs") => {
+  const navigateBuilder = (step: "Project" | "Services" | "Grinding" | "Screeding" | "Repairs") => {
     if (view === "New Project") {
-      setInput({ ...input, uiProgress: { ...input.uiProgress, builderStep: input.pricingMode === "selectable" && step !== "Services" ? "Packages" : step } });
+      const packageStep = input.pricingMode === "selectable" && !["Project", "Services"].includes(step);
+      setInput({ ...input, activeWorkPackageId: packageStep ? input.workPackages.find((item) => item.service === step)?.id ?? input.activeWorkPackageId : input.activeWorkPackageId, uiProgress: { ...input.uiProgress, builderStep: packageStep ? "Packages" : step } });
       scrollToCostingSection();
-      return;
-    }
-    if (step === "Services") {
-      startNewProject();
       return;
     }
     if (selected) {
@@ -543,14 +578,14 @@ export default function Workspace() {
       <section className="workspace-page">
         {workspaceError && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-800">{workspaceError}</div>}
         {workspaceLoading && <div className="mb-5 rounded-xl border border-slate-200 bg-white p-4 text-sm font-semibold text-slate-600">Loading company workspace...</div>}
-        {saveState === "autosaving" && <div className="mb-5 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm font-semibold text-sky-800">Saving draft securely...</div>}
-        {saveState === "saved" && !hasUnsavedChanges && <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-800">Project saved to the company workspace{lastSavedAt ? ` at ${new Date(lastSavedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}` : ""}.</div>}
+        {view === "New Project" && <div className="draft-save-status" role="status" aria-live="polite">{saveState === "saving" || saveState === "autosaving" ? "Saving..." : workspaceError ? "Save unavailable - check message" : hasPendingDraftChanges ? "Unsaved changes" : lastSavedAt ? `Saved ${new Date(lastSavedAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}` : "No changes to save"}</div>}
         {(moduleBlocked || selectedModuleBlocked) && <ModuleBlocked moduleKey={selectedModuleBlocked ? (selected?.inputs.costingModule === "survey" ? "survey_costing" : "remedial_costing") : routeModule!} />}
         {!moduleBlocked && !selectedModuleBlocked && <>
         <WorkspaceBanner view={view} selected={selected} projects={visibleProjects} />
+        {view === "New Project" && editingId && selected?.rateSnapshot && <PricingSnapshotPanel saved={calculations} current={currentAdminCalculation} reprice={() => { setPricingRates(rates); setPricingCatalog(repairCatalog); setInput({ ...input, exchangeRateLockedAt: new Date().toISOString() }); }} />}
         {view === "Dashboard" && <Dashboard projects={visibleProjects} companyCurrency={auth.activeCompany.defaultCurrency} open={(project) => openProject(project)} />}
-        {view === "New Project" && input.costingModule === "survey" && input.survey && <SurveyBuilder input={input.survey} onChange={(survey) => setInput(syncSurveyProjectInput(input, survey))} rates={normaliseSurveyRates(pricingRates.surveyRates)} onSave={(complete) => void saveCurrentProject(complete ? "Costing Complete" : "Draft")} saving={saveState === "saving" || saveState === "autosaving"} duplicateReference={duplicateProjectReference} />}
-        {view === "New Project" && input.costingModule !== "survey" && <ProjectBuilder input={input} setInput={setInput} rates={pricingRates} repairCatalog={pricingCatalog} calculations={calculations} onSave={saveCurrentProject} duplicateReference={duplicateProjectReference} usingSnapshot={Boolean(editingId && selected?.rateSnapshot)} saving={saveState === "saving" || saveState === "autosaving"} dirty={hasUnsavedChanges} reprice={() => { setPricingRates(rates); setPricingCatalog(repairCatalog); setInput({ ...input, exchangeRateLockedAt: new Date().toISOString() }); }} />}
+        {view === "New Project" && input.costingModule === "survey" && input.survey && <SurveyBuilder step={input.uiProgress?.surveyStep ?? "Project"} setStep={(surveyStep) => setInput({ ...input, uiProgress: { ...input.uiProgress, surveyStep } })} input={input.survey} onChange={(survey) => setInput(syncSurveyProjectInput(input, survey))} rates={normaliseSurveyRates(pricingRates.surveyRates)} onSave={(complete) => void saveCurrentProject(complete ? "Costing Complete" : "Draft")} saving={saveState === "saving" || saveState === "autosaving"} duplicateReference={duplicateProjectReference} />}
+{view === "New Project" && input.costingModule !== "survey" && <ProjectBuilder input={input} setInput={setInput} rates={pricingRates} repairCatalog={pricingCatalog} calculations={calculations} onSave={saveCurrentProject} duplicateReference={duplicateProjectReference} saving={saveState === "saving" || saveState === "autosaving"} dirty={hasUnsavedChanges} />}
         {view === "Project Search" && <SearchView projects={visibleProjects} deletedProjects={deletedProjects.filter((project) => moduleEnabled(project.inputs.costingModule ?? "remedial"))} open={(project) => openProject(project)} edit={editProject} restore={async (project) => { try { await restoreProject(project.id); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "The project could not be restored."); throw error; } }} purge={async (project) => { try { await purgeProject(project.id); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "The project could not be permanently deleted."); throw error; } }} />}
         {view === "Admin Rates" && <AdminRatesView rates={rates} setRates={setRatesState} repairCatalog={repairCatalog} setRepairCatalog={setRepairCatalog} adminTab={adminTab} setAdminTab={setAdminTab} rateVersions={rateVersions} restoreRateVersion={(version) => setRatesState(version.rates)} save={async () => { try { await saveAdminData(rates, repairCatalog); setBaselineRates(JSON.parse(JSON.stringify(rates)) as AdminRates); setBaselineRepairCatalog(JSON.parse(JSON.stringify(repairCatalog)) as RepairCatalog); setRateVersions(await loadRateVersions()); alert("Admin data saved and versioned. New costings use these values; saved projects keep their pricing snapshot until explicitly repriced."); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "Admin data could not be saved."); } }} />}
         {view === "Company Admin" && <CompanyAdminPanel />}
@@ -957,7 +992,7 @@ function Metric({ label, value }: { label: string; value: string }) {
   return <div className="app-card min-w-0 border-t-4 border-t-sky-500 p-4"><div className="text-[11px] font-bold uppercase text-slate-500">{label}</div><div className="mt-2 break-words text-xl font-bold text-slate-950 sm:text-2xl">{value}</div></div>;
 }
 
-function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, onSave, duplicateReference, usingSnapshot, saving, dirty, reprice }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates; repairCatalog: RepairCatalog; calculations: ReturnType<typeof calculateProject>; onSave: (status?: ProjectStatus) => void; duplicateReference: boolean; usingSnapshot: boolean; saving: boolean; dirty: boolean; reprice: () => void }) {
+function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, onSave, duplicateReference, saving, dirty }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates; repairCatalog: RepairCatalog; calculations: ReturnType<typeof calculateProject>; onSave: (status?: ProjectStatus) => void; duplicateReference: boolean; saving: boolean; dirty: boolean; }) {
   const steps = visibleBuilderSteps(input).map((key) => ({ key, label: builderStepLabels[key] }));
   const builderStep = resolveBuilderStep(input);
   const activeIndex = Math.max(0, steps.findIndex((step) => step.key === builderStep));
@@ -1009,7 +1044,6 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
       </div>
 
       <section className="grid min-w-0 gap-5">
-      {usingSnapshot && <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm text-sky-950"><div><b>Saved pricing snapshot in use.</b> Admin rate changes do not alter this revision unless you explicitly reprice it.</div><button className="secondary-button" onClick={reprice}>Reprice with current admin rates</button></div>}
       {projectChecks.warnings.length > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"><div className="font-bold uppercase">Project checks</div>{projectChecks.warnings.map((warning) => <div className="mt-1" key={warning}>{warning}</div>)}</div>}
       {input.includeRepairs && (readiness.blockers.length > 0 || readiness.warnings.length > 0) && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
@@ -1116,7 +1150,7 @@ function ServiceStep({ input, setInput, setStep }: { input: ProjectInput; setInp
         {service("includeRepairs", "Repairs", "Joint repair resources, repair material calculator, subcontractors and haulage.", "Repairs")}
       </div>
       <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-        {input.pricingMode === "selectable" ? "Recommended flow: choose the services above, price every offered package, then add project-wide management and extras once. Record the client's award later from the saved project summary." : "Recommended flow: choose services, add project details, confirm the phase schedule, complete each service, add shared project management and extras, then complete the commercial review."}
+        {input.pricingMode === "selectable" ? "Price the packages below, then add project-wide management and extras once. Record the client's award later from the saved project summary." : "Complete each selected service, then the phase programme if needed, management, extras and review."}
       </div>
     </div>
   );
@@ -1193,11 +1227,11 @@ function WorkPackagesStep({ input, setInput, rates, repairCatalog, calculations 
       <div className="grid min-w-0 gap-5">
         {active && activeInput ? <>
           <section className="app-card-strong"><div className="panel-heading flex flex-wrap items-center justify-between gap-3"><div><div className="text-xs font-black uppercase text-sky-700">Package {active.code}</div><h3 className="mt-1 text-xl font-semibold">{active.name}</h3></div><div className="flex flex-wrap gap-2"><button className="secondary-button" onClick={duplicatePackage}>Duplicate</button><button className="secondary-button border-red-200 text-red-700" onClick={() => { if (window.confirm(`Remove package ${active.code}. ${active.name} and all of its costing data?`)) setPackages(packages.filter((item) => item.id !== active.id)); }}>Remove</button></div></div><div className="grid gap-4 p-5 sm:grid-cols-2 xl:grid-cols-4"><Text label="Package Code" value={active.code} onChange={(code) => patchPackage(active.id, { code })} /><Text label="Package Name" value={active.name} onChange={(name) => patchPackage(active.id, { name })} /><Select label="Pricing Basis" value={active.pricingBasis === "day_rate" ? "Day Rate" : "Fixed Price"} options={active.service === "Grinding" ? ["Fixed Price", "Day Rate"] : ["Fixed Price"]} onChange={(value) => patchPackage(active.id, { pricingBasis: value === "Day Rate" ? "day_rate" : "fixed" })} /><Toggle label="Mobilisation already included in another package" checked={active.mobilisationMode !== "separate"} onChange={(includedElsewhere) => patchPackage(active.id, { mobilisationMode: includedElsewhere ? "shared" : "separate" })} /><div className="sm:col-span-2 xl:col-span-4"><Text label="Package Description" value={active.description} onChange={(description) => patchPackage(active.id, { description })} /></div><p className="text-xs font-semibold text-slate-500 sm:col-span-2 xl:col-span-4">Leave the mobilisation box unticked unless the same internal team journey has already been included in another package. Subcontractor mobilisation always remains with its subcontract package.</p></div></section>
-          {active.pricingBasis === "day_rate" && <section className="app-card-strong"><div className="panel-heading"><h3 className="text-xl font-semibold">Commercial rate schedule</h3><p className="text-sm text-slate-500">The productive and stand-down rates are calculated from the detailed package. Overrides remain visible and require a reason.</p></div><div className="grid gap-4 p-5 sm:grid-cols-2 xl:grid-cols-4"><Mini label="Calculated Productive / Day" value={money(activeRate?.productiveProposalRate ?? 0)} /><Mini label="Mobilisation" value={money(activeRate?.mobilisationProposal ?? 0)} /><Mini label="Calculated Stand-Down / Day" value={money(activeRate?.standbyProposalRate ?? 0)} /><NumberInput label="Expected Stand-Down Days" value={active.expectedStandDownDays} onChange={(expectedStandDownDays) => patchPackage(active.id, { expectedStandDownDays })} /><NumberInput label="Productive Rate Override" value={active.productiveRateOverride ?? activeRate?.productiveProposalRate ?? 0} onChange={(value) => patchPackage(active.id, { productiveRateOverride: value === activeRate?.productiveProposalRate ? null : value })} /><NumberInput label="Stand-Down Rate Override" value={active.standbyRateOverride ?? activeRate?.standbyProposalRate ?? 0} onChange={(value) => patchPackage(active.id, { standbyRateOverride: value === activeRate?.standbyProposalRate ? null : value })} /><div className="sm:col-span-2"><Text label="Override Reason" value={active.rateOverrideReason} onChange={(rateOverrideReason) => patchPackage(active.id, { rateOverrideReason })} /></div></div></section>}
+          {active.pricingBasis === "day_rate" && <CommercialRateEditor schedule={activeRate} values={active} onChange={(next) => patchPackage(active.id, next)} />}
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Package Proposal" value={money(activeSummary?.proposalTotal ?? 0)} /><Metric label="Package Budget" value={money(activeSummary?.budgetCost ?? 0)} /><Metric label="Markup" value={percent(activeSummary?.budgetMarkup ?? 0)} /><Metric label="Duration" value={`${activeSummary?.days ?? 0} days`} /></div>
-          {active.service === "Grinding" && <GrindingForm input={activeInput} setInput={updateActiveInput} rates={rates} showStandby={active.pricingBasis === "day_rate"} />}
-          {active.service === "Screeding" && <ScreedForm input={activeInput} setInput={updateActiveInput} rates={rates} />}
-          {active.service === "Repairs" && <RepairsForm input={activeInput} setInput={updateActiveInput} repairCatalog={repairCatalog} rates={rates} projectMaterialCalcs={activeMaterialCalcs} />}
+          {active.service === "Grinding" && <GrindingForm key={active.id} input={activeInput} setInput={updateActiveInput} rates={rates} showStandby={active.pricingBasis === "day_rate"} />}
+          {active.service === "Screeding" && <ScreedForm key={active.id} input={activeInput} setInput={updateActiveInput} rates={rates} />}
+          {active.service === "Repairs" && <RepairsForm key={active.id} input={activeInput} setInput={updateActiveInput} repairCatalog={repairCatalog} rates={rates} projectMaterialCalcs={activeMaterialCalcs} />}
           <AdditionalItems title={`${active.code}. ${active.name} additional items`} items={active.additionalItems} onChange={(additionalItems) => patchPackage(active.id, { additionalItems })} />
         </> : <div className="app-card p-8 text-center text-sm text-slate-500">Add a package to begin pricing.</div>}
       </div>
@@ -1383,6 +1417,7 @@ function ReviewStep({ calculations, input, setInput }: { calculations: ReturnTyp
         <Metric label="Site Days" value={String(calculations.siteDays)} />
       </div>
       <RemedialRateSummary calculations={calculations} />
+      <RepairPriceTable breakdowns={calculations.repairPricing ?? []} />
       {input.pricingMode === "selectable" && <>
         <div className="grid gap-4 sm:grid-cols-2"><Metric label="Project-Wide Costs" value={money(calculations.commonProposalTotal ?? 0)} /><Metric label="Packages Offered" value={String(calculations.packageSummaries?.length ?? 0)} /></div>
         <div className="table-shell"><table><thead><tr><th>Package</th><th>Service</th><th>Basis</th><th>Status</th><th>Budget</th><th>Proposal</th><th>Markup</th></tr></thead><tbody>{calculations.packageSummaries?.map((item) => <tr key={item.id}><td className="font-bold">{item.code}. {item.name}</td><td>{item.service}</td><td>{item.pricingBasis === "day_rate" ? "Day rate" : "Fixed price"}</td><td>Offered</td><td>{money(item.budgetCost)}</td><td>{money(item.proposalTotal)}</td><td className={item.budgetMarkup < 25 ? "font-bold text-amber-700" : "font-bold text-emerald-700"}>{percent(item.budgetMarkup)}</td></tr>)}</tbody></table></div>
@@ -1442,7 +1477,7 @@ function RemedialRateSummary({ calculations }: { calculations: ReturnType<typeof
       <Mini label="Mobilisation Budget" value={money(calculations.mobilisationBudget ?? 0)} />
       <Mini label="Stand-Down / Day" value={standbyRate} />
     </div>
-    {!!schedules.length && <div className="table-shell mt-4"><table><thead><tr><th>Rate Schedule</th><th>Productive / Day</th><th>Mobilisation</th><th>Stand-Down / Day</th><th>Expected Stand-Down</th><th>Basis</th></tr></thead><tbody>{schedules.map((row) => <tr key={row.workPackageId ?? row.workPackageName}><td className="font-bold">{row.workPackageCode ? `${row.workPackageCode}. ` : ""}{row.workPackageName}</td><td>{money(row.productiveProposalRate)}</td><td>{money(row.mobilisationProposal)}</td><td>{money(row.standbyProposalRate)}</td><td>{row.expectedStandDownDays} days</td><td>{row.productiveRateOverridden || row.standbyRateOverridden ? row.overrideReason || "Override reason required" : "Calculated"}</td></tr>)}</tbody></table></div>}
+    {!!schedules.length && <div className="table-shell mt-4"><table><thead><tr><th>Rate Schedule</th><th>Productive / Day</th><th>Mobilisation</th><th>Stand-Down / Day</th><th>Basis</th></tr></thead><tbody>{schedules.map((row) => <tr key={row.workPackageId ?? row.workPackageName}><td className="font-bold">{row.workPackageCode ? `${row.workPackageCode}. ` : ""}{row.workPackageName}</td><td>{money(row.productiveProposalRate)}</td><td>{money(row.mobilisationProposal)}</td><td>{money(row.standbyProposalRate)}</td><td>{row.productiveRateOverridden || row.standbyRateOverridden ? row.overrideReason || "Override reason required" : "Calculated"}</td></tr>)}</tbody></table></div>}
   </div>;
 }
 
@@ -1971,6 +2006,9 @@ function ScreedPageTabs({ screedPage, setScreedPage, placement = "top" }: { scre
 
 function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCalcs }: { input: ProjectInput; setInput: (input: ProjectInput) => void; repairCatalog: RepairCatalog; rates: AdminRates; projectMaterialCalcs: ReturnType<typeof calculateProjectRepairMaterials> }) {
   const r = input.repairs;
+  const repairCalculation = useMemo(() => calculateProject(input, rates, repairCatalog), [input, rates, repairCatalog]);
+  const repairBreakdown = repairCalculation.repairPricing?.[0];
+  projectMaterialCalcs = repairCalculation.repairMaterialCalcs;
   const [advancedLines, setAdvancedLines] = useState<Record<string, boolean>>({});
   const [repairPage, setRepairPageState] = useState<RepairPage>(input.uiProgress?.repairPage ?? "Details");
   const [pendingOptional, setPendingOptional] = useState<Record<string, string>>({});
@@ -1981,7 +2019,7 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
     scrollToCostingSection();
   };
   const updateRepairLine = (index: number, next: Partial<RepairLineItem>) => patch({ repairLines: r.repairLines.map((item, i) => i === index ? { ...item, ...next } : item) });
-  const materialCost = (repairLine: RepairLineItem) => calculateRepairLineMaterials(repairLine, repairCatalog).reduce((sum, calc) => sum + calc.cost, 0);
+  const materialCost = (repairLine: RepairLineItem) => repairBreakdown?.rows.find((row) => row.id === repairLine.id)?.materialBudget ?? 0;
   const selectedMaterialIds = (repairLine: RepairLineItem) => {
     const type = repairTypeByCode(repairLine.repairTypeCode, repairCatalog);
     const selected = new Set(repairLine.materialSelections.filter((selection) => selection.selected).map((selection) => selection.materialId));
@@ -2009,21 +2047,11 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
   const labourMode = r.labourMode ?? "subcontract";
   const usesSubcontract = labourMode === "subcontract" || labourMode === "both";
   const usesInHouse = labourMode === "in_house" || labourMode === "both";
-  const mobilisationKm = r.travelMode === "Drive" ? chargeableJourneyDistance(input.officeCount, r.mobilisationOneWayKm, r.mobilisationSecondaryOneWayKm, r.mobilisationVehicles) : 0;
   const calculatedRepairHotelNights = calculatedHotelNights(effectiveRepairDays, r.weekendRequired ? r.weekendDays : 0, r.travelMode === "None" ? 0 : r.travelDays);
   const effectiveRepairHotelNights = r.hotelNights || calculatedRepairHotelNights;
   const hotelRoomNights = r.hotelRequired ? effectiveRepairHotelNights * Math.max(0, r.labourMen) : 0;
-  const inHouseMen = Math.max(0, r.labourMen);
-  const repairTravelSell = r.travelMode === "None" ? 0 : (inHouseMen * r.travelDays * rates.productionLabourTravelDayRate * (1 + adminRateMargin(rates, "productionLabourTravelDayRate", rates.travelMargin)))
-    + (r.travelMode === "Drive" ? mobilisationKm * rates.repairFuelPerKm * (1 + adminRateMargin(rates, "repairFuelPerKm", rates.travelMargin)) : 0)
-    + (r.travelMode === "Fly" ? effectiveReturnFlights(r.returnFlights, inHouseMen) * rates.returnFlight * (1 + adminRateMargin(rates, "returnFlight", rates.flightMargin))
-      + (r.airportTransport === "Uber" ? (r.airportTransferReturns || 1) * rates.airportUberReturn * (1 + adminRateMargin(rates, "airportUberReturn", rates.travelMargin)) : 0)
-      + (r.airportTransport === "Drive" ? r.airportParkingDays * Math.max(1, r.mobilisationVehicles) * rates.airportParkingPerDay * (1 + adminRateMargin(rates, "airportParkingPerDay", rates.travelMargin)) : 0)
-      + (r.destinationTransport === "Rental Car" ? Math.max(1, r.rentalVehicles) * r.rentalVehicleDays * rates.rentalCar * (1 + adminRateMargin(rates, "rentalCar", rates.travelMargin)) : 0)
-      + (r.destinationTransport === "Rental Van" ? Math.max(1, r.rentalVehicles) * r.rentalVehicleDays * rates.rentalVan * (1 + adminRateMargin(rates, "rentalVan", rates.travelMargin)) : 0) : 0);
-  const inHouseSellTotal = usesInHouse ? ((inHouseMen * effectiveRepairDays * rates.productionLabourDayRate * (1 + adminRateMargin(rates, "productionLabourDayRate", rates.defaultMargin))) + (r.weekendRequired ? inHouseMen * weekendDaysForProgramme(effectiveRepairDays, 5, r.weekendDays) * rates.productionWeekendDayRate * (1 + adminRateMargin(rates, "productionWeekendDayRate", rates.defaultMargin)) : 0) + (r.nightShiftRequired ? inHouseMen * r.nightShiftHours * rates.productionNightShiftAllowance * (1 + adminRateMargin(rates, "productionNightShiftAllowance", rates.defaultMargin)) : 0) + repairTravelSell + (hotelRoomNights * rates.hotel * (1 + adminRateMargin(rates, "hotel", rates.hotelMargin))) + (hotelRoomNights * rates.subsistence * (1 + adminRateMargin(rates, "subsistence", rates.subsistenceMargin)))) : 0;
-  const subcontractSellTotal = repairSubcontractorSell(r.repairSubcontractors);
-  const logisticsSellTotal = additionalItemsSell(r.haulageItems);
+  const subcontractSellTotal = repairCalculation.proposalLines.filter((line) => line.source.startsWith("Repair subcontract")).reduce((sum, line) => sum + line.total, 0);
+  const logisticsSellTotal = repairCalculation.proposalLines.filter((line) => line.source === "Repair haulage input").reduce((sum, line) => sum + line.total, 0);
   const selectedOptionalRules = (repairLine: RepairLineItem) => {
     const type = repairTypeByCode(repairLine.repairTypeCode, repairCatalog);
     const selected = new Set(repairLine.materialSelections.filter((selection) => selection.selected).map((selection) => selection.materialId));
@@ -2189,9 +2217,10 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
                   {materialCalcs.length ? (
                     <div className="table-shell border-0 bg-white">
                       <table>
-                        <thead><tr><th>Material</th><th>Calculated Units</th><th>Full Units</th><th>Rate</th><th>Cost</th></tr></thead>
-                        <tbody>{materialCalcs.map((calc) => <tr key={`${repairLine.id}-${calc.product}`}><td className="font-semibold">{calc.product.replace(`${repairLine.repairTypeCode} - `, "")}<div className="text-xs font-normal text-slate-500">{calc.formula}</div></td><td>{(calc.unroundedUnits ?? calc.quantity).toFixed(2)}</td><td>{calc.quantity}</td><td>{money(calc.rate)}</td><td className="font-bold">{money(calc.cost)}</td></tr>)}</tbody>
+                        <thead><tr><th>Material</th><th>Calculated Units</th><th>Allocated Budget</th></tr></thead>
+                        <tbody>{materialCalcs.map((calc) => <tr key={`${repairLine.id}-${calc.product}`}><td className="font-semibold">{calc.product.replace(`${repairLine.repairTypeCode} - `, "")}<div className="text-xs font-normal text-slate-500">{calc.formula}</div></td><td>{(calc.unroundedUnits ?? calc.quantity).toFixed(2)}</td><td className="font-bold">{money(repairBreakdown?.rows.find((row) => row.id === repairLine.id)?.materials.find((material) => material.id === calc.materialId)?.budget ?? 0)}</td></tr>)}</tbody>
                       </table>
+                      <p className="p-3 text-xs text-slate-500">Full packs are pooled in the project material summary. This repair shares their cost in proportion to its material requirement.</p>
                     </div>
                   ) : <div className="text-sm text-slate-500">No material quantity yet. Add dimensions/quantity or check the repair type material rules.</div>}
                 </div>}
@@ -2229,7 +2258,7 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
         </div>
       </div>
       <MaterialSummary materialCalcs={projectMaterialCalcs} materialMargin={rates.materialMargin} repairCatalog={repairCatalog} />
-      <CostBuildUp materialCost={repairLineMaterialTotal} materialMargin={rates.materialMargin} subcontractSell={usesSubcontract ? subcontractSellTotal : 0} inHouseSell={inHouseSellTotal} logisticsSell={logisticsSellTotal} />
+      <RepairPriceTable breakdowns={repairCalculation.repairPricing ?? []} onAllocation={(id, labourAllocationWeight) => patch({ repairLines: r.repairLines.map((item) => item.id === id ? { ...item, labourAllocationWeight } : item) })} />
       <RepairPageTabs repairPage={repairPage} setRepairPage={setRepairPage} placement="bottom" />
       </>}
     </div>
@@ -2486,11 +2515,19 @@ function ProjectDetail({ project, tab, setTab, actuals, setActuals, saveActuals,
 
 function SavedProjectSummary({ project, savePackageSelection }: { project: ProjectRecord; savePackageSelection: (selectedPackageIds: string[], reason: string) => Promise<void> }) {
   const calculations = project.calculations;
+  const repairPricing = useMemo(() => {
+    if (calculations.repairPricing) return calculations.repairPricing;
+    if (project.inputs.costingModule === "survey" || !project.rateSnapshot || !project.repairCatalogSnapshot) return [];
+    const candidate = calculateProject(project.inputs, project.rateSnapshot, project.repairCatalogSnapshot);
+    // Never present newly calculated unit prices against different historic totals.
+    return candidate.proposalTotal === calculations.proposalTotal && candidate.budgetCost === calculations.budgetCost ? candidate.repairPricing ?? [] : [];
+  }, [calculations, project.inputs, project.rateSnapshot, project.repairCatalogSnapshot]);
   const selectionConfirmed = Boolean(project.packageSelection?.confirmedAt);
   return <div className="grid gap-5">
     <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label={project.inputs.pricingMode === "selectable" ? selectionConfirmed ? "Selected Contract" : "All Options Offered" : "Sell Value"} value={money(calculations.proposalTotal)} /><Metric label={selectionConfirmed ? "Selected Budget" : "Budget"} value={money(calculations.budgetCost)} /><Metric label="Markup" value={percent(calculations.budgetMarkup ?? 0)} /><Metric label="Project Days" value={String(calculations.siteDays)} /></div>
     {project.inputs.costingModule !== "survey" && <RemedialRateSummary calculations={calculations} />}
     {project.inputs.pricingMode === "selectable" && <PackageSelectionPanel project={project} savePackageSelection={savePackageSelection} />}
+    <RepairPriceTable breakdowns={repairPricing} />
     <div className="grid gap-4 lg:grid-cols-2">
       <div className="app-card p-5"><h3 className="font-bold text-slate-950">Project</h3><div className="mt-3 grid gap-2 text-sm"><div><b>Reference:</b> {project.inputs.projectReference}</div><div><b>Client:</b> {project.inputs.client}</div><div><b>Location:</b> {project.inputs.location}</div><div><b>Services:</b> {calculations.serviceSummary}</div><div><b>Status:</b> {normaliseProjectStatus(project.status)} / {project.accountsStatus}</div><div><b>Calculation:</b> {project.calculationVersion ?? "Legacy snapshot"}</div></div></div>
       {calculations.phaseRows?.length > 1 && <div className="app-card p-5"><h3 className="font-bold text-slate-950">Phase Programme</h3><div className="mt-3 grid gap-2">{calculations.phaseRows.map((row) => <div key={row.workPackageId ?? row.service} className="flex flex-wrap justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm"><b>{row.label ?? row.service}</b><span>Day {row.startDay} to {row.endDay}{row.concurrent ? " / overlaps" : ""}</span></div>)}</div></div>}

@@ -49,7 +49,7 @@ function navLabel(item: NavItem) {
   return item.view;
 }
 
-export function ProductShell({ view, pathname, selectedContext, activeServices = { grinding: false, screeding: false, repairs: false }, activeCostingModule = "remedial", activeBuilderStep, activeAdminTab, onNewProject, onCostingModule, onBuilderStep, onAdminTab, canNavigate = () => true, children }: { view: View; pathname: string; selectedContext?: string; activeServices?: ActiveServices; activeCostingModule?: CostingModule; activeBuilderStep?: string; activeAdminTab?: "Rates" | "Survey Rates" | "Repair Types" | "Repair Materials"; onNewProject?: () => void; onCostingModule?: (module: CostingModule) => void; onBuilderStep?: (step: "Services" | "Grinding" | "Screeding" | "Repairs") => void; onAdminTab?: (tab: "Rates" | "Survey Rates" | "Repair Types" | "Repair Materials") => void; canNavigate?: (href: string) => boolean; children: ReactNode }) {
+export function ProductShell({ view, pathname, selectedContext, activeServices = { grinding: false, screeding: false, repairs: false }, activeCostingModule = "remedial", activeBuilderStep, activeAdminTab, onNewProject, onCostingModule, onBuilderStep, onAdminTab, canNavigate = () => true, children }: { view: View; pathname: string; selectedContext?: string; activeServices?: ActiveServices; activeCostingModule?: CostingModule; activeBuilderStep?: string; activeAdminTab?: "Rates" | "Survey Rates" | "Repair Types" | "Repair Materials"; onNewProject?: () => void; onCostingModule?: (module: CostingModule) => void; onBuilderStep?: (step: "Project" | "Services" | "Grinding" | "Screeding" | "Repairs") => void; onAdminTab?: (tab: "Rates" | "Survey Rates" | "Repair Types" | "Repair Materials") => void; canNavigate?: (href: string) => boolean; children: ReactNode }) {
   const auth = useAuth();
   const [open, setOpen] = useState(false);
   const configuredLogo = auth.activeCompany.branding.logoPath;
@@ -80,7 +80,7 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
             const items = visible.filter((item) => item.group === group);
             if (!items.length) return null;
             return <div key={group} className="app-nav-group"><p className="app-nav-label">{group}</p><nav className="app-nav">{items.map((item, index) => {
-              const builderStep = item.href === "/new-project" ? "Services" : item.href === "/grinding" ? "Grinding" : item.href === "/screeding" ? "Screeding" : item.href === "/repairs" ? "Repairs" : undefined;
+              const builderStep = item.href === "/new-project" ? "Project" : item.href === "/grinding" ? "Grinding" : item.href === "/screeding" ? "Screeding" : item.href === "/repairs" ? "Repairs" : undefined;
               const adminTab = item.href === "/admin-rates" ? "Rates" : item.href === "/admin-rates/survey" ? "Survey Rates" : item.href.includes("repair-types") ? "Repair Types" : item.href.includes("repair-materials") ? "Repair Materials" : undefined;
               const active = builderStep && view === "New Project" ? activeBuilderStep === builderStep : adminTab && view === "Admin Rates" ? activeAdminTab === adminTab : pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
               return <Link key={`${item.href}-${index}`} href={item.href} className={active ? "active" : ""} onClick={(event) => {
@@ -103,8 +103,8 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
           })}
         </div>
         <div className="sidebar-account">
-          {auth.companies.length > 1 && <label><span>Company</span><select value={auth.activeCompany.id} onChange={(event) => { auth.switchCompany(event.target.value); close(); }}>{auth.companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label>}
-          {auth.session && <button onClick={() => { void auth.signOut(); close(); }}>Sign out</button>}
+          {auth.companies.length > 1 && <label><span>Company</span><select value={auth.activeCompany.id} onChange={(event) => { if (canNavigate("company-switch")) { auth.switchCompany(event.target.value); close(); } }}>{auth.companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label>}
+          {auth.session && <button onClick={() => { if (canNavigate("sign-out")) { void auth.signOut(); close(); } }}>Sign out</button>}
         </div>
         <div className="sidebar-footer"><span className="system-dot" /><div><b>Cloud workspace</b><small>Secure / Synced</small></div></div>
       </aside>
@@ -116,7 +116,7 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
           <div className="command-actions">
             <CostingModuleSwitch active={activeCostingModule} enabled={auth.enabledModules} onChange={(module) => { if (canNavigate(`module-${module}`)) onCostingModule?.(module); }} />
             {auth.companies.length > 1 && <select value={auth.activeCompany.id} onChange={(event) => { if (canNavigate("company-switch")) auth.switchCompany(event.target.value); }} className="command-select">{auth.companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select>}
-            <Link href={activeCostingModule === "survey" ? "/survey/new-project" : "/new-project"} className="command-new" onClick={(event) => { if (!canNavigate(activeCostingModule === "survey" ? "/survey/new-project" : "/new-project")) { event.preventDefault(); return; } onNewProject?.(); }}><Plus size={16} />New Project</Link>
+            <Link href={activeCostingModule === "survey" ? "/survey/new-project" : "/new-project"} className="command-new" onClick={(event) => { if (!canNavigate(activeCostingModule === "survey" ? "/survey/new-project" : "/new-project")) { event.preventDefault(); return; } if (onNewProject) { event.preventDefault(); onNewProject(); } }}><Plus size={16} />New Project</Link>
             {auth.session && <button className="command-chip" onClick={() => { if (canNavigate("sign-out")) void auth.signOut(); }}><span className="system-dot" />Sign out</button>}
           </div>
         </header>
@@ -129,5 +129,5 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
 function CostingModuleSwitch({ active, enabled, onChange }: { active: CostingModule; enabled: AppModuleKey[]; onChange: (module: CostingModule) => void }) {
   const options = [{ key: "survey" as const, label: "Survey Costing", module: "survey_costing" as const }, { key: "remedial" as const, label: "Remedial Costing", module: "remedial_costing" as const }].filter((option) => enabled.includes(option.module));
   if (options.length < 2) return options.length ? <span className="module-single">{options[0].label}</span> : null;
-  return <div className="module-switch" aria-label="Costing module">{options.map((option) => <button key={option.key} className={active === option.key ? "active" : ""} onClick={() => onChange(option.key)}>{option.label}</button>)}</div>;
+  return <div className="module-switch" aria-label="Costing module">{options.map((option) => <button key={option.key} className={active === option.key ? "active" : ""} onClick={() => { if (option.key !== active) onChange(option.key); }}>{option.label}</button>)}</div>;
 }

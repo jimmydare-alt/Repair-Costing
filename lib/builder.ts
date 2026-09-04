@@ -18,8 +18,8 @@ export const builderStepLabels: Record<BuilderStep, string> = {
 export function visibleBuilderSteps(input: ProjectInput): BuilderStep[] {
   if (input.pricingMode === "selectable") {
     return [
-      "Services",
       "Project",
+      "Services",
       "Packages",
       ...(input.workPackages.length > 1 ? ["Phase Schedule" as const] : []),
       "Project Management",
@@ -29,8 +29,8 @@ export function visibleBuilderSteps(input: ProjectInput): BuilderStep[] {
   }
   const serviceCount = Number(input.includeGrinding) + Number(input.includeScreeding) + Number(input.includeRepairs);
   return [
-    "Services",
     "Project",
+    "Services",
     ...(input.includeGrinding ? ["Grinding" as const] : []),
     ...(input.includeScreeding ? ["Screeding" as const] : []),
     ...(input.includeRepairs ? ["Repairs" as const] : []),
@@ -44,7 +44,7 @@ export function visibleBuilderSteps(input: ProjectInput): BuilderStep[] {
 export function resolveBuilderStep(input: ProjectInput): BuilderStep {
   const requested = input.uiProgress?.builderStep as BuilderStep | undefined;
   const visible = visibleBuilderSteps(input);
-  return requested && visible.includes(requested) ? requested : "Services";
+  return requested && visible.includes(requested) ? requested : "Project";
 }
 
 export function adjacentBuilderStep(input: ProjectInput, direction: -1 | 1): BuilderStep {
@@ -54,15 +54,17 @@ export function adjacentBuilderStep(input: ProjectInput, direction: -1 | 1): Bui
 }
 
 export function costingInputsEqual(left: ProjectInput, right: ProjectInput) {
-  const { uiProgress: _leftProgress, ...leftCosting } = left;
-  const { uiProgress: _rightProgress, ...rightCosting } = right;
-  return JSON.stringify(leftCosting) === JSON.stringify(rightCosting);
+  const costing = ({ uiProgress: _progress, activeWorkPackageId: _active, ...input }: ProjectInput) => ({
+    ...input,
+    workPackages: input.workPackages.map(({ uiProgress: _packageProgress, ...workPackage }) => workPackage)
+  });
+  return JSON.stringify(costing(left)) === JSON.stringify(costing(right));
 }
 
 export function parseEditRoute(pathname: string) {
   const match = pathname.match(/^\/new-project\/([^/]+)(?:\/([^/]+))?(?:\/(revision))?$/);
   const segment = match?.[2]?.toLowerCase();
-  const step: BuilderStep | undefined = segment === "grinding" ? "Grinding" : segment === "screeding" ? "Screeding" : segment === "repairs" ? "Repairs" : undefined;
+  const step: BuilderStep | undefined = segment === "project" ? "Project" : segment === "grinding" ? "Grinding" : segment === "screeding" ? "Screeding" : segment === "repairs" ? "Repairs" : undefined;
   return {
     projectId: match?.[1] ? decodeURIComponent(match[1]) : "",
     step,

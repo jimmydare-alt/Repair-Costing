@@ -3,6 +3,7 @@ import { distanceRateUnit } from "./company";
 import type { AdminRates, AirportTransport, CommercialRateSchedule, DestinationTransport, Line, MaterialCalc, PLActuals, PLCategory, PLSummary, ProjectCalculations, ProjectInput, ProjectServiceKey, RemedialWorkPackage, RepairCatalog, RepairLineItem, RepairMaterial, RepairTypeMaterialRule, Section, TravelMode, WorkPackageCalculationSummary } from "./types";
 import { chargeableJourneyDistance, effectiveReturnFlights } from "./travel";
 import { packageProjectInput } from "./workPackages";
+import { buildRepairPriceBreakdown, consolidateRepairPricing } from "./repairPricing";
 
 const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 const pct = (value: number) => Math.round(value * 10000) / 100;
@@ -249,7 +250,7 @@ function calculateCatalogueRequirement(repairLine: RepairLineItem, material: Rep
 function calculateCatalogueMaterial(repairLine: RepairLineItem, material: RepairMaterial, rule: RepairTypeMaterialRule, selection?: RepairLineItem["materialSelections"][number]): MaterialCalc {
   const requirement = calculateCatalogueRequirement(repairLine, material, rule, selection);
   const quantity = Math.ceil(requirement.requiredUnits - 1e-9);
-  return { product: `${repairLine.repairTypeCode} - ${material.name}`, quantity, unit: "full units", rate: material.costPerUnit, cost: money(quantity * material.costPerUnit), formula: requirement.formula, unroundedUnits: requirement.requiredUnits };
+  return { materialId: material.id, product: `${repairLine.repairTypeCode} - ${material.name}`, quantity, unit: "full units", rate: material.costPerUnit, cost: money(quantity * material.costPerUnit), formula: requirement.formula, unroundedUnits: requirement.requiredUnits };
 }
 
 export function calculateRepairLineMaterials(repairLine: RepairLineItem, repairCatalog: RepairCatalog = defaultRepairCatalog): MaterialCalc[] {
@@ -282,7 +283,7 @@ export function calculateProjectRepairMaterials(repairLines: RepairLineItem[], r
   });
   return Array.from(grouped.values()).map(({ material, requiredUnits, formulas }) => {
     const quantity = Math.ceil(requiredUnits - 1e-9);
-    return { product: material.name, quantity, unit: "full units", rate: material.costPerUnit, cost: money(quantity * material.costPerUnit), formula: `Project aggregate before rounding: ${formulas.join(" + ")}`, unroundedUnits: requiredUnits };
+    return { materialId: material.id, product: material.name, quantity, unit: "full units", rate: material.costPerUnit, cost: money(quantity * material.costPerUnit), formula: `Project aggregate before rounding: ${formulas.join(" + ")}`, unroundedUnits: requiredUnits };
   }).filter((calc) => calc.quantity > 0 || calc.cost > 0);
 }
 
@@ -486,10 +487,11 @@ function calculateCombinedProject(input: ProjectInput, rates: AdminRates, repair
   const phaseSchedule = calculatePhaseSchedule(input, quoteCatalog);
   const siteDays = phaseSchedule.projectDays;
   const repairMaterialCalcs = input.includeRepairs && input.repairs.enabled ? calculateProjectRepairMaterials(input.repairs.repairLines, quoteCatalog) : [];
+  const otherServiceLines = [...grindingLines(input, quoteRates), ...screedLines(input, quoteRates)];
+  const repairServiceLines = repairLines(input, quoteRates, repairMaterialCalcs, quoteCatalog);
   const serviceLines = [
-    ...grindingLines(input, quoteRates),
-    ...screedLines(input, quoteRates),
-    ...repairLines(input, quoteRates, repairMaterialCalcs, quoteCatalog),
+    ...otherServiceLines,
+    ...repairServiceLines,
     ...projectManagementLines(input, quoteRates)
   ];
   input.additionalItems.forEach((item) => serviceLines.push(line("Additional items", item.name, item.rate, item.unit, item.quantity, item.margin, "Additional item", item.plCategory ?? "Equipment")));
@@ -507,6 +509,11 @@ function calculateCombinedProject(input: ProjectInput, rates: AdminRates, repair
   });
   const proposalTotal = money(proposalLines.reduce((sum, row) => sum + row.total, 0));
   const baseBudgetLines = serviceLines.map((row) => ({ ...row, margin: 0, discount: 0, total: row.cost, originalTotal: row.cost }));
+  const repairPricing = input.includeRepairs && input.repairs.enabled ? [buildRepairPriceBreakdown(
+    input.repairs.repairLines, quoteCatalog, input.repairs.repairLines.map((item) => calculateRepairLineMaterials(item, quoteCatalog)), repairMaterialCalcs,
+    proposalLines.slice(otherServiceLines.length, otherServiceLines.length + repairServiceLines.length),
+    baseBudgetLines.slice(otherServiceLines.length, otherServiceLines.length + repairServiceLines.length)
+  )] : [];
   const bdmBonusBudget = input.bdmBonusRequired ? money(proposalTotal * Math.max(0, num(rates.bdmBonusRate))) : 0;
   const budgetLines = bdmBonusBudget ? [...baseBudgetLines, { ...line("Labour", "BDM bonus", bdmBonusBudget, "item", 1, 0, "Optional BDM bonus", "Labour"), total: bdmBonusBudget, originalTotal: bdmBonusBudget }] : baseBudgetLines;
   const budgetCost = money(budgetLines.reduce((sum, row) => sum + row.total, 0));
@@ -532,6 +539,7 @@ function calculateCombinedProject(input: ProjectInput, rates: AdminRates, repair
     proposalLines,
     budgetLines,
     repairMaterialCalcs,
+    repairPricing,
     originalProposalTotal,
     discountAmount,
     proposalTotal,
@@ -851,6 +859,11 @@ function calculateSelectableProject(input: ProjectInput, rates: AdminRates, repa
   const travelTotal = total(proposalLines.filter((row) => row.plCategory === "Travel"));
   const haulageTotal = total(proposalLines.filter((row) => row.plCategory === "Haulage"));
   const commonProposalTotal = total(commonProposalLines);
+  const packageRepairPricing = activePackages.flatMap(({ workPackage, calculation }) => (calculation.repairPricing ?? []).map((breakdown) => ({
+    ...breakdown, packageId: workPackage.id, packageName: `${workPackage.code}. ${workPackage.name}`,
+    separateBudget: total(budgetLines.filter((row) => row.workPackageId === workPackage.id && (row.costKind === "mobilisation" || row.section === "Haulage"))),
+    separateSell: total(proposalLines.filter((row) => row.workPackageId === workPackage.id && (row.costKind === "mobilisation" || row.section === "Haulage")))
+  })));
   return {
     costingModule: "remedial",
     projectReference: input.projectReference,
@@ -865,6 +878,7 @@ function calculateSelectableProject(input: ProjectInput, rates: AdminRates, repa
     proposalLines,
     budgetLines,
     repairMaterialCalcs: selectedMaterials.calculations,
+    repairPricing: input.selectionConfirmed ? consolidateRepairPricing(packageRepairPricing, selectedMaterials.calculations) : packageRepairPricing,
     originalProposalTotal,
     discountAmount,
     proposalTotal,
