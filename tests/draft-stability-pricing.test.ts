@@ -142,6 +142,9 @@ describe("draft stability and repair unit-price reconciliation", () => {
   it("keeps background autosave navigation and expected downtime out of new-entry UI", () => {
     const workspace = readFileSync("app/workspace.tsx", "utf8");
     expect(workspace).toContain("window.history.replaceState");
+    expect(workspace).toContain('workspaceLoaded && !workspaceLoading && view === "New Project"');
+    expect(workspace).toContain('if (routeIsSurvey) { setWorkspaceLoaded(false); setWorkspaceLoading(true); }');
+    expect(workspace).toContain('if (!routeIsSurvey) { setWorkspaceLoaded(false); setWorkspaceLoading(true); }');
     expect(workspace).not.toContain('router.replace(`/new-project/');
     expect(readFileSync("components/CommercialRateEditor.tsx", "utf8")).not.toContain('label="Expected Stand');
     expect(readFileSync("components/survey/SurveyBuilder.tsx", "utf8")).not.toContain("key={item.description}");
