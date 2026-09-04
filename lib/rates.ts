@@ -493,7 +493,7 @@ export const emptyInput: ProjectInput = {
     repairSubcontractors: [{ name: "Repair subcontractor", priceType: "lump sum", rate: 0, days: 0, margin: 0.3, mobilisationCost: 0, mobilisations: 0, mobilisationMargin: 0.3, standbyRate: 0, standbyMargin: 0.3 }],
     subcontractors: [{ name: "Repair subcontractor", rate: 0, unit: "lump sum", quantity: 0, margin: 0.3 }],
     hireItems: [{ name: "Additional hire", rate: 0, unit: "week", quantity: 0, margin: 0.3 }],
-    haulageItems: [{ name: "Delivery of material", rate: 75, unit: "item", quantity: 0, margin: 0.3 }],
+    haulageItems: [],
     materialInputs: [
       { product: "CoGri Rapid Mender", lengthM: 0, widthMm: 0, depthMm: 0, areaM2: 0, thicknessMm: 0, coverageM2: 0 },
       { product: "CoGri Rapid Seal 60/75 (600ml)", lengthM: 0, widthMm: 0, depthMm: 0, areaM2: 0, thicknessMm: 0, coverageM2: 0 }

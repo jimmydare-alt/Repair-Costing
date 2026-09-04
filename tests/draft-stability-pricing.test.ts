@@ -105,6 +105,17 @@ describe("draft stability and repair unit-price reconciliation", () => {
     expect(relevantPricingSignature(calculateProject(input, { ...defaultRates, productionLabourDayRate: 9876 }))).not.toBe(relevantPricingSignature(saved));
     expect(relevantPricingSignature(calculateProject(input, structuredClone(defaultRates)))).toBe(relevantPricingSignature(saved));
   });
+  it("starts with no haulage and preserves saved multiple-delivery quantities", () => {
+    expect(emptyInput.repairs.haulageItems).toEqual([]);
+    const input = repairs("subcontract");
+    input.repairs.haulageItems = [{ name: "Legacy deliveries", rate: 75, quantity: 2, unit: "delivery", margin: 0.3, plCategory: "Haulage" }];
+    const result = calculateProject(input, defaultRates);
+    expect(result.proposalLines.find((line) => line.item === "Legacy deliveries")?.total).toBe(195);
+    expect(result.budgetLines.find((line) => line.item === "Legacy deliveries")?.total).toBe(150);
+    const workspace = readFileSync("app/workspace.tsx", "utf8");
+    expect(workspace).toContain("item.quantity * item.rate * (1 + item.margin)");
+    expect(workspace).toContain("No haulage included.");
+  });
   it("retains independent package progress without treating navigation as a cost edit", () => {
     const parent = repairs();
     const workPackage = createWorkPackage("Repairs", parent);

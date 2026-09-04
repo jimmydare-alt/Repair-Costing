@@ -582,7 +582,7 @@ export default function Workspace() {
         {(moduleBlocked || selectedModuleBlocked) && <ModuleBlocked moduleKey={selectedModuleBlocked ? (selected?.inputs.costingModule === "survey" ? "survey_costing" : "remedial_costing") : routeModule!} />}
         {!moduleBlocked && !selectedModuleBlocked && <>
         <WorkspaceBanner view={view} selected={selected} projects={visibleProjects} />
-        {view === "New Project" && editingId && selected?.rateSnapshot && <PricingSnapshotPanel saved={calculations} current={currentAdminCalculation} reprice={() => { setPricingRates(rates); setPricingCatalog(repairCatalog); setInput({ ...input, exchangeRateLockedAt: new Date().toISOString() }); }} />}
+        {view === "New Project" && (editingId && selected?.rateSnapshot ? <PricingSnapshotPanel saved={calculations} current={currentAdminCalculation} reprice={() => { setPricingRates(rates); setPricingCatalog(repairCatalog); setInput({ ...input, exchangeRateLockedAt: new Date().toISOString() }); }} /> : <div className="pricing-snapshot-status">Using current admin rates.</div>)}
         {view === "Dashboard" && <Dashboard projects={visibleProjects} companyCurrency={auth.activeCompany.defaultCurrency} open={(project) => openProject(project)} />}
         {view === "New Project" && input.costingModule === "survey" && input.survey && <SurveyBuilder step={input.uiProgress?.surveyStep ?? "Project"} setStep={(surveyStep) => setInput({ ...input, uiProgress: { ...input.uiProgress, surveyStep } })} input={input.survey} onChange={(survey) => setInput(syncSurveyProjectInput(input, survey))} rates={normaliseSurveyRates(pricingRates.surveyRates)} onSave={(complete) => void saveCurrentProject(complete ? "Costing Complete" : "Draft")} saving={saveState === "saving" || saveState === "autosaving"} duplicateReference={duplicateProjectReference} />}
 {view === "New Project" && input.costingModule !== "survey" && <ProjectBuilder input={input} setInput={setInput} rates={pricingRates} repairCatalog={pricingCatalog} calculations={calculations} onSave={saveCurrentProject} duplicateReference={duplicateProjectReference} saving={saveState === "saving" || saveState === "autosaving"} dirty={hasUnsavedChanges} />}
@@ -1060,7 +1060,7 @@ function ProjectBuilder({ input, setInput, rates, repairCatalog, calculations, o
       )}
       <div className="app-card-strong" id="costing-builder-content">
         <div className="panel-heading flex flex-wrap items-center justify-between gap-3">
-          <div><div className="flex flex-wrap items-center gap-2"><h2 className="text-xl font-semibold">New Project</h2>{dirty && <span className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-bold uppercase text-amber-800">Unsaved changes</span>}</div><p className="text-sm text-slate-500">Pick services first, then complete only the sections needed for this costing.</p></div>
+          <div><div className="flex flex-wrap items-center gap-2"><h2 className="text-xl font-semibold">New Project</h2>{dirty && <span className="rounded-full bg-amber-100 px-2 py-1 text-[11px] font-bold uppercase text-amber-800">Unsaved changes</span>}</div><p className="text-sm text-slate-500">Start with project details, then price the selected services.</p></div>
           <div className="flex flex-wrap gap-2">
             <button className="secondary-button" onClick={() => onSave("Draft")} disabled={saving}><Save size={16} /> {saving ? "Saving..." : "Save Draft"}</button>
             {builderStep === "Review" && <button className="primary-button" onClick={() => onSave("Costing Complete")} disabled={saving}><Save size={16} /> {saving ? "Saving..." : "Complete Costing"}</button>}
@@ -2303,9 +2303,8 @@ function MaterialSummary({ materialCalcs, materialMargin, repairCatalog }: { mat
 }
 
 function HaulageItems({ items, onChange }: { items: AdditionalItem[]; onChange: (items: AdditionalItem[]) => void }) {
-  const normalise = (item: AdditionalItem): AdditionalItem => ({ ...item, unit: "item", quantity: 1, margin: Number.isFinite(item.margin) ? item.margin : 0.3 });
-  const currentItems = items.length ? items.map(normalise) : [{ name: "Delivery of material", rate: 0, unit: "item", quantity: 1, margin: 0.3 }];
-  const update = (index: number, next: Partial<AdditionalItem>) => onChange(currentItems.map((item, i) => i === index ? normalise({ ...item, ...next }) : item));
+  const currentItems = items.filter((item) => item.quantity > 0);
+  const update = (index: number, next: Partial<AdditionalItem>) => onChange(currentItems.map((item, i) => i === index ? { ...item, ...next } : item));
   return (
     <div className="app-card-strong">
       <div className="panel-heading"><h2 className="text-xl font-semibold">Haulage Items</h2><p className="text-sm text-slate-500">One delivery or haulage charge per line. Add another line for multiple deliveries.</p></div>
@@ -2313,12 +2312,13 @@ function HaulageItems({ items, onChange }: { items: AdditionalItem[]; onChange: 
         {currentItems.map((item, index) => (
           <div className="grid min-w-0 gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_160px_140px_140px_auto]" key={index}>
             <Text label="Name" value={item.name} onChange={(v) => update(index, { name: v })} />
-            <NumberInput label="Rate" value={item.rate} onChange={(v) => update(index, { rate: v })} />
+            <NumberInput label="Budget / Delivery" value={item.rate} onChange={(v) => update(index, { rate: v })} />
             <NumberInput label="Markup %" value={item.margin * 100} onChange={(v) => update(index, { margin: v / 100 })} />
-            <Mini label="Sell" value={money(item.rate * (1 + item.margin))} />
-            <button className="secondary-button self-end" onClick={() => onChange(currentItems.filter((_, i) => i !== index))} disabled={currentItems.length === 1}>Remove</button>
+            <Mini label={item.quantity === 1 ? "Sell Before Discount" : `Sell / ${item.quantity} Deliveries`} value={money(item.quantity * item.rate * (1 + item.margin))} />
+            <button className="secondary-button self-end" onClick={() => onChange(currentItems.filter((_, i) => i !== index))}>Remove</button>
           </div>
         ))}
+        {!currentItems.length && <p className="text-sm text-slate-500">No haulage included.</p>}
         <button className="secondary-button justify-self-start" onClick={() => onChange([...currentItems, { name: "New haulage item", rate: 0, unit: "item", quantity: 1, margin: 0.3 }])}>Add Haulage Item</button>
       </div>
     </div>
