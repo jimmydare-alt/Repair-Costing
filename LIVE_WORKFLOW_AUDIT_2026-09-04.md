@@ -59,12 +59,14 @@ Performed in the authenticated Vercel app using clearly labelled QA projects.
 - Browser error logs were empty during the completed entry/save/navigation checks.
 - Existing live saved project values checked read-only and unchanged.
 - Rapid Remedial-to-Survey switching retested after the loading guard: entered client text remained intact when moving to Scope and back.
+- Clean Survey-to-Remedial switching also passes after the loading guard: zero initial totals, then entered client text remains intact through Services and Back. No browser errors were recorded.
+- Reopened the saved package test after the interrupted confirmation: budget 6,550 / sell 8,515 and 7 programme days are retained; no client award was accidentally applied.
 
 ## Remaining Live Checks
 
 - Browser confirmation handling paused the package-award check; automated award/reconciliation tests pass.
-- The reverse module-switch check stopped at the unsaved-change confirmation. The integrated browser could not operate the native confirmation dialog; user dismissal was requested.
-- QA records remain available pending cleanup: QA-20260904-REPAIRS, QA-20260904-SURVEY, QA-20260904-PACKAGES. Move them to the Recycle Bin after verification; no permanent deletion.
+- Unsaved-change and client-award native confirmation interactions remain unverified in the integrated browser because it could not operate those popups. Clean module switching has now been verified in both directions.
+- QA records remain available pending permission to move them to the recoverable Recycle Bin: QA-20260904-REPAIRS, QA-20260904-SURVEY, QA-20260904-PACKAGES. No permanent deletion.
 
 ## Further Usability Recommendations
 
