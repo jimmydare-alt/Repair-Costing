@@ -33,6 +33,22 @@ try {
   assert.equal(await page.getByLabel("Password").isVisible(), true);
   console.log("PASS public login shell");
 
+  const mobile = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await mobile.goto(baseUrl, { waitUntil: "domcontentloaded" });
+  await mobile.getByText("Sign in to Costing Platform", { exact: false }).first().waitFor({ state: "visible", timeout: 20_000 });
+  const mobileLayout = await mobile.evaluate(() => ({
+    viewportWidth: window.innerWidth,
+    documentWidth: document.documentElement.scrollWidth,
+    emailWidth: document.querySelector('input[type="email"]')?.getBoundingClientRect().width ?? 0
+  }));
+  const submitBox = await mobile.getByRole("button", { name: "Sign in", exact: true }).last().boundingBox();
+  assert.equal(mobileLayout.documentWidth <= mobileLayout.viewportWidth, true);
+  assert.equal(mobileLayout.emailWidth > 250 && mobileLayout.emailWidth <= mobileLayout.viewportWidth, true);
+  assert.ok(submitBox);
+  assert.equal(submitBox.x >= 0 && submitBox.x + submitBox.width <= mobileLayout.viewportWidth && submitBox.height >= 40, true);
+  await mobile.close();
+  console.log("PASS 390px responsive login layout");
+
   if (!email || !password) {
     console.log("SKIP authenticated workflow: set E2E_EMAIL and E2E_PASSWORD for a dedicated company-admin test account.");
   } else {

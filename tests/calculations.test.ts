@@ -206,6 +206,51 @@ describe("FACE GmbH v2 contracting calculations", () => {
     expect(rapidMender?.cost).toBe(1714.75);
   });
 
+  it("loads default repair materials, permits their removal, and only adds selected optional materials", () => {
+    const base = { ...createRepairLine("Type 1", defaultRepairCatalog), lengthM: 10, widthMm: 8, depthMm: 30 };
+    expect(calculateRepairLineMaterials(base, defaultRepairCatalog).some((material) => material.product.includes("LV Rapid"))).toBe(true);
+    const withoutDefault = {
+      ...base,
+      materialSelections: base.materialSelections.map((selection) => selection.materialId === "lv-rapid-600" ? { ...selection, selected: false } : selection)
+    };
+    expect(calculateRepairLineMaterials(withoutDefault, defaultRepairCatalog).some((material) => material.product.includes("LV Rapid"))).toBe(false);
+    const withOptionalOnly = {
+      ...withoutDefault,
+      materialSelections: withoutDefault.materialSelections.map((selection) => selection.materialId === "rapid-seal-600" ? { ...selection, selected: true } : selection)
+    };
+    const materials = calculateRepairLineMaterials(withOptionalOnly, defaultRepairCatalog);
+    expect(materials).toHaveLength(1);
+    expect(materials[0].product).toContain("Rapid Seal");
+  });
+
+  it("keeps a zero output per day as no automatic labour estimate instead of applying a fallback", () => {
+    const catalog: RepairCatalog = {
+      materials: [{ id: "zero-output-material", name: "Zero Output Material", category: "Other", unitType: "each", unitSize: 1, costPerUnit: 10, calcMethod: "each", measuredUnitType: "each", coveragePerUnit: 1, wasteFactor: 1, sourceNote: "Test", active: true, notes: "" }],
+      types: [{ code: "Zero Output", name: "Zero Output Repair", measurementBasis: "each", defaultWidthMm: 0, defaultDepthMm: 0, defaultThicknessMm: 0, defaultOutputPerDay: 0, description: "", materialRules: [{ materialId: "zero-output-material", role: "required", defaultSelected: true }], active: true }]
+    };
+    const repairLine = { ...createRepairLine("Zero Output", catalog), eachQty: 4 };
+    const input = { ...emptyInput, includeRepairs: true, repairs: { ...emptyInput.repairs, enabled: true, labourDays: 0, repairLines: [repairLine] } };
+    expect(repairDays(input, catalog)).toBe(0);
+    expect(calculateRepairLineMaterials(repairLine, catalog)[0].quantity).toBe(4);
+  });
+
+  it("allocates manually entered repair labour when a repair type has zero output per day", () => {
+    const catalog: RepairCatalog = {
+      materials: [{ id: "zero-output-material", name: "Zero Output Material", category: "Other", unitType: "each", unitSize: 1, costPerUnit: 10, calcMethod: "each", measuredUnitType: "each", coveragePerUnit: 1, wasteFactor: 1, sourceNote: "Test", active: true, notes: "" }],
+      types: [{ code: "Zero Output", name: "Zero Output Repair", measurementBasis: "each", defaultWidthMm: 0, defaultDepthMm: 0, defaultThicknessMm: 0, defaultOutputPerDay: 0, description: "", materialRules: [{ materialId: "zero-output-material", role: "required", defaultSelected: true }], active: true }]
+    };
+    const repairLine = { ...createRepairLine("Zero Output", catalog), eachQty: 4 };
+    const input = {
+      ...emptyInput,
+      includeRepairs: true,
+      repairs: { ...emptyInput.repairs, enabled: true, labourMode: "in_house" as const, labourMen: 1, labourDays: 3, repairLines: [repairLine] }
+    };
+    const result = calculateProject(input, defaultRates, catalog);
+    expect(result.repairDays).toBe(3);
+    expect(result.repairPricing?.[0].rows[0].labourBudget).toBe(1380);
+    expect(result.repairPricing?.[0].unallocatedBudget).toBe(0);
+  });
+
   it("uses sealant-specific width and depth when selected on a repair line", () => {
     const standard = { ...createRepairLine("Type 3", defaultRepairCatalog), lengthM: 60, widthMm: 50, depthMm: 50 };
     const withSealantOverride = {
@@ -216,6 +261,16 @@ describe("FACE GmbH v2 contracting calculations", () => {
     const overrideSealant = calculateRepairLineMaterials(withSealantOverride, defaultRepairCatalog).find((material) => material.product.includes("Rapid Seal"));
     expect(standardSealant?.quantity).toBe(11);
     expect(overrideSealant?.quantity).toBe(12);
+  });
+
+  it("honours an explicit operation dimension even when it equals the main repair dimension", () => {
+    const base = { ...createRepairLine("Type 3", defaultRepairCatalog), lengthM: 60, widthMm: 50, depthMm: 50 };
+    const explicit = {
+      ...base,
+      materialSelections: base.materialSelections.map((selection) => selection.materialId === "rapid-seal-600" ? { ...selection, widthMm: 50, depthMm: 50, dimensionsOverridden: true } : selection)
+    };
+    const sealant = calculateRepairLineMaterials(explicit, defaultRepairCatalog).find((material) => material.product.includes("Rapid Seal"));
+    expect(sealant?.quantity).toBe(300);
   });
 
   it("prices area based repair mortar from area and thickness", () => {
@@ -235,6 +290,8 @@ describe("FACE GmbH v2 contracting calculations", () => {
   it("prices Type 5b bolt core repairs from each quantity, hole diameter and hole depth", () => {
     const line = { ...createRepairLine("Type 5b", defaultRepairCatalog), eachQty: 1000, holeDiameterMm: 50, holeDepthMm: 50 };
     const topping = calculateRepairLineMaterials(line, defaultRepairCatalog).find((material) => material.product.includes("FfIT Topping"));
+    const cylindricalVolumeLitres = 1000 * Math.PI * Math.pow(50 / 2, 2) * 50 / 1000000;
+    expect(topping?.unroundedUnits).toBeCloseTo((cylindricalVolumeLitres * 1.74 * 1.155) / 25, 6);
     expect(topping?.quantity).toBe(8);
     expect(topping?.cost).toBe(144);
   });

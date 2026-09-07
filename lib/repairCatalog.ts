@@ -19,16 +19,17 @@ export const repairMaterials: RepairMaterial[] = [
   { id: "densifier", name: "CoGri Densifier / CoGri Denpro", category: "Other", unitType: "litres", unitSize: 1, costPerUnit: 0, calcMethod: "manual", measuredUnitType: "litres", coveragePerUnit: 1, wasteFactor: 1.1, sourceNote: "Admin setup required", active: false, notes: "Fill out in full before activating" }
 ];
 
-const rule = (materialId: string, role: "required" | "optional", defaultSelected = role === "required", dimensions?: { widthMm: number; depthMm: number }) => ({
+const rule = (materialId: string, role: "required" | "optional", defaultSelected = role === "required", dimensions?: { widthMm: number; depthMm: number; label?: string }) => ({
   materialId,
   role,
   defaultSelected,
   usesOwnDimensions: Boolean(dimensions),
   defaultWidthMm: dimensions?.widthMm,
-  defaultDepthMm: dimensions?.depthMm
+  defaultDepthMm: dimensions?.depthMm,
+  operationLabel: dimensions?.label
 });
 
-const type3Sealant = (materialId: string, role: "required" | "optional") => rule(materialId, role, role === "required", { widthMm: 3, depthMm: 30 });
+const type3Sealant = (materialId: string, role: "required" | "optional") => rule(materialId, role, role === "required", { widthMm: 3, depthMm: 30, label: "Sealant saw-cut and fill" });
 
 export const repairTypes: RepairType[] = [
   { code: "Type 1", name: "Crack Repair", measurementBasis: "linear", defaultWidthMm: 8, defaultDepthMm: 30, defaultThicknessMm: 0, defaultOutputPerDay: 60, description: "Saw cut crack repair filled with LV Rapid resin.", materialRules: [rule("lv-rapid-600", "required"), rule("rapid-seal-600", "optional")], active: true },
@@ -84,7 +85,7 @@ export function validateRepairCatalog(catalog: RepairCatalog) {
   const invalidMaterials = catalog.materials.filter((material) => material.active && (!material.name.trim() || material.costPerUnit <= 0 || material.unitSize <= 0 || material.coveragePerUnit <= 0));
   const normalisedCodes = catalog.types.map((type) => type.code.trim().toLowerCase()).filter(Boolean);
   const duplicateCodes = [...new Set(normalisedCodes.filter((code, index) => normalisedCodes.indexOf(code) !== index))];
-  const invalidTypes = catalog.types.filter((type) => type.active && (!type.code.trim() || !type.name.trim() || type.defaultOutputPerDay <= 0 || !type.materialRules.length || type.materialRules.some((rule) => {
+  const invalidTypes = catalog.types.filter((type) => type.active && (!type.code.trim() || !type.name.trim() || type.defaultOutputPerDay < 0 || !type.materialRules.length || type.materialRules.some((rule) => {
     const material = catalog.materials.find((item) => item.id === rule.materialId);
     return !material?.active || material.costPerUnit <= 0 || material.unitSize <= 0 || material.coveragePerUnit <= 0;
   })));
@@ -116,7 +117,8 @@ export function createRepairLine(repairTypeCode = "", catalog: RepairCatalog = d
       materialId: rule.materialId,
       selected: rule.defaultSelected,
       widthMm: rule.usesOwnDimensions ? rule.defaultWidthMm : undefined,
-      depthMm: rule.usesOwnDimensions ? rule.defaultDepthMm : undefined
+      depthMm: rule.usesOwnDimensions ? rule.defaultDepthMm : undefined,
+      dimensionsOverridden: false
     }))
   };
 }

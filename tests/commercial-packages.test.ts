@@ -306,6 +306,53 @@ function catalogForRecord(): RepairCatalog {
 }
 
 describe("survey commercial rate schedules", () => {
+  it("keeps calculated survey-day overrides and fixed lump-sum commercial output separate", () => {
+    const input = {
+      ...createEmptySurveyInput("EUR", "km"),
+      surveyType: "AutoStore" as const,
+      autoStoreArea: 1200,
+      surveyorSupply: "Subcontracted" as const,
+      subcontractSurveyCost: 1000,
+      subcontractSurveyMarkup: 0.3,
+      siteDaysOverride: 1,
+      pricingBasis: "fixed" as const,
+      subcontractStandbyCost: 400,
+      subcontractStandbyMarkup: 0.25
+    };
+    const result = calculateSurveyProject(input, defaultSurveyRates);
+    expect(result.survey?.calculatedSiteDays).toBe(2);
+    expect(result.siteDays).toBe(1);
+    expect(result.survey?.siteDaysOverridden).toBe(true);
+    expect(result.rateSchedules?.[0].pricingBasis).toBe("fixed");
+    expect(result.dailyRate).toBeGreaterThan(0);
+    expect(result.standbyRate).toBeGreaterThan(0);
+    expect(result.proposalLines.some((line) => /stand-down/i.test(line.item) && line.total > 0)).toBe(false);
+  });
+
+  it("ignores saved day-rate overrides while Fixed Lump Sum is selected", () => {
+    const input = {
+      ...createEmptySurveyInput("EUR", "km"),
+      surveyType: "AutoStore" as const,
+      autoStoreArea: 1000,
+      surveyorSupply: "Subcontracted" as const,
+      subcontractSurveyCost: 1000,
+      subcontractSurveyMarkup: 0.3,
+      subcontractStandbyCost: 400,
+      subcontractStandbyMarkup: 0.25,
+      pricingBasis: "fixed" as const,
+      productiveRateOverride: 9999,
+      standbyRateOverride: 8888,
+      rateOverrideReason: "Previous day-rate option"
+    };
+    const result = calculateSurveyProject(input, defaultSurveyRates);
+    const schedule = result.rateSchedules![0];
+    expect(schedule.productiveProposalRate).toBe(1300);
+    expect(schedule.standbyProposalRate).toBe(500);
+    expect(schedule.productiveRateOverridden).toBe(false);
+    expect(schedule.standbyRateOverridden).toBe(false);
+    expect(schedule.overrideReason).toBe("");
+  });
+
   it("calculates subcontract productive, mobilisation and stand-down rates independently", () => {
     const input = {
       ...createEmptySurveyInput("EUR", "km"),

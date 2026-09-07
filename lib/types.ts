@@ -275,11 +275,14 @@ export type RepairMaterial = {
 
 export type RepairTypeMaterialRule = {
   materialId: string;
+  /** "required" is retained for saved catalog compatibility and means default-loaded, not compulsory. */
   role: RepairMaterialRole;
   defaultSelected: boolean;
   usesOwnDimensions?: boolean;
   defaultWidthMm?: number;
   defaultDepthMm?: number;
+  operationLabel?: string;
+  calculationMethod?: RepairCalcMethod;
 };
 
 export type RepairType = {
@@ -306,6 +309,7 @@ export type RepairLineMaterialSelection = {
   selected: boolean;
   widthMm?: number;
   depthMm?: number;
+  dimensionsOverridden?: boolean;
 };
 
 export type RepairLineItem = {

@@ -207,12 +207,13 @@ function mergeCatalog(saved: Partial<RepairCatalog>): RepairCatalog {
   const materialMap = new Map(materials.map((material) => [material.id, material]));
   const types = (savedTypes.length ? savedTypes : defaultRepairCatalog.types).map((type, index) => {
     const defaultType = defaultRepairCatalog.types.find((item) => item.code === type.code);
-    const materialRules = (type.materialRules ?? []).map((rule) => ({
-      ...defaultType?.materialRules.find((item) => item.materialId === rule.materialId),
-      ...rule
-    }));
+    const materialRules = (type.materialRules ?? []).map((rule) => {
+      const inherited = defaultType?.materialRules.find((item) => item.materialId === rule.materialId);
+      // Older snapshots used "required" to mean a default-loaded material. Keep it selectable.
+      return { ...inherited, ...rule, defaultSelected: rule.defaultSelected ?? inherited?.defaultSelected ?? rule.role === "required" };
+    });
     const usableRules = materialRules.filter((rule) => materialMap.get(rule.materialId)?.active);
-    return { ...type, id: type.id ?? `repair-type-${index + 1}`, materialRules, active: type.active && type.defaultOutputPerDay > 0 && usableRules.length > 0 };
+    return { ...type, id: type.id ?? `repair-type-${index + 1}`, materialRules, active: type.active && type.defaultOutputPerDay >= 0 && usableRules.length > 0 };
   });
   return {
     materials: materials.length ? materials : defaultRepairCatalog.materials,

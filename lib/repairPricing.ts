@@ -32,7 +32,8 @@ export type RepairPriceBreakdown = {
 export function repairAllocationDays(item: RepairLineItem, catalog: RepairCatalog) {
   const type = repairTypeByCode(item.repairTypeCode, catalog);
   const quantity = type.measurementBasis === "each" ? item.eachQty : type.measurementBasis === "area" ? item.areaM2 : type.measurementBasis === "manual" ? item.manualMaterialQty : item.lengthM;
-  return Math.max(0, quantity) / Math.max(0.000001, item.outputPerDay || type.defaultOutputPerDay || 1);
+  const outputPerDay = Number(item.outputPerDay);
+  return outputPerDay > 0 ? Math.max(0, quantity) / outputPerDay : 0;
 }
 
 export function buildRepairPriceBreakdown(items: RepairLineItem[], catalog: RepairCatalog, requirements: MaterialCalc[][], materials: MaterialCalc[], proposal: Line[], budget: Line[]): RepairPriceBreakdown {
@@ -40,9 +41,10 @@ export function buildRepairPriceBreakdown(items: RepairLineItem[], catalog: Repa
     const type = repairTypeByCode(item.repairTypeCode, catalog);
     const calculatedDays = repairAllocationDays(item, catalog);
     const quantity = type.measurementBasis === "each" ? item.eachQty : type.measurementBasis === "area" ? item.areaM2 : type.measurementBasis === "manual" ? item.manualMaterialQty : item.lengthM;
+    const defaultAllocationWeight = calculatedDays > 0 ? calculatedDays : quantity > 0 ? 1 : 0;
     return { id: item.id, label: `${type.code} / ${item.description || type.name}`, quantity,
       unit: type.measurementBasis === "each" ? "each" : type.measurementBasis === "area" ? "m2" : type.measurementBasis === "manual" ? "item" : "m",
-      calculatedDays, allocationWeight: Math.max(0, item.labourAllocationWeight ?? calculatedDays),
+      calculatedDays, allocationWeight: Math.max(0, item.labourAllocationWeight ?? defaultAllocationWeight),
       allocationOverridden: item.labourAllocationWeight != null && item.labourAllocationWeight !== calculatedDays,
       labourShare: 0, materials: [], materialBudget: 0, materialSell: 0, labourBudget: 0, labourSell: 0, budget: 0, sell: 0 };
   });

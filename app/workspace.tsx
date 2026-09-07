@@ -111,9 +111,8 @@ function repairLineQuantity(repairLine: RepairLineItem, repairCatalog: RepairCat
 }
 
 function repairLineDays(repairLine: RepairLineItem, repairCatalog: RepairCatalog) {
-  const type = repairTypeByCode(repairLine.repairTypeCode, repairCatalog);
-  const output = repairLine.outputPerDay || type.defaultOutputPerDay || 1;
-  return Math.max(0, repairLineQuantity(repairLine, repairCatalog)) / Math.max(1, output);
+  const output = Number(repairLine.outputPerDay);
+  return output > 0 ? Math.max(0, repairLineQuantity(repairLine, repairCatalog)) / output : 0;
 }
 
 function repairReadiness(input: ProjectInput, repairCatalog: RepairCatalog): RepairReadiness {
@@ -133,10 +132,9 @@ function repairReadiness(input: ProjectInput, repairCatalog: RepairCatalog): Rep
     if (!type.active) blockers.push(`${line}: ${type.code} is archived in Admin.`);
     if (!type.materialRules.length) blockers.push(`${line}: ${type.code} has no materials assigned in Admin.`);
     if (repairLineQuantity(repairLine, repairCatalog) <= 0) blockers.push(`${line}: add a repair quantity.`);
-    if ((repairLine.outputPerDay || type.defaultOutputPerDay) <= 0) blockers.push(`${line}: output per day must be above zero.`);
-    const selected = new Set(repairLine.materialSelections.filter((selection) => selection.selected).map((selection) => selection.materialId));
-    const selectedRules = type.materialRules.filter((rule) => rule.role === "required" || selected.has(rule.materialId));
-    if (!selectedRules.length) blockers.push(`${line}: select at least one required or optional material.`);
+    if (repairLineQuantity(repairLine, repairCatalog) > 0 && Number(repairLine.outputPerDay) <= 0 && input.repairs.labourDays <= 0) warnings.push(`${line}: output per day is zero, so enter inputted repair days for labour planning.`);
+    const selectedRules = type.materialRules.filter((rule) => repairLine.materialSelections.find((selection) => selection.materialId === rule.materialId)?.selected ?? rule.defaultSelected);
+    if (!selectedRules.length) blockers.push(`${line}: select at least one default or optional material.`);
     selectedRules.forEach((rule) => {
       const material = repairCatalog.materials.find((item) => item.id === rule.materialId);
       if (!material) {
@@ -147,13 +145,20 @@ function repairReadiness(input: ProjectInput, repairCatalog: RepairCatalog): Rep
       if (material.costPerUnit <= 0) blockers.push(`${line}: ${material.name} has no cost per unit.`);
       if (material.unitSize <= 0) blockers.push(`${line}: ${material.name} has no unit size.`);
       if (material.coveragePerUnit <= 0) blockers.push(`${line}: ${material.name} has no coverage per unit.`);
-      const hasLinearVolume = Boolean(repairLine.lengthM && repairLine.widthMm && repairLine.depthMm);
       const hasAreaVolume = Boolean(repairLine.areaM2 && repairLine.thicknessMm);
       const hasHoleVolume = Boolean(repairLine.eachQty && repairLine.holeDiameterMm && repairLine.holeDepthMm);
-      if (material.calcMethod === "volume_lwd" && !hasLinearVolume && !hasAreaVolume && !hasHoleVolume) blockers.push(`${line}: ${material.name} needs length/width/depth, area/thickness, or each/diameter/depth.`);
-      if (material.calcMethod === "area_thickness" && material.id !== "bondcoat-rbp" && material.id !== "fastprime-5" && !hasAreaVolume && !hasHoleVolume) blockers.push(`${line}: ${material.name} needs area/thickness or each/diameter/depth.`);
-      if (material.calcMethod === "area_thickness" && material.id === "fastprime-5" && !repairLine.areaM2 && !hasHoleVolume) blockers.push(`${line}: ${material.name} needs an area or each/hole dimensions.`);
-      if (material.calcMethod === "manual" && repairLine.manualMaterialQty <= 0) blockers.push(`${line}: ${material.name} needs a manual material quantity.`);
+      const calculationMethod = rule.calculationMethod ?? material.calcMethod;
+      const operationSelection = repairLine.materialSelections.find((selection) => selection.materialId === rule.materialId);
+      const selectedWidth = Number(operationSelection?.widthMm ?? 0);
+      const selectedDepth = Number(operationSelection?.depthMm ?? 0);
+      const useEnteredDimensions = Boolean(operationSelection?.dimensionsOverridden) || Boolean(selectedWidth && selectedDepth && (selectedWidth !== repairLine.widthMm || selectedDepth !== repairLine.depthMm));
+      const operationWidth = rule.usesOwnDimensions ? (useEnteredDimensions ? selectedWidth : Number(rule.defaultWidthMm ?? selectedWidth)) : repairLine.widthMm;
+      const operationDepth = rule.usesOwnDimensions ? (useEnteredDimensions ? selectedDepth : Number(rule.defaultDepthMm ?? selectedDepth)) : repairLine.depthMm;
+      const hasOperationVolume = Boolean(repairLine.lengthM && operationWidth && operationDepth);
+      if (calculationMethod === "volume_lwd" && !hasOperationVolume && !hasAreaVolume && !hasHoleVolume) blockers.push(`${line}: ${rule.operationLabel ?? material.name} needs length/width/depth, area/thickness, or each/diameter/depth.`);
+      if (calculationMethod === "area_thickness" && material.id !== "bondcoat-rbp" && material.id !== "fastprime-5" && !hasAreaVolume && !hasHoleVolume) blockers.push(`${line}: ${material.name} needs area/thickness or each/diameter/depth.`);
+      if (calculationMethod === "area_thickness" && material.id === "fastprime-5" && !repairLine.areaM2 && !hasHoleVolume) blockers.push(`${line}: ${material.name} needs an area or each/hole dimensions.`);
+      if (calculationMethod === "manual" && repairLine.manualMaterialQty <= 0) blockers.push(`${line}: ${material.name} needs a manual material quantity.`);
     });
   });
   const calculatedRepairDays = Math.ceil(input.repairs.repairLines.reduce((sum, repairLine) => sum + repairLineDays(repairLine, repairCatalog), 0));
@@ -2024,8 +2029,7 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
   const materialCost = (repairLine: RepairLineItem) => repairBreakdown?.rows.find((row) => row.id === repairLine.id)?.materialBudget ?? 0;
   const selectedMaterialIds = (repairLine: RepairLineItem) => {
     const type = repairTypeByCode(repairLine.repairTypeCode, repairCatalog);
-    const selected = new Set(repairLine.materialSelections.filter((selection) => selection.selected).map((selection) => selection.materialId));
-    return type.materialRules.filter((rule) => rule.role === "required" || selected.has(rule.materialId)).map((rule) => rule.materialId);
+    return type.materialRules.filter((rule) => repairLine.materialSelections.find((selection) => selection.materialId === rule.materialId)?.selected ?? rule.defaultSelected).map((rule) => rule.materialId);
   };
   const materialSelection = (repairLine: RepairLineItem, materialId: string) => repairLine.materialSelections.find((selection) => selection.materialId === materialId);
   const patchMaterialSelection = (lineIndex: number, repairLine: RepairLineItem, materialId: string, next: Partial<RepairLineItem["materialSelections"][number]>) => {
@@ -2054,11 +2058,6 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
   const hotelRoomNights = r.hotelRequired ? effectiveRepairHotelNights * Math.max(0, r.labourMen) : 0;
   const subcontractSellTotal = repairCalculation.proposalLines.filter((line) => line.source.startsWith("Repair subcontract")).reduce((sum, line) => sum + line.total, 0);
   const logisticsSellTotal = repairCalculation.proposalLines.filter((line) => line.source === "Repair haulage input").reduce((sum, line) => sum + line.total, 0);
-  const selectedOptionalRules = (repairLine: RepairLineItem) => {
-    const type = repairTypeByCode(repairLine.repairTypeCode, repairCatalog);
-    const selected = new Set(repairLine.materialSelections.filter((selection) => selection.selected).map((selection) => selection.materialId));
-    return type.materialRules.filter((rule) => rule.role === "optional" && (selected.has(rule.materialId) || rule.defaultSelected));
-  };
   const duplicateRepairLine = (index: number) => {
     const source = r.repairLines[index];
     const copy = { ...source, id: `${source.repairTypeCode}-${Math.random().toString(36).slice(2, 9)}`, description: `${source.description || source.repairTypeCode} copy` };
@@ -2080,8 +2079,16 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
     const existing = line.materialSelections.some((item) => item.materialId === materialId);
     const materialSelections = existing
       ? line.materialSelections.map((item) => item.materialId === materialId ? { ...item, selected, widthMm: item.widthMm ?? widthMm, depthMm: item.depthMm ?? depthMm } : item)
-      : [...line.materialSelections, { materialId, selected, widthMm, depthMm }];
+      : [...line.materialSelections, { materialId, selected, widthMm, depthMm, dimensionsOverridden: false }];
     updateRepairLine(lineIndex, { materialSelections });
+  };
+  const restoreDefaultMaterials = (lineIndex: number, repairLine: RepairLineItem, rules: RepairType["materialRules"]) => {
+    const defaultIds = new Set(rules.map((rule) => rule.materialId));
+    const restored = repairLine.materialSelections.map((selection) => defaultIds.has(selection.materialId) ? { ...selection, selected: true } : selection);
+    rules.forEach((rule) => {
+      if (!restored.some((selection) => selection.materialId === rule.materialId)) restored.push({ materialId: rule.materialId, selected: true, widthMm: rule.usesOwnDimensions ? rule.defaultWidthMm : undefined, depthMm: rule.usesOwnDimensions ? rule.defaultDepthMm : undefined, dimensionsOverridden: false });
+    });
+    updateRepairLine(lineIndex, { materialSelections: restored });
   };
   return (
     <div className="grid gap-5">
@@ -2117,10 +2124,12 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
         <div className="grid gap-4 p-5">
           {r.repairLines.map((repairLine, index) => {
             const type = repairTypeByCode(repairLine.repairTypeCode, repairCatalog);
-            const selectedOptionalIds = new Set(repairLine.materialSelections.filter((selection) => selection.selected).map((selection) => selection.materialId));
-            const required = type.materialRules.filter((rule) => rule.role === "required");
+            const defaults = type.materialRules.filter((rule) => rule.role === "required");
             const optional = type.materialRules.filter((rule) => rule.role === "optional");
-            const optionalSelected = selectedOptionalRules(repairLine);
+            const materialSelected = (rule: RepairType["materialRules"][number]) => repairLine.materialSelections.find((selection) => selection.materialId === rule.materialId)?.selected ?? rule.defaultSelected;
+            const defaultSelected = defaults.filter(materialSelected);
+            const defaultAvailable = defaults.filter((rule) => !materialSelected(rule));
+            const optionalSelected = optional.filter(materialSelected);
             const optionalAvailable = optional.filter((rule) => !optionalSelected.some((selected) => selected.materialId === rule.materialId));
             const pendingOptionalValue = pendingOptional[repairLine.id] || optionalAvailable[0]?.materialId || "";
             const materialCalcs = calculateRepairLineMaterials(repairLine, repairCatalog);
@@ -2152,7 +2161,7 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
                 <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                   <label className="block"><span className="field-label">Repair Type</span><select value={repairLine.repairTypeCode} onChange={(event) => changeRepairType(index, event.target.value)}>{repairCatalog.types.filter((item) => item.active).map((item) => <option key={item.code} value={item.code}>{item.code} / {item.name}</option>)}</select></label>
                   <Text label="Repair Name" value={repairLine.description || type.name} onChange={(v) => updateRepairLine(index, { description: v })} />
-                  {advanced && <NumberInput label="Output Per Day" value={repairLine.outputPerDay || type.defaultOutputPerDay} onChange={(v) => updateRepairLine(index, { outputPerDay: v })} />}
+                  {advanced && <NumberInput label="Output Per Day" value={repairLine.outputPerDay} onChange={(v) => updateRepairLine(index, { outputPerDay: v })} />}
                   {advanced && <Text label="Measure Basis" value={type.measurementBasis} onChange={() => undefined} />}
                   {type.measurementBasis === "linear" && <NumberInput label="Length m" value={repairLine.lengthM} onChange={(v) => updateRepairLine(index, { lengthM: v })} />}
                   {type.measurementBasis === "linear" && <NumberInput label="Width mm" value={repairLine.widthMm} onChange={(v) => updateRepairLine(index, { widthMm: v })} />}
@@ -2166,13 +2175,14 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
                 </div>
                 <div className="mt-4 grid gap-4 lg:grid-cols-2">
                   <div className="rounded-lg bg-slate-50 p-3">
-                    <div className="mb-2 text-xs font-bold uppercase text-slate-500">Required Materials</div>
+                    <div className="mb-2 text-xs font-bold uppercase text-slate-500">Default Materials</div>
                     <div className="flex flex-wrap gap-2">
-                      {required.length ? required.map((rule) => {
+                      {defaultSelected.length ? defaultSelected.map((rule) => {
                         const material = repairCatalog.materials.find((item) => item.id === rule.materialId);
-                        return material ? <span className="rounded-full bg-sky-700 px-3 py-1 text-xs font-bold text-white" key={rule.materialId}>{material.name}</span> : null;
-                      }) : <span className="text-sm text-slate-500">No required materials assigned.</span>}
+                        return material ? <span className="inline-flex max-w-full items-center gap-2 rounded-full bg-sky-700 px-3 py-1 text-xs font-bold text-white" key={rule.materialId}><span className="truncate">{material.name}</span><button className="rounded-full bg-white/20 px-1.5 py-0.5" onClick={() => toggleMaterial(index, rule.materialId, false)}>Remove</button></span> : null;
+                      }) : <span className="text-sm text-slate-500">No default materials selected.</span>}
                     </div>
+                    {defaultAvailable.length > 0 && <button className="mt-3 text-xs font-bold text-sky-700" onClick={() => restoreDefaultMaterials(index, repairLine, defaultAvailable)}>Restore default materials</button>}
                   </div>
                   <div className="rounded-lg bg-slate-50 p-3">
                     <div className="mb-2 text-xs font-bold uppercase text-slate-500">Optional Materials</div>
@@ -2195,7 +2205,7 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
                 </div>
                 {advanced && ownDimensionRules.length > 0 && (
                   <div className="mt-4 rounded-lg border border-sky-100 bg-sky-50 p-3">
-                    <div className="mb-2 text-xs font-bold uppercase text-sky-700">Sealant-Specific Dimensions</div>
+                    <div className="mb-2 text-xs font-bold uppercase text-sky-700">Material-Specific Operations</div>
                     <div className="grid gap-3 lg:grid-cols-2">
                       {ownDimensionRules.map((rule) => {
                         const material = repairCatalog.materials.find((item) => item.id === rule.materialId);
@@ -2203,10 +2213,10 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
                         const selection = materialSelection(repairLine, material.id);
                         return (
                           <div className="rounded-lg bg-white p-3 ring-1 ring-sky-100" key={material.id}>
-                            <div className="mb-2 truncate text-sm font-bold text-slate-950">{material.name}</div>
+                            <div className="mb-2 truncate text-sm font-bold text-slate-950">{rule.operationLabel ?? material.name}</div>
                             <div className="grid gap-3 sm:grid-cols-2">
-                              <NumberInput label="Material Width mm" value={selection?.widthMm && selection.widthMm !== repairLine.widthMm ? selection.widthMm : rule.defaultWidthMm ?? selection?.widthMm ?? repairLine.widthMm} onChange={(v) => patchMaterialSelection(index, repairLine, material.id, { widthMm: v })} />
-                              <NumberInput label="Material Depth mm" value={selection?.depthMm && selection.depthMm !== repairLine.depthMm ? selection.depthMm : rule.defaultDepthMm ?? selection?.depthMm ?? repairLine.depthMm} onChange={(v) => patchMaterialSelection(index, repairLine, material.id, { depthMm: v })} />
+                              <NumberInput label="Operation Width mm" value={selection?.dimensionsOverridden ? selection.widthMm ?? 0 : rule.defaultWidthMm ?? selection?.widthMm ?? repairLine.widthMm} onChange={(v) => patchMaterialSelection(index, repairLine, material.id, { widthMm: v, dimensionsOverridden: true })} />
+                              <NumberInput label="Operation Depth mm" value={selection?.dimensionsOverridden ? selection.depthMm ?? 0 : rule.defaultDepthMm ?? selection?.depthMm ?? repairLine.depthMm} onChange={(v) => patchMaterialSelection(index, repairLine, material.id, { depthMm: v, dimensionsOverridden: true })} />
                             </div>
                           </div>
                         );
@@ -2960,11 +2970,6 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, admi
     const materialRules = role === "none" ? without : [...without, { materialId, role, defaultSelected: role === "required" }];
     updateType(typeId, { materialRules });
   };
-  const setRuleDefault = (typeId: string, materialId: string, defaultSelected: boolean) => {
-    const type = repairCatalog.types.find((item) => item.id === typeId);
-    if (!type) return;
-    updateType(typeId, { materialRules: type.materialRules.map((rule) => rule.materialId === materialId ? { ...rule, defaultSelected } : rule) });
-  };
   const updateMaterialRule = (typeId: string, materialId: string, next: Partial<RepairType["materialRules"][number]>) => {
     const type = repairCatalog.types.find((item) => item.id === typeId);
     if (!type) return;
@@ -3261,7 +3266,7 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, admi
           <div className="grid gap-4 p-5">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="min-w-0">
-                <p className="text-sm text-slate-600">Edit the booklet code, repair name, measurement defaults, output rate, and the material rules used by the repair calculator.</p>
+                <p className="text-sm text-slate-600">Edit the booklet code, repair name, measurement defaults, output rate, and default or optional material operations used by the repair calculator.</p>
                 <div className="mt-2 flex flex-wrap gap-2 text-xs font-bold uppercase">
                   <span className="rounded-full bg-slate-100 px-3 py-1 text-slate-600">{repairCatalog.types.length} repair types</span>
                   <span className="rounded-full bg-sky-100 px-3 py-1 text-sky-900">{repairCatalog.types.filter((type) => type.active).length} active</span>
@@ -3286,7 +3291,7 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, admi
                     <button className="secondary-button" onClick={(event) => { event.preventDefault(); duplicateRepairType(type); }}>Duplicate</button>
                   </div>
                 </summary>
-                {!type.materialRules.length && <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900">Add at least one required or optional material before using this repair type in a costing.</div>}
+                {!type.materialRules.length && <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-900">Add at least one default or optional material before using this repair type in a costing.</div>}
                 <div className="grid gap-4 lg:grid-cols-4">
                   <Text label="Code" value={type.code} onChange={(v) => updateType(type.id!, { code: v })} />
                   <Text label="Repair Name" value={type.name} onChange={(v) => updateType(type.id!, { name: v })} />
@@ -3314,33 +3319,35 @@ function AdminRatesView({ rates, setRates, repairCatalog, setRepairCatalog, admi
                       const selectValue = pendingRule[selectKey] || availableMaterials[0]?.id || "";
                       return (
                         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3" key={`${type.id}-${role}`}>
-                          <div className="mb-2 text-xs font-bold uppercase text-slate-500">{role === "required" ? "Required materials" : "Optional materials"}</div>
+                          <div className="mb-2 text-xs font-bold uppercase text-slate-500">{role === "required" ? "Default materials" : "Optional materials"}</div>
                           <div className="flex flex-wrap gap-2">
                             {assignedRules.length ? assignedRules.map((rule) => {
                               const material = repairCatalog.materials.find((item) => item.id === rule.materialId);
                               return material ? (
                                 <span className={`inline-flex max-w-full items-center gap-2 rounded-full px-3 py-1 text-xs font-bold ${role === "required" ? "bg-sky-700 text-white" : "bg-white text-slate-700 ring-1 ring-slate-200"}`} key={`${type.id}-${role}-${rule.materialId}`}>
                                   <span className="truncate">{material.name}</span>
-                                  {rule.role === "optional" && <button className="rounded-full bg-black/10 px-1.5 py-0.5" onClick={() => setRuleDefault(type.id!, rule.materialId, !rule.defaultSelected)}>{rule.defaultSelected ? "Default" : "Set default"}</button>}
                                   <button className="rounded-full bg-black/10 px-1.5 py-0.5" onClick={() => setMaterialRule(type.id!, rule.materialId, "none")}>Remove</button>
                                 </span>
                               ) : null;
-                            }) : <span className="text-sm text-slate-500">No {role} materials assigned.</span>}
+                            }) : <span className="text-sm text-slate-500">No {role === "required" ? "default" : "optional"} materials assigned.</span>}
                           </div>
                           {assignedRules.map((rule) => {
                             const material = repairCatalog.materials.find((item) => item.id === rule.materialId);
-                            if (!material || material.calcMethod !== "volume_lwd") return null;
-                            return <div className="mt-3 grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-3" key={`${type.id}-${rule.materialId}-dimensions`}>
+                            if (!material) return null;
+                            const calculationMethod = rule.calculationMethod ?? material.calcMethod;
+                            return <div className="mt-3 grid gap-3 rounded-lg border border-slate-200 bg-white p-3 sm:grid-cols-2 xl:grid-cols-4" key={`${type.id}-${rule.materialId}-operation`}>
+                              <Text label="Operation Name" value={rule.operationLabel ?? ""} onChange={(operationLabel) => updateMaterialRule(type.id!, rule.materialId, { operationLabel })} />
+                              <Select label="Calculation Method" value={calculationMethod} options={["volume_lwd", "area_thickness", "linear", "each", "manual"]} onChange={(value) => updateMaterialRule(type.id!, rule.materialId, { calculationMethod: value as RepairMaterial["calcMethod"] })} />
                               <Toggle label={`${material.name}: own dimensions`} checked={Boolean(rule.usesOwnDimensions)} onChange={(usesOwnDimensions) => updateMaterialRule(type.id!, rule.materialId, { usesOwnDimensions, defaultWidthMm: usesOwnDimensions ? rule.defaultWidthMm || type.defaultWidthMm : undefined, defaultDepthMm: usesOwnDimensions ? rule.defaultDepthMm || type.defaultDepthMm : undefined })} />
-                              {rule.usesOwnDimensions && <NumberInput label="Default Width mm" value={rule.defaultWidthMm ?? type.defaultWidthMm} onChange={(defaultWidthMm) => updateMaterialRule(type.id!, rule.materialId, { defaultWidthMm })} />}
-                              {rule.usesOwnDimensions && <NumberInput label="Default Depth mm" value={rule.defaultDepthMm ?? type.defaultDepthMm} onChange={(defaultDepthMm) => updateMaterialRule(type.id!, rule.materialId, { defaultDepthMm })} />}
+                              {rule.usesOwnDimensions && calculationMethod === "volume_lwd" && <NumberInput label="Operation Width mm" value={rule.defaultWidthMm ?? type.defaultWidthMm} onChange={(defaultWidthMm) => updateMaterialRule(type.id!, rule.materialId, { defaultWidthMm })} />}
+                              {rule.usesOwnDimensions && calculationMethod === "volume_lwd" && <NumberInput label="Operation Depth mm" value={rule.defaultDepthMm ?? type.defaultDepthMm} onChange={(defaultDepthMm) => updateMaterialRule(type.id!, rule.materialId, { defaultDepthMm })} />}
                             </div>;
                           })}
                           <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
                             <select value={selectValue} onChange={(event) => setPendingRule({ ...pendingRule, [selectKey]: event.target.value })} disabled={!availableMaterials.length}>
                               {availableMaterials.map((material) => <option key={material.id} value={material.id}>{material.category} - {material.name}</option>)}
                             </select>
-                            <button className="secondary-button" onClick={() => addMaterialRule(type, role)} disabled={!availableMaterials.length}>Add {role === "required" ? "Required" : "Optional"}</button>
+                            <button className="secondary-button" onClick={() => addMaterialRule(type, role)} disabled={!availableMaterials.length}>Add {role === "required" ? "Default" : "Optional"}</button>
                           </div>
                         </div>
                       );

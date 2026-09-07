@@ -134,9 +134,9 @@ export function repairDays(input: ProjectInput, repairCatalog: RepairCatalog = d
   if (num(input.repairs.labourDays) > 0) return num(input.repairs.labourDays);
   const lineDays = input.repairs.repairLines.reduce((sum, repairLine) => {
     const type = repairTypeByCode(repairLine.repairTypeCode, repairCatalog);
-    const output = num(repairLine.outputPerDay) || type.defaultOutputPerDay || 1;
+    const output = num(repairLine.outputPerDay);
     const qty = type.measurementBasis === "area" ? repairLine.areaM2 : type.measurementBasis === "each" ? repairLine.eachQty : repairLine.lengthM;
-    return sum + (output ? num(qty) / output : 0);
+    return sum + (output > 0 ? num(qty) / output : 0);
   }, 0);
   return Math.ceil(money(lineDays));
 }
@@ -196,8 +196,9 @@ function calculateCatalogueRequirement(repairLine: RepairLineItem, material: Rep
   const length = num(repairLine.lengthM);
   const selectedWidth = num(selection?.widthMm);
   const selectedDepth = num(selection?.depthMm);
-  const width = rule.usesOwnDimensions ? (selectedWidth && selectedWidth !== num(repairLine.widthMm) ? selectedWidth : num(rule.defaultWidthMm) || selectedWidth || num(repairLine.widthMm)) : num(repairLine.widthMm);
-  const depth = rule.usesOwnDimensions ? (selectedDepth && selectedDepth !== num(repairLine.depthMm) ? selectedDepth : num(rule.defaultDepthMm) || selectedDepth || num(repairLine.depthMm)) : num(repairLine.depthMm);
+  const useEnteredDimensions = Boolean(selection?.dimensionsOverridden) || Boolean(selectedWidth && selectedDepth && (selectedWidth !== num(repairLine.widthMm) || selectedDepth !== num(repairLine.depthMm)));
+  const width = rule.usesOwnDimensions ? (useEnteredDimensions ? selectedWidth : num(rule.defaultWidthMm) || selectedWidth || num(repairLine.widthMm)) : num(repairLine.widthMm);
+  const depth = rule.usesOwnDimensions ? (useEnteredDimensions ? selectedDepth : num(rule.defaultDepthMm) || selectedDepth || num(repairLine.depthMm)) : num(repairLine.depthMm);
   const area = num(repairLine.areaM2);
   const thickness = num(repairLine.thicknessMm);
   const each = num(repairLine.eachQty);
@@ -205,14 +206,15 @@ function calculateCatalogueRequirement(repairLine: RepairLineItem, material: Rep
   const holeInternalArea = holeInternalAreaM2(repairLine);
   const coverage = Math.max(num(material.coveragePerUnit), 0.0001);
   const waste = Math.max(num(material.wasteFactor), 0);
+  const calculationMethod = rule.calculationMethod ?? material.calcMethod;
   let requiredUnits = 0;
   let formula = "";
-  if (material.calcMethod === "volume_lwd") {
+  if (calculationMethod === "volume_lwd") {
     const baseVolumeLitres = length && width && depth ? (length * width * depth) / 1000 : area && thickness ? area * thickness : holeVolume;
     const required = volumeRequirement(baseVolumeLitres, material) * waste;
     requiredUnits = required / coverage;
     formula = length && width && depth ? `${repairLine.repairTypeCode}: ROUNDUP(((Length*Width*Depth)/1000*Waste)/Coverage per unit,0)` : area && thickness ? `${repairLine.repairTypeCode}: ROUNDUP((Area*Thickness*Waste)/Coverage per unit,0)` : `${repairLine.repairTypeCode}: ROUNDUP((Each*PI*(Hole diameter/2)^2*Hole depth/1000000*Waste)/Coverage per unit,0)`;
-  } else if (material.calcMethod === "area_thickness") {
+  } else if (calculationMethod === "area_thickness") {
     if (material.id === "fastprime-5") {
       const primedArea = area || holeInternalArea;
       requiredUnits = (((0.14 * primedArea) / 2) * waste) / coverage;
@@ -234,10 +236,10 @@ function calculateCatalogueRequirement(repairLine: RepairLineItem, material: Rep
         ? material.measuredUnitType === "kg" ? `${repairLine.repairTypeCode}: ROUNDUP(((Density*Area*Thickness)*Waste)/Coverage per unit,0)` : `${repairLine.repairTypeCode}: ROUNDUP((Area*Thickness*Waste)/Coverage per unit,0)`
         : material.measuredUnitType === "kg" ? `${repairLine.repairTypeCode}: ROUNDUP((Density*Each*PI*(Hole diameter/2)^2*Hole depth/1000000*Waste)/Coverage per unit,0)` : `${repairLine.repairTypeCode}: ROUNDUP((Each*PI*(Hole diameter/2)^2*Hole depth/1000000*Waste)/Coverage per unit,0)`;
     }
-  } else if (material.calcMethod === "linear") {
+  } else if (calculationMethod === "linear") {
     requiredUnits = (length * waste) / coverage;
     formula = `${repairLine.repairTypeCode}: ROUNDUP((Length*Waste)/Coverage per unit,0)`;
-  } else if (material.calcMethod === "each") {
+  } else if (calculationMethod === "each") {
     requiredUnits = (each * waste) / coverage;
     formula = `${repairLine.repairTypeCode}: ROUNDUP((Each*Waste)/Coverage per unit,0)`;
   } else {
@@ -256,9 +258,8 @@ function calculateCatalogueMaterial(repairLine: RepairLineItem, material: Repair
 export function calculateRepairLineMaterials(repairLine: RepairLineItem, repairCatalog: RepairCatalog = defaultRepairCatalog): MaterialCalc[] {
   const type = repairTypeByCode(repairLine.repairTypeCode, repairCatalog);
   const selections = new Map(repairLine.materialSelections.map((selection) => [selection.materialId, selection]));
-  const selected = new Set(repairLine.materialSelections.filter((selection) => selection.selected).map((selection) => selection.materialId));
   return type.materialRules
-    .filter((rule) => rule.role === "required" || selected.has(rule.materialId))
+    .filter((rule) => selections.get(rule.materialId)?.selected ?? rule.defaultSelected)
     .map((rule) => ({ rule, material: materialById(rule.materialId, repairCatalog) }))
     .filter((entry): entry is { rule: RepairTypeMaterialRule; material: RepairMaterial } => Boolean(entry.material))
     .map(({ rule, material }) => calculateCatalogueMaterial(repairLine, material, rule, selections.get(material.id)))
@@ -270,8 +271,7 @@ export function calculateProjectRepairMaterials(repairLines: RepairLineItem[], r
   repairLines.forEach((repairLine) => {
     const type = repairTypeByCode(repairLine.repairTypeCode, repairCatalog);
     const selections = new Map(repairLine.materialSelections.map((selection) => [selection.materialId, selection]));
-    const selected = new Set(repairLine.materialSelections.filter((selection) => selection.selected).map((selection) => selection.materialId));
-    type.materialRules.filter((rule) => rule.role === "required" || selected.has(rule.materialId)).forEach((rule) => {
+    type.materialRules.filter((rule) => selections.get(rule.materialId)?.selected ?? rule.defaultSelected).forEach((rule) => {
       const material = materialById(rule.materialId, repairCatalog);
       if (!material) return;
       const requirement = calculateCatalogueRequirement(repairLine, material, rule, selections.get(material.id));
