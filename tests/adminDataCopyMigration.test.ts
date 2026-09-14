@@ -32,4 +32,9 @@ describe("CoGri Group admin-data copy migration", () => {
     expect(migration).not.toMatch(/update\s+public\.companies/i);
     expect(migration).not.toMatch(/update\s+public\.projects/i);
   });
+
+  it("uses a PostgreSQL-compatible JSON key count", () => {
+    expect(migration).toContain("jsonb_object_keys(source_rates)");
+    expect(migration).not.toContain("jsonb_object_length");
+  });
 });

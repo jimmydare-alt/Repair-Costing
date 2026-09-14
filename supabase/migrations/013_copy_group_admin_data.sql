@@ -156,7 +156,7 @@ begin
         'backup_id', created_backup_id,
         'currency_conversion', false,
         'company_settings_changed', false,
-        'rate_field_count', jsonb_object_length(source_rates),
+        'rate_field_count', (select count(*) from jsonb_object_keys(source_rates)),
         'repair_type_count', jsonb_array_length(source_repair_types),
         'repair_material_count', jsonb_array_length(source_repair_materials)
       )
@@ -165,7 +165,7 @@ begin
     target_company_id := target_company.id;
     target_company_name := target_company.name;
     backup_id := created_backup_id;
-    rate_field_count := jsonb_object_length(source_rates);
+    rate_field_count := (select count(*)::integer from jsonb_object_keys(source_rates));
     repair_type_count := jsonb_array_length(source_repair_types);
     repair_material_count := jsonb_array_length(source_repair_materials);
     return next;
