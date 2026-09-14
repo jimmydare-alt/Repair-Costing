@@ -421,7 +421,7 @@ export function CompanyAdminView() {
       )}
 
       {auth.role === "super_admin" && (
-        <section className="app-card-strong">
+        <section className="app-card-strong repair-catalog-copy-card">
           <div className="panel-heading">
             <div>
               <p>Global costing setup</p>

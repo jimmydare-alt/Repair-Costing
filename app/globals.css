@@ -413,6 +413,7 @@ button:disabled, .ds-button:disabled, .primary-button:disabled, .secondary-butto
 }
 .company-settings-card { grid-column: span 7; }
 .super-admin-card { grid-column: span 5; }
+.repair-catalog-copy-card { grid-column: 1 / -1; }
 .users-admin-card { grid-column: 1 / -1; }
 .modules-admin-card { grid-column: span 5; }
 .create-company-card { grid-column: span 7; }
