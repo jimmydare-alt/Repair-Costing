@@ -22,6 +22,14 @@ type CompanyModuleRow = { id: string; module_key: AppModuleKey; name: string; en
 type SuperAdminProfile = { id: string; email: string; full_name?: string; status: string; default_company_id?: string | null };
 type AuditEvent = { id: string; company_id?: string | null; actor_id?: string | null; event_type: string; target_id?: string | null; event_data?: Record<string, unknown>; created_at: string };
 type AppErrorEvent = { id: string; reference: string; area: string; message: string; path?: string | null; created_at: string };
+type AdminDataCopyResult = {
+  target_company_id: string;
+  target_company_name: string;
+  backup_id: string;
+  rate_field_count: number;
+  repair_type_count: number;
+  repair_material_count: number;
+};
 type UserFilter = "active" | "suspended" | "removed" | "invited";
 type PendingConfirmation = {
   title: string;
@@ -102,6 +110,9 @@ export function CompanyAdminView() {
   const [resetLink, setResetLink] = useState("");
   const [resetUserName, setResetUserName] = useState("");
   const [copied, setCopied] = useState(false);
+  const [copyAdminDataOpen, setCopyAdminDataOpen] = useState(false);
+  const [copyAdminDataConfirmation, setCopyAdminDataConfirmation] = useState("");
+  const [copyAdminDataResults, setCopyAdminDataResults] = useState<AdminDataCopyResult[]>([]);
 
   async function loadAdminData() {
     if (!client || auth.activeCompany.id.startsWith("local-")) return;
@@ -343,6 +354,29 @@ export function CompanyAdminView() {
     await auth.refreshCompanies();
   }
 
+  async function copyGroupAdminData() {
+    if (!client || auth.role !== "super_admin") return;
+    setActionBusy(true);
+    setMessage("");
+    const { data, error } = await client.rpc("copy_cogri_group_admin_data");
+    if (error) {
+      setMessage(error.message.includes("copy_cogri_group_admin_data") || error.message.includes("schema cache")
+        ? "The company costing-data transfer is not enabled in the live database yet. Apply Supabase migration 013, then try again."
+        : error.message);
+      setActionBusy(false);
+      return;
+    }
+    const results = (data ?? []) as AdminDataCopyResult[];
+    setCopyAdminDataResults(results);
+    setCopyAdminDataOpen(false);
+    setCopyAdminDataConfirmation("");
+    await loadAdminData();
+    setMessage(results.length
+      ? `CoGri Group costing data copied to ${results.map((result) => result.target_company_name).join(", ")}. Full pre-copy backups were retained.`
+      : "No other active companies were available to update.");
+    setActionBusy(false);
+  }
+
   const visibleMembers = members.filter((member) => {
     if (userFilter === "active") return member.status === "active" && member.profile_status === "active";
     if (userFilter === "suspended") return member.profile_status === "suspended" || member.status === "suspended";
@@ -352,6 +386,9 @@ export function CompanyAdminView() {
   const pendingInvites = invites.filter((invite) => invite.status === "invited");
   const activeSuperAdminCount = superAdmins.filter((profile) => profile.status === "active").length;
   const canConfirm = Boolean(pending?.email) && confirmationEmail.trim().toLowerCase() === pending?.email.toLowerCase();
+  const groupCompany = auth.companies.find((company) => company.isSuperAdminCompany || company.name.toLowerCase() === "cogri group");
+  const copyTargets = auth.companies.filter((company) => company.id !== groupCompany?.id && company.status === "active");
+  const copyConfirmationPhrase = "COPY COGRI GROUP DATA";
 
   return (
     <div className="company-admin-layout">
@@ -384,6 +421,39 @@ export function CompanyAdminView() {
         </section>
       )}
 
+      {auth.role === "super_admin" && (
+        <section className="app-card-strong">
+          <div className="panel-heading">
+            <div>
+              <p>Global costing setup</p>
+              <h2><Copy size={20} /> Copy CoGri Group Admin Data</h2>
+              <p>Replace every other active company&apos;s admin rates, survey rates, repair types and repair materials with an exact copy of CoGri Group.</p>
+            </div>
+            <StatusChip tone="warning">Full Replace</StatusChip>
+          </div>
+          <div className="admin-context-note">
+            Numeric values are copied exactly with no currency conversion. Company currency, distance unit, offices, branding, modules, users and projects are not changed. A complete pre-copy backup is retained for every target company.
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {copyTargets.map((company) => <StatusChip key={company.id} tone="neutral">{company.name}</StatusChip>)}
+            {!copyTargets.length && <span className="text-sm text-slate-500">No other active companies found.</span>}
+          </div>
+          <div className="panel-actions">
+            <Button variant="danger" disabled={!groupCompany || !copyTargets.length || actionBusy} onClick={() => { setCopyAdminDataConfirmation(""); setCopyAdminDataOpen(true); }}>
+              <Copy size={16} />Copy to All Other Companies
+            </Button>
+          </div>
+          {!!copyAdminDataResults.length && (
+            <div className="table-shell mt-4">
+              <table>
+                <thead><tr><th>Company</th><th>Rate Fields</th><th>Repair Types</th><th>Repair Materials</th><th>Backup</th></tr></thead>
+                <tbody>{copyAdminDataResults.map((result) => <tr key={result.target_company_id}><td><b>{result.target_company_name}</b></td><td>{result.rate_field_count}</td><td>{result.repair_type_count}</td><td>{result.repair_material_count}</td><td><code>{result.backup_id.slice(0, 8)}</code></td></tr>)}</tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
       <section className="app-card-strong users-admin-card">
         <div className="panel-heading"><div><h2>Users &amp; Access</h2><p>One permanent company per ordinary user. Super admins can access all companies.</p></div><Button variant="secondary" disabled={loading} onClick={() => void loadAdminData()}><RefreshCw size={15} />Refresh</Button></div>
         <div className="invite-row">
@@ -410,6 +480,8 @@ export function CompanyAdminView() {
       <section className="app-card-strong access-audit-card"><div className="panel-heading"><div><h2>Application Errors</h2><p>Recent technical failures for {auth.activeCompany.name}. Give the reference to support when reporting a problem.</p></div><StatusChip tone={appErrors.length ? "warning" : "success"}>{appErrors.length ? `${appErrors.length} Recent` : "Clear"}</StatusChip></div><div className="audit-list">{appErrors.map((event) => <div key={event.id}><span className="audit-dot" /><div><b>{event.reference} / {event.area}</b><span>{event.message}{event.path ? ` / ${event.path}` : ""}</span></div><time>{new Date(event.created_at).toLocaleString("en-GB")}</time></div>)}{!appErrors.length && <div className="admin-empty">No recent application errors have been recorded for this company.</div>}</div></section>
 
       {pending && <div className="admin-modal-backdrop" role="presentation"><section className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="admin-confirm-title"><div className="admin-modal-heading"><div><p>Confirmation required</p><h2 id="admin-confirm-title">{pending.title}</h2></div><button aria-label="Close" onClick={() => setPending(null)}><X /></button></div><p>{pending.description}</p><TextField label={`Type ${pending.email} to confirm`} value={confirmationEmail} autoComplete="off" onChange={(event) => setConfirmationEmail(event.target.value)} /><div className="admin-modal-actions"><Button variant="secondary" onClick={() => setPending(null)}>Cancel</Button><Button variant={pending.danger ? "danger" : "primary"} disabled={!canConfirm || actionBusy} onClick={async () => { setActionBusy(true); await pending.run(confirmationEmail); setActionBusy(false); setPending(null); }}>{actionBusy ? "Working..." : pending.confirmLabel}</Button></div></section></div>}
+
+      {copyAdminDataOpen && <div className="admin-modal-backdrop" role="presentation"><section className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="copy-admin-data-title"><div className="admin-modal-heading"><div><p>Final confirmation</p><h2 id="copy-admin-data-title">Replace company costing data</h2></div><button aria-label="Close" onClick={() => setCopyAdminDataOpen(false)}><X /></button></div><p>This will overwrite the current admin rates and complete repair catalogue for {copyTargets.map((company) => company.name).join(", ")}. Their existing projects and saved pricing snapshots will remain unchanged.</p><TextField label={`Type ${copyConfirmationPhrase} to confirm`} value={copyAdminDataConfirmation} autoComplete="off" onChange={(event) => setCopyAdminDataConfirmation(event.target.value)} /><div className="admin-modal-actions"><Button variant="secondary" onClick={() => setCopyAdminDataOpen(false)}>Cancel</Button><Button variant="danger" disabled={copyAdminDataConfirmation.trim() !== copyConfirmationPhrase || actionBusy} onClick={() => void copyGroupAdminData()}>{actionBusy ? "Copying..." : "Replace and Copy Data"}</Button></div></section></div>}
 
       {resetLink && <div className="admin-modal-backdrop" role="presentation"><section className="admin-modal" role="dialog" aria-modal="true" aria-labelledby="reset-link-title"><div className="admin-modal-heading"><div><p>One-time recovery</p><h2 id="reset-link-title">Reset link for {resetUserName}</h2></div><button aria-label="Close" onClick={() => { setResetLink(""); setCopied(false); }}><X /></button></div><p>Send this link privately to the user, for example in Teams. It is not stored in the app and should not be posted in a group chat.</p><label className="ds-field"><span>Secure reset link</span><textarea readOnly value={resetLink} rows={4} /></label><div className="admin-modal-actions"><Button variant="secondary" onClick={() => { setResetLink(""); setCopied(false); }}>Close</Button><Button variant="primary" onClick={async () => { await navigator.clipboard.writeText(resetLink); setCopied(true); }}>{copied ? <Check size={16} /> : <Copy size={16} />}{copied ? "Copied" : "Copy Reset Link"}</Button></div></section></div>}
     </div>
