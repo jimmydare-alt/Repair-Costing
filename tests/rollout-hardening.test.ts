@@ -4,7 +4,7 @@ import { calculateProject } from "@/lib/calculations";
 import { errorMessage, errorReference } from "@/lib/monitoring";
 import { defaultRepairCatalog } from "@/lib/repairCatalog";
 import { defaultRates, emptyInput } from "@/lib/rates";
-import { projectToRow, rowToProject } from "@/lib/storage";
+import { normaliseInput, projectToRow, rowToProject } from "@/lib/storage";
 import type { ProjectRecord } from "@/lib/types";
 
 describe("rollout hardening", () => {
@@ -62,7 +62,7 @@ describe("rollout hardening", () => {
     const row = projectToRow(project, project.createdBy!);
     const restored = rowToProject({ ...row, created_at: project.createdAt });
 
-    expect(restored.inputs).toEqual(project.inputs);
+    expect(restored.inputs).toEqual(normaliseInput(project.inputs));
     expect(restored.calculations).toEqual(project.calculations);
     expect(restored.calculations.proposalTotal).toBe(calculations.proposalTotal);
     expect(restored.calculations.budgetCost).toBe(calculations.budgetCost);

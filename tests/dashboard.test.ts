@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { emptyDashboardFilters, filterDashboardProjects } from "@/lib/dashboard";
 import { calculateProject } from "@/lib/calculations";
 import { defaultRates, emptyInput } from "@/lib/rates";
@@ -13,6 +14,17 @@ function project(id: string, reference: string, client: string, service: "Grindi
 
 describe("dashboard project filters", () => {
   const projects = [project("1", "GR-101", "Kardex", "Grinding", "Draft"), project("2", "RP-202", "Element", "Repairs", "Won")];
+
+  it("uses the Dashboard as the single project finder and redirects the legacy search route", () => {
+    const shell = readFileSync("components/AppShell.tsx", "utf8");
+    const workspace = readFileSync("app/workspace.tsx", "utf8");
+    const redirect = readFileSync("app/project-search/page.tsx", "utf8");
+    expect(shell).not.toContain('href: "/project-search"');
+    expect(workspace).toContain("Show More Projects");
+    expect(workspace).toContain("costing-dashboard-filters");
+    expect(workspace).toContain("Archived Projects");
+    expect(redirect).toContain('redirect("/")');
+  });
 
   it("returns every project when filters are clear", () => {
     expect(filterDashboardProjects(projects, emptyDashboardFilters)).toHaveLength(2);

@@ -1,6 +1,6 @@
 import { defaultRepairCatalog, materialById, repairTypeByCode } from "./repairCatalog";
 import { distanceRateUnit } from "./company";
-import type { AdminRates, AirportTransport, CommercialRateSchedule, DestinationTransport, Line, MaterialCalc, PLActuals, PLCategory, PLSummary, ProjectCalculations, ProjectInput, ProjectServiceKey, RemedialWorkPackage, RepairCatalog, RepairLineItem, RepairMaterial, RepairTypeMaterialRule, Section, TravelMode, WorkPackageCalculationSummary } from "./types";
+import type { AdminRates, AirportTransport, CommercialRateSchedule, DestinationTransport, Line, MaterialCalc, PLActuals, PLCategory, PLSummary, ProjectCalculations, ProjectInput, ProjectServiceKey, RemedialWorkPackage, RepairCatalog, RepairLineItem, RepairMaterial, RepairSubcontractor, RepairTypeMaterialRule, ScreedTeam, Section, TravelMode, WorkPackageCalculationSummary } from "./types";
 import { chargeableJourneyDistance, effectiveReturnFlights } from "./travel";
 import { packageProjectInput } from "./workPackages";
 import { buildRepairPriceBreakdown, consolidateRepairPricing } from "./repairPricing";
@@ -166,6 +166,18 @@ export function calculatedHotelNights(siteDays: number, weekendDaysPerWeek: numb
   return Math.max(0, workDays + nonWorkingDaysForProgramme(workDays, weekendDaysPerWeek) + Math.ceil(Math.max(0, num(travelDays))) - 1);
 }
 
+type SubcontractAdjustmentInput = Pick<RepairSubcontractor | ScreedTeam, "margin" | "standbyDays" | "standbyRate" | "standbyMargin" | "weekendUpliftDays" | "weekendUpliftRate" | "weekendUpliftMargin">;
+
+function subcontractAdjustmentLines(label: string, item: SubcontractAdjustmentInput, programmeDays: number, weekendDaysPerWeek: number, source: string) {
+  const chargedWeekendDays = item.weekendUpliftDays == null
+    ? weekendDaysForProgramme(programmeDays, 5, weekendDaysPerWeek)
+    : Math.max(0, num(item.weekendUpliftDays));
+  return [
+    line("Subcontract", `${label} standby`, num(item.standbyRate), "standby day", Math.max(0, num(item.standbyDays)), num(item.standbyMargin ?? item.margin), `${source} chargeable standby`, "Subcontract"),
+    line("Subcontract", `${label} weekend uplift`, num(item.weekendUpliftRate), "weekend day", chargedWeekendDays, num(item.weekendUpliftMargin ?? item.margin), `${source} weekend uplift in addition to normal subcontract price`, "Subcontract")
+  ];
+}
+
 export function calculatePhaseSchedule(input: ProjectInput, repairCatalog: RepairCatalog = defaultRepairCatalog) {
   const calculated: Record<ProjectServiceKey, number> = {
     Grinding: Math.ceil(grindingDays(input)),
@@ -325,17 +337,23 @@ function grindingLines(input: ProjectInput, rates: AdminRates) {
   if (useSurveyorSubcontract) {
     g.surveyorSubcontractors.forEach((item) => {
       const qty = item.priceType === "day" ? item.days || surveyorDays : item.rate ? 1 : 0;
-      rows.push(line("Subcontract", item.name || "Grinding surveyor subcontractor", item.rate, item.priceType, qty, item.margin, "Grinding surveyor subcontract labour"));
-      rows.push(line("Subcontract", `${item.name || "Grinding surveyor subcontractor"} mobilisation`, item.mobilisationCost, "mobilisation", item.mobilisations, item.mobilisationMargin, "Grinding surveyor subcontract mobilisation", "Subcontract", "mobilisation"));
+      const label = item.name || "Grinding surveyor subcontractor";
+      const programmeDays = item.priceType === "day" ? item.days || surveyorDays : surveyorDays;
+      rows.push(line("Subcontract", label, item.rate, item.priceType, qty, item.margin, "Grinding surveyor subcontract labour"));
+      rows.push(line("Subcontract", `${label} mobilisation`, item.mobilisationCost, "mobilisation", item.mobilisations, item.mobilisationMargin, "Grinding surveyor subcontract mobilisation", "Subcontract", "mobilisation"));
+      rows.push(...subcontractAdjustmentLines(label, item, programmeDays, g.weekendDaysPerWeek, "Grinding surveyor subcontract"));
     });
   }
   if (useProductionSubcontract) {
-    const activeSubcontractors = g.productionSubcontractors.filter((item) => item.rate > 0 || item.mobilisationCost > 0);
+    const activeSubcontractors = g.productionSubcontractors.filter((item) => item.rate > 0 || item.mobilisationCost > 0 || num(item.standbyRate) > 0 || num(item.weekendUpliftRate) > 0);
     const subcontractors = activeSubcontractors.length ? activeSubcontractors : [{ name: "Grinding subcontractor", priceType: g.subcontractPriceType, rate: g.subcontractRate, days, margin: rates.subcontractMargin, mobilisationCost: g.subcontractMobilisation, mobilisations: g.subcontractMobilisation ? 1 : 0, mobilisationMargin: rates.subcontractMargin }];
     subcontractors.forEach((item) => {
       const qty = item.priceType === "day" ? item.days || days : item.rate ? 1 : 0;
-      rows.push(line("Subcontract", item.name || "Grinding subcontractor", item.rate, item.priceType, qty, item.margin, "Grinding subcontract labour incl. standard labour/equipment"));
-      rows.push(line("Subcontract", `${item.name || "Grinding subcontractor"} mobilisation`, item.mobilisationCost, "mobilisation", item.mobilisations, item.mobilisationMargin, "Grinding subcontract mobilisation", "Subcontract", "mobilisation"));
+      const label = item.name || "Grinding subcontractor";
+      const programmeDays = item.priceType === "day" ? item.days || days : days;
+      rows.push(line("Subcontract", label, item.rate, item.priceType, qty, item.margin, "Grinding subcontract labour incl. standard labour/equipment"));
+      rows.push(line("Subcontract", `${label} mobilisation`, item.mobilisationCost, "mobilisation", item.mobilisations, item.mobilisationMargin, "Grinding subcontract mobilisation", "Subcontract", "mobilisation"));
+      rows.push(...subcontractAdjustmentLines(label, item, programmeDays, g.weekendDaysPerWeek, "Grinding production subcontract"));
     });
   }
   rows.push(
@@ -395,8 +413,11 @@ function screedLines(input: ProjectInput, rates: AdminRates) {
   if (useSurveyorSubcontract) {
     s.surveyorSubcontractors.forEach((item) => {
       const qty = item.priceType === "day" ? item.days || surveyorDays : item.rate ? 1 : 0;
-      rows.push(line("Subcontract", item.name || "Screed surveyor subcontractor", item.rate, item.priceType, qty, item.margin, "Screed surveyor subcontract labour"));
-      rows.push(line("Subcontract", `${item.name || "Screed surveyor subcontractor"} mobilisation`, item.mobilisationCost, "mobilisation", item.mobilisations, item.mobilisationMargin, "Screed surveyor subcontract mobilisation", "Subcontract", "mobilisation"));
+      const label = item.name || "Screed surveyor subcontractor";
+      const programmeDays = item.priceType === "day" ? item.days || surveyorDays : surveyorDays;
+      rows.push(line("Subcontract", label, item.rate, item.priceType, qty, item.margin, "Screed surveyor subcontract labour"));
+      rows.push(line("Subcontract", `${label} mobilisation`, item.mobilisationCost, "mobilisation", item.mobilisations, item.mobilisationMargin, "Screed surveyor subcontract mobilisation", "Subcontract", "mobilisation"));
+      rows.push(...subcontractAdjustmentLines(label, item, programmeDays, s.weekendDaysPerWeek, "Screed surveyor subcontract"));
     });
   }
   if (useProductionSubcontract) {
@@ -409,10 +430,12 @@ function screedLines(input: ProjectInput, rates: AdminRates) {
       const label = `Screed subcontractor ${index + 1}${team.contractorName ? ` - ${team.contractorName}` : ""}`;
       rows.push(line("Subcontract", `${label} mobilisation`, team.mobilisation, "mobilisation", team.mobilisation ? 1 : 0, num(team.mobilisationMargin ?? rates.subcontractMargin), `Screed subcontract mobilisation${scope ? ` (${scope})` : ""}`, "Subcontract", "mobilisation"));
       rows.push(line("Subcontract", `${label} price on site`, team.rate, team.priceType, team.priceType === "day" ? activityDays : team.rate ? 1 : 0, num(team.margin ?? rates.subcontractMargin), `Screed subcontract rate${scope ? ` (${scope})` : ""}`));
+      rows.push(...subcontractAdjustmentLines(label, team, activityDays || days, s.weekendDaysPerWeek, `Screed production subcontract${scope ? ` (${scope})` : ""}`));
     });
   }
   rows.push(
-    line("Materials", "Screed material", s.screedMaterialRate, "bags", screedMaterialUnits(s.screedMaterialBags, s.screedMaterialContingency, s.screedMaterialWaste), s.screedMaterialMargin, "Screed material base quantity plus contingency and waste"),
+    line("Materials", "Screed base", s.screedMaterialRate, "bags", screedMaterialUnits(s.screedMaterialBags, s.screedMaterialContingency, s.screedMaterialWaste), s.screedMaterialMargin, "Screed base quantity plus contingency and waste"),
+    line("Materials", "Screed topping", s.screedToppingRate, "units", screedMaterialUnits(s.screedToppingUnits, s.screedToppingContingency, s.screedToppingWaste), s.screedToppingMargin, "Screed topping quantity plus contingency and waste"),
     line("Materials", "Primer", s.primerRate, "units", screedMaterialUnits(s.primerUnits, s.primerContingency, s.primerWaste), s.primerMargin, "Screed primer base quantity plus contingency and waste"),
     line("Materials", "Sand", s.sandRate, "bags", screedMaterialUnits(s.sandBags, s.sandContingency, s.sandWaste), s.sandMargin, "Screed sand base quantity plus contingency and waste"),
     line("Materials", "Shipping of materials", s.materialShipping, "return", s.materialShipping ? 1 : 0, num(s.materialShippingMargin ?? rates.materialShippingMargin), "Screed material shipping"),
@@ -428,6 +451,7 @@ function screedLines(input: ProjectInput, rates: AdminRates) {
     line("Materials", "Screed consumables", rates.screedConsumablesDayRate, "grinder day", useProductionInHouse && s.consumablesRequired ? Math.max(1, grinderCount) * toolDays : 0, rateMargin(rates, "screedConsumablesDayRate", rates.equipmentMargin), "Screed consumables"),
     line("Equipment", "Screed equipment shipping", s.equipmentShipping, "round trip", useProductionInHouse && s.equipmentShipping ? 1 : 0, num(s.equipmentShippingMargin ?? rates.equipmentShippingMargin), "Screed equipment shipping", "Equipment", "mobilisation")
   );
+  s.additionalMaterials.forEach((item) => rows.push(line("Materials", item.name || "Additional screed material", item.rate, item.unit || "item", item.quantity, item.margin, "Project-specific screed material", "Materials")));
   return rows;
 }
 
@@ -453,8 +477,11 @@ function repairLines(input: ProjectInput, rates: AdminRates, materialCalcs: Mate
   if (useSubcontract) {
     r.repairSubcontractors.forEach((item) => {
       const labourQty = item.priceType === "day" ? item.days : item.rate ? 1 : 0;
-      rows.push(line("Subcontract", item.name || "Repair subcontractor", item.rate, item.priceType, labourQty, item.margin, "Repair subcontract labour incl. standard labour/equipment"));
-      rows.push(line("Subcontract", `${item.name || "Repair subcontractor"} mobilisation`, item.mobilisationCost, "mobilisation", item.mobilisations, item.mobilisationMargin, "Repair subcontract mobilisation", "Subcontract", "mobilisation"));
+      const label = item.name || "Repair subcontractor";
+      const programmeDays = item.priceType === "day" ? item.days || calculatedDays : calculatedDays;
+      rows.push(line("Subcontract", label, item.rate, item.priceType, labourQty, item.margin, "Repair subcontract labour incl. standard labour/equipment"));
+      rows.push(line("Subcontract", `${label} mobilisation`, item.mobilisationCost, "mobilisation", item.mobilisations, item.mobilisationMargin, "Repair subcontract mobilisation", "Subcontract", "mobilisation"));
+      rows.push(...subcontractAdjustmentLines(label, item, programmeDays, r.weekendRequired ? r.weekendDays : 0, "Repair subcontract"));
     });
   }
   materialCalcs.forEach((calc) => rows.push(line("Materials", calc.product, calc.rate, calc.unit, calc.quantity, rates.materialMargin, calc.formula)));

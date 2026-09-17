@@ -9,7 +9,7 @@ import { defaultRates, emptyInput } from "@/lib/rates";
 import { costingInputsEqual } from "@/lib/builder";
 import { createWorkPackage, packageProjectInput, updatePackageFromProjectInput } from "@/lib/workPackages";
 import { normaliseSurveyInput, createEmptySurveyInput } from "@/lib/costing/survey/defaults";
-import { projectToRow, rowToProject } from "@/lib/storage";
+import { normaliseInput, projectToRow, rowToProject } from "@/lib/storage";
 import type { ProjectInput, ProjectRecord, RepairLabourMode } from "@/lib/types";
 
 const sum = (values: number[]) => Math.round(values.reduce((a, b) => a + b, 0) * 100) / 100;
@@ -30,6 +30,20 @@ function repairs(mode: RepairLabourMode = "both"): ProjectInput {
 }
 
 describe("draft stability and repair unit-price reconciliation", () => {
+  it("loads projects saved before subcontract adjustments and screed topping without adding cost", () => {
+    const legacy = structuredClone(emptyInput) as unknown as { screeding: Record<string, unknown>; repairs: ProjectInput["repairs"] };
+    delete legacy.screeding.screedToppingUnits;
+    delete legacy.screeding.screedToppingRate;
+    delete legacy.screeding.additionalMaterials;
+    delete legacy.repairs.repairSubcontractors[0].standbyDays;
+    delete legacy.repairs.repairSubcontractors[0].weekendUpliftRate;
+    const normalised = normaliseInput(legacy as unknown as Partial<ProjectInput>);
+    expect(normalised.screeding.screedToppingUnits).toBe(0);
+    expect(normalised.screeding.additionalMaterials).toEqual([]);
+    expect(normalised.repairs.repairSubcontractors[0].standbyDays).toBe(0);
+    expect(normalised.repairs.repairSubcontractors[0].weekendUpliftRate).toBe(0);
+    expect(calculateProject(normalised, defaultRates).proposalTotal).toBe(0);
+  });
   it.each([[null, "user", true], ["user", "user", false], ["user", null, true], ["user", "other", true], [null, null, false]] as const)(
     "handles session identity %s -> %s without a refresh reset", (before, after, reset) => expect(needsWorkspaceReset(before, after)).toBe(reset)
   );

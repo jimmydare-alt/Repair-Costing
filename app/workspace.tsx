@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Calculator, Check, Download, FileSpreadsheet, History, Printer, Save, Search, Send, Settings, Trash2 } from "lucide-react";
-import { calculatedHotelNights, calculateActualSiteDays, calculatePhaseSchedule, calculatePL, calculateProject, calculateProjectRepairMaterials, calculateRepairLineMaterials, calculateWorkingDays, defaultActuals, screedMaterialUnits, weekendDaysForProgramme } from "@/lib/calculations";
+import { calculatedHotelNights, calculateActualSiteDays, calculatePhaseSchedule, calculatePL, calculateProject, calculateProjectRepairMaterials, calculateRepairLineMaterials, calculateWorkingDays, defaultActuals, nonWorkingDaysForProgramme, screedMaterialUnits, weekendDaysForProgramme } from "@/lib/calculations";
 import { money, percent, formatDateTime, setMoneyCurrency } from "@/lib/format";
 import { projectCsv } from "@/lib/export";
 import { applyUsaWorkbookRates, createRemedialProjectInput, defaultRates, emptyInput } from "@/lib/rates";
@@ -83,10 +83,21 @@ function additionalItemsSell(items: AdditionalItem[]) {
   return items.reduce((sum, item) => sum + (item.rate * item.quantity * (1 + item.margin)), 0);
 }
 
-function repairSubcontractorSell(items: RepairSubcontractor[]) {
+function resolvedWeekendUpliftDays(item: Pick<RepairSubcontractor, "weekendUpliftDays">, programmeDays: number, weekendDaysPerWeek: number) {
+  return item.weekendUpliftDays == null ? weekendDaysForProgramme(programmeDays, 5, weekendDaysPerWeek) : item.weekendUpliftDays;
+}
+
+function subcontractAdjustmentSell(item: Pick<RepairSubcontractor, "standbyDays" | "standbyRate" | "standbyMargin" | "weekendUpliftDays" | "weekendUpliftRate" | "weekendUpliftMargin" | "margin">, programmeDays: number, weekendDaysPerWeek: number) {
+  const standby = (item.standbyDays ?? 0) * (item.standbyRate ?? 0) * (1 + (item.standbyMargin ?? item.margin));
+  const weekend = resolvedWeekendUpliftDays(item, programmeDays, weekendDaysPerWeek) * (item.weekendUpliftRate ?? 0) * (1 + (item.weekendUpliftMargin ?? item.margin));
+  return standby + weekend;
+}
+
+function repairSubcontractorSell(items: RepairSubcontractor[], calculatedDays: number, weekendDaysPerWeek: number) {
   return items.reduce((sum, item) => {
     const labourQty = item.priceType === "day" ? item.days : item.rate ? 1 : 0;
-    return sum + (item.rate * labourQty * (1 + item.margin)) + (item.mobilisationCost * item.mobilisations * (1 + item.mobilisationMargin));
+    const programmeDays = item.priceType === "day" ? item.days || calculatedDays : calculatedDays;
+    return sum + (item.rate * labourQty * (1 + item.margin)) + (item.mobilisationCost * item.mobilisations * (1 + item.mobilisationMargin)) + subcontractAdjustmentSell(item, programmeDays, weekendDaysPerWeek);
   }, 0);
 }
 
@@ -265,7 +276,7 @@ export default function Workspace() {
   const routeEditProjectId = surveyEditMatch?.[1] ? decodeURIComponent(surveyEditMatch[1]) : editRoute.projectId;
   const routeEditStep = editRoute.step;
   const routeCreatesRevision = surveyEditMatch?.[2] === "revision" || editRoute.createsRevision;
-  const routeView = pathname.startsWith("/projects/") ? "Project Detail" : pathname.includes("new-project") || pathname.includes("grinding") || pathname.includes("screeding") || pathname.includes("repairs") ? "New Project" : pathname.includes("project-search") ? "Project Search" : pathname.includes("admin-rates") ? "Admin Rates" : pathname.includes("company-admin") ? "Company Admin" : "Dashboard";
+  const routeView = pathname.startsWith("/projects/") ? "Project Detail" : pathname.includes("new-project") || pathname.includes("grinding") || pathname.includes("screeding") || pathname.includes("repairs") ? "New Project" : pathname.includes("admin-rates") ? "Admin Rates" : pathname.includes("company-admin") ? "Company Admin" : "Dashboard";
   const routeTab: DetailTab = pathname.includes("grinding") ? "Grinding" : pathname.includes("screeding") ? "Screeding" : pathname.includes("repairs") ? "Repairs" : pathname.includes("proposal") ? "PM Handover" : pathname.includes("budget") ? "Costing" : pathname.includes("pl") ? "Actual P&L" : "Summary";
   const routeAdminTab: AdminTab = pathname.includes("repair-types") ? "Repair Types" : pathname.includes("repair-materials") ? "Repair Materials" : pathname.includes("admin-rates/survey") ? "Survey Rates" : "Rates";
   const initialRouteInput = routeIsSurvey ? createSurveyProjectInput("EUR", "km") : cloneInput(emptyInput);
@@ -590,12 +601,11 @@ export default function Workspace() {
         {!moduleBlocked && !selectedModuleBlocked && <>
         <WorkspaceBanner view={view} selected={selected} projects={visibleProjects} />
         {view === "New Project" && (editingId && selected?.rateSnapshot ? <PricingSnapshotPanel saved={calculations} current={currentAdminCalculation} reprice={() => { setPricingRates(rates); setPricingCatalog(repairCatalog); setInput({ ...input, exchangeRateLockedAt: new Date().toISOString() }); }} /> : <div className="pricing-snapshot-status">Using current admin rates.</div>)}
-        {view === "Dashboard" && <Dashboard projects={visibleProjects} companyCurrency={auth.activeCompany.defaultCurrency} open={(project) => openProject(project)} />}
+        {view === "Dashboard" && <Dashboard projects={visibleProjects} companyCurrency={auth.activeCompany.defaultCurrency} open={(project) => openProject(project)} edit={editProject} />}
         {workspaceLoaded && !workspaceLoading && view === "New Project" && input.costingModule === "survey" && input.survey && <SurveyBuilder step={input.uiProgress?.surveyStep ?? "Project"} setStep={(surveyStep) => setInput({ ...input, uiProgress: { ...input.uiProgress, surveyStep } })} input={input.survey} onChange={(survey) => setInput(syncSurveyProjectInput(input, survey))} rates={normaliseSurveyRates(pricingRates.surveyRates)} onSave={(complete) => void saveCurrentProject(complete ? "Costing Complete" : "Draft")} saving={saveState === "saving" || saveState === "autosaving"} duplicateReference={duplicateProjectReference} />}
 {workspaceLoaded && !workspaceLoading && view === "New Project" && input.costingModule !== "survey" && <ProjectBuilder input={input} setInput={setInput} rates={pricingRates} repairCatalog={pricingCatalog} calculations={calculations} onSave={saveCurrentProject} duplicateReference={duplicateProjectReference} saving={saveState === "saving" || saveState === "autosaving"} dirty={hasUnsavedChanges} />}
-        {view === "Project Search" && <SearchView projects={visibleProjects} deletedProjects={deletedProjects.filter((project) => moduleEnabled(project.inputs.costingModule ?? "remedial"))} open={(project) => openProject(project)} edit={editProject} restore={async (project) => { try { await restoreProject(project.id); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "The project could not be restored."); throw error; } }} purge={async (project) => { try { await purgeProject(project.id); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "The project could not be permanently deleted."); throw error; } }} />}
         {workspaceLoaded && !workspaceLoading && view === "Admin Rates" && <AdminRatesView rates={rates} setRates={setRatesState} repairCatalog={repairCatalog} setRepairCatalog={setRepairCatalog} adminTab={adminTab} setAdminTab={setAdminTab} rateVersions={rateVersions} restoreRateVersion={(version) => setRatesState(version.rates)} save={async () => { try { await saveAdminData(rates, repairCatalog); setBaselineRates(JSON.parse(JSON.stringify(rates)) as AdminRates); setBaselineRepairCatalog(JSON.parse(JSON.stringify(repairCatalog)) as RepairCatalog); setRateVersions(await loadRateVersions()); alert("Admin data saved and versioned. New costings use these values; saved projects keep their pricing snapshot until explicitly repriced."); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "Admin data could not be saved."); } }} />}
-        {view === "Company Admin" && <CompanyAdminPanel />}
+        {view === "Company Admin" && <><CompanyAdminPanel /><ProjectArchive deletedProjects={deletedProjects.filter((project) => moduleEnabled(project.inputs.costingModule ?? "remedial"))} restore={async (project) => { try { await restoreProject(project.id); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "The project could not be restored."); throw error; } }} purge={async (project) => { try { await purgeProject(project.id); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "The project could not be permanently deleted."); throw error; } }} /></>}
         {view === "Project Detail" && selected && (
           <ProjectDetail
             project={selected}
@@ -630,7 +640,7 @@ export default function Workspace() {
                 setSelectedId("");
                 setEditingId("");
                 await refresh();
-                router.push("/project-search");
+                router.push("/");
               } catch (error) {
                 setWorkspaceError(error instanceof Error ? error.message : "The project could not be moved to the recycle bin.");
                 throw error;
@@ -638,7 +648,7 @@ export default function Workspace() {
             }}
           />
         )}
-        {view === "Project Detail" && workspaceLoaded && routeProjectId && !selected && <div className="app-card-strong p-6"><h2 className="text-xl font-semibold">Project not found</h2><p className="mt-2 text-sm text-slate-600">This project does not exist or is not available in the active company.</p><button className="secondary-button mt-4" onClick={() => router.push("/project-search")}>Open Project Search</button></div>}
+        {view === "Project Detail" && workspaceLoaded && routeProjectId && !selected && <div className="app-card-strong p-6"><h2 className="text-xl font-semibold">Project not found</h2><p className="mt-2 text-sm text-slate-600">This project does not exist or is not available in the active company.</p><button className="secondary-button mt-4" onClick={() => router.push("/")}>Open Dashboard</button></div>}
         {view === "New Project" && workspaceLoaded && routeEditProjectId && !projects.some((project) => project.id === routeEditProjectId) && <div className="app-card-strong p-6"><h2 className="text-xl font-semibold">Draft not found</h2><p className="mt-2 text-sm text-slate-600">The saved costing does not exist or belongs to another company.</p><button className="secondary-button mt-4" onClick={startNewProject}>Start New Project</button></div>}
         </>}
       </section>
@@ -652,7 +662,6 @@ function routeModuleKey(pathname: string): AppModuleKey | null {
   if (pathname.includes("admin-rates")) return "admin_rates";
   if (pathname.includes("company-admin")) return "company_admin";
   if (pathname.includes("new-project") || pathname.includes("grinding") || pathname.includes("screeding") || pathname.includes("repairs")) return "remedial_costing";
-  if (pathname.includes("project-search")) return "projects";
   if (pathname.startsWith("/projects/")) return "projects";
   if (pathname.includes("proposal") || pathname.includes("budget") || pathname.includes("pl")) return "reports";
   return "dashboard";
@@ -949,11 +958,24 @@ function Mini({ label, value }: { label: string; value: string }) {
   return <div className="min-w-0 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-slate-950"><div className="text-[11px] font-bold uppercase text-slate-500">{label}</div><div className="mt-1 break-words text-lg font-bold">{value}</div></div>;
 }
 
-function Dashboard({ projects, companyCurrency, open }: { projects: ProjectRecord[]; companyCurrency: CurrencyCode; open: (project: ProjectRecord) => void }) {
+function Dashboard({ projects, companyCurrency, open, edit }: { projects: ProjectRecord[]; companyCurrency: CurrencyCode; open: (project: ProjectRecord) => void; edit: (project: ProjectRecord) => void }) {
   const [filters, setFilters] = useState<DashboardFilters>(emptyDashboardFilters);
+  const [filtersReady, setFiltersReady] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(10);
+  useEffect(() => {
+    try {
+      const saved = window.sessionStorage.getItem("costing-dashboard-filters");
+      if (saved) setFilters({ ...emptyDashboardFilters, ...JSON.parse(saved) as DashboardFilters });
+    } catch { /* Invalid UI-only filter state falls back to a clear dashboard. */ }
+    setFiltersReady(true);
+  }, []);
+  useEffect(() => {
+    if (!filtersReady) return;
+    window.sessionStorage.setItem("costing-dashboard-filters", JSON.stringify(filters));
+  }, [filters, filtersReady]);
   const filteredProjects = filterDashboardProjects(projects, filters);
   const hasFilters = Boolean(filters.query.trim() || filters.module !== "All" || filters.status !== "All" || filters.service !== "All");
-  const patchFilters = (next: Partial<DashboardFilters>) => setFilters((current) => ({ ...current, ...next }));
+  const patchFilters = (next: Partial<DashboardFilters>) => { setFilters((current) => ({ ...current, ...next })); setVisibleCount(10); };
   const draftProjects = filteredProjects.filter((project) => normaliseProjectStatus(project.status) === "Draft");
   const pipelineProjects = filteredProjects.filter((project) => normaliseProjectStatus(project.status) === "Costing Complete");
   const wonProjects = filteredProjects.filter((project) => ["Won", "Handover Issued"].includes(normaliseProjectStatus(project.status)));
@@ -975,7 +997,7 @@ function Dashboard({ projects, companyCurrency, open }: { projects: ProjectRecor
           <Select label="Module" value={filters.module} options={["All", "survey", "remedial"]} onChange={(module) => patchFilters({ module: module as DashboardFilters["module"] })} />
           <Select label="Status" value={filters.status} options={["All", "Draft", "Costing Complete", "Won", "Handover Issued", "Lost", "Completed", "Closed"]} onChange={(status) => patchFilters({ status })} />
           <Select label="Service" value={filters.service} options={["All", "Survey", "Grinding", "Screeding", "Repairs"]} onChange={(service) => patchFilters({ service })} />
-          <button className="secondary-button" disabled={!hasFilters} onClick={() => setFilters(emptyDashboardFilters)}>Clear</button>
+          <button className="secondary-button" disabled={!hasFilters} onClick={() => { setFilters(emptyDashboardFilters); setVisibleCount(10); }}>Clear</button>
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm text-slate-500"><span>Showing <b className="text-slate-800">{filteredProjects.length}</b> of {projects.length} projects. Dashboard figures use the filtered results.</span>{hasFilters && <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-800">Filters active</span>}</div>
       </div>
@@ -988,8 +1010,9 @@ function Dashboard({ projects, companyCurrency, open }: { projects: ProjectRecor
       </div>
       <div className="grid gap-4 lg:grid-cols-2">{moduleSummary.map((row) => <div className="app-card p-5" key={row.module}><div className="flex items-center justify-between gap-3"><div><div className="text-xs font-black uppercase text-[var(--brand-primary)]">{row.module} costing</div><div className="mt-1 text-xl font-bold capitalize">{row.projects} project{row.projects === 1 ? "" : "s"}</div></div><span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-bold uppercase text-slate-600">{row.module}</span></div><div className="mt-4 grid grid-cols-2 gap-3"><Mini label="Sell Value" value={money(row.sell, companyCurrency)} /><Mini label="Budget" value={money(row.budget, companyCurrency)} /></div></div>)}</div>
       <div className="app-card-strong">
-        <div className="panel-heading"><div><h2 className="text-xl font-semibold">{hasFilters ? "Matching Projects" : "Recent Projects"}</h2><p className="text-sm text-slate-500">{filteredProjects.length > 10 ? `Showing the 10 most recent of ${filteredProjects.length} matches.` : `${filteredProjects.length} project${filteredProjects.length === 1 ? "" : "s"} shown.`}</p></div></div>
-        <ProjectTable projects={filteredProjects.slice(0, 10)} open={open} />
+        <div className="panel-heading"><div><h2 className="text-xl font-semibold">{hasFilters ? "Matching Projects" : "Recent Projects"}</h2><p className="text-sm text-slate-500">Showing {Math.min(visibleCount, filteredProjects.length)} of {filteredProjects.length} project{filteredProjects.length === 1 ? "" : "s"}.</p></div></div>
+        <ProjectTable projects={filteredProjects.slice(0, visibleCount)} open={open} edit={edit} />
+        {visibleCount < filteredProjects.length && <div className="flex justify-center border-t border-slate-200 p-4"><button className="secondary-button" onClick={() => setVisibleCount((count) => count + 50)}>Show More Projects</button></div>}
       </div>
     </div>
   );
@@ -1236,7 +1259,7 @@ function WorkPackagesStep({ input, setInput, rates, repairCatalog, calculations 
           <section className="app-card-strong"><div className="panel-heading flex flex-wrap items-center justify-between gap-3"><div><div className="text-xs font-black uppercase text-sky-700">Package {active.code}</div><h3 className="mt-1 text-xl font-semibold">{active.name}</h3></div><div className="flex flex-wrap gap-2"><button className="secondary-button" onClick={duplicatePackage}>Duplicate</button><button className="secondary-button border-red-200 text-red-700" onClick={() => { if (window.confirm(`Remove package ${active.code}. ${active.name} and all of its costing data?`)) setPackages(packages.filter((item) => item.id !== active.id)); }}>Remove</button></div></div><div className="grid gap-4 p-5 sm:grid-cols-2 xl:grid-cols-4"><Text label="Package Code" value={active.code} onChange={(code) => patchPackage(active.id, { code })} /><Text label="Package Name" value={active.name} onChange={(name) => patchPackage(active.id, { name })} /><Select label="Pricing Basis" value={active.pricingBasis === "day_rate" ? "Day Rate" : "Fixed Price"} options={active.service === "Grinding" ? ["Fixed Price", "Day Rate"] : ["Fixed Price"]} onChange={(value) => patchPackage(active.id, { pricingBasis: value === "Day Rate" ? "day_rate" : "fixed" })} /><Toggle label="Mobilisation already included in another package" checked={active.mobilisationMode !== "separate"} onChange={(includedElsewhere) => patchPackage(active.id, { mobilisationMode: includedElsewhere ? "shared" : "separate" })} /><div className="sm:col-span-2 xl:col-span-4"><Text label="Package Description" value={active.description} onChange={(description) => patchPackage(active.id, { description })} /></div><p className="text-xs font-semibold text-slate-500 sm:col-span-2 xl:col-span-4">Leave the mobilisation box unticked unless the same internal team journey has already been included in another package. Subcontractor mobilisation always remains with its subcontract package.</p></div></section>
           {active.pricingBasis === "day_rate" && <CommercialRateEditor schedule={activeRate} values={active} onChange={(next) => patchPackage(active.id, next)} />}
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Package Proposal" value={money(activeSummary?.proposalTotal ?? 0)} /><Metric label="Package Budget" value={money(activeSummary?.budgetCost ?? 0)} /><Metric label="Markup" value={percent(activeSummary?.budgetMarkup ?? 0)} /><Metric label="Duration" value={`${activeSummary?.days ?? 0} days`} /></div>
-          {active.service === "Grinding" && <GrindingForm key={active.id} input={activeInput} setInput={updateActiveInput} rates={rates} showStandby={active.pricingBasis === "day_rate"} />}
+          {active.service === "Grinding" && <GrindingForm key={active.id} input={activeInput} setInput={updateActiveInput} rates={rates} />}
           {active.service === "Screeding" && <ScreedForm key={active.id} input={activeInput} setInput={updateActiveInput} rates={rates} />}
           {active.service === "Repairs" && <RepairsForm key={active.id} input={activeInput} setInput={updateActiveInput} repairCatalog={repairCatalog} rates={rates} projectMaterialCalcs={activeMaterialCalcs} />}
           <AdditionalItems title={`${active.code}. ${active.name} additional items`} items={active.additionalItems} onChange={(additionalItems) => patchPackage(active.id, { additionalItems })} />
@@ -1519,7 +1542,7 @@ function DetailTabs({ tab, setTab, input }: { tab: DetailTab; setTab: (tab: Deta
   return <div className="flex flex-wrap gap-2 rounded-xl bg-white p-2 shadow-sm">{visibleTabs.map((item) => <button key={item} onClick={() => setTab(item)} className={`rounded-md px-3 py-2 text-sm font-bold ${tab === item ? "bg-sky-700 text-white" : "bg-slate-100 text-slate-800"}`}>{item === "PM Handover" ? "Delivery Summary" : item === "Activity" ? "Notes & History" : item}</button>)}</div>;
 }
 
-function GrindingForm({ input, setInput, rates, showStandby = false }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates; showStandby?: boolean }) {
+function GrindingForm({ input, setInput, rates }: { input: ProjectInput; setInput: (input: ProjectInput) => void; rates: AdminRates }) {
   const g = input.grinding;
   const [grindingPage, setGrindingPageState] = useState<GrindingPage>(input.uiProgress?.grindingPage ?? "Programme");
   const patch = (next: Partial<typeof g>) => setInput({ ...input, grinding: { ...g, ...next } });
@@ -1545,8 +1568,8 @@ function GrindingForm({ input, setInput, rates, showStandby = false }: { input: 
   const calculatedSurveyorHotelNights = calculatedHotelNights(surveyorDays, g.weekendDaysPerWeek, g.surveyorTravelMode === "None" ? 0 : g.surveyorTravelDays);
   const productionHotelNights = g.productionHotelNights || calculatedProductionHotelNights;
   const surveyorHotelNights = g.surveyorHotelNights || calculatedSurveyorHotelNights;
-  const productionSubcontractSell = repairSubcontractorSell(g.productionSubcontractors);
-  const surveyorSubcontractSell = repairSubcontractorSell(g.surveyorSubcontractors);
+  const productionSubcontractSell = repairSubcontractorSell(g.productionSubcontractors, productionDays, g.weekendDaysPerWeek);
+  const surveyorSubcontractSell = repairSubcontractorSell(g.surveyorSubcontractors, surveyorDays, g.weekendDaysPerWeek);
   const productionLabourSell = usesProductionInHouse ? g.productionMen * productionDays * rates.productionLabourDayRate * (1 + adminRateMargin(rates, "productionLabourDayRate", rates.defaultMargin)) : 0;
   const surveyorLabourSell = usesSurveyorInHouse ? (
     g.surveyorCount * surveyorDays * rates.grindingSurveyorDayRate * (1 + adminRateMargin(rates, "grindingSurveyorDayRate", 0)) +
@@ -1610,7 +1633,7 @@ function GrindingForm({ input, setInput, rates, showStandby = false }: { input: 
             {labourModeButton("Both", "both", productionMode, (value) => patch({ productionLabourMode: value }))}
           </div>
         </div>
-        {usesProductionSubcontract && <SubcontractLabourPanel items={g.productionSubcontractors} calculatedDays={estimatedDays} onChange={(items) => patch({ productionSubcontractors: items })} title="Grinding Production Subcontractors" description="Add each grinding subcontractor separately. Their price should include labour, equipment and normal grinding tools." addLabel="Add Grinding Subcontractor" defaultName="Grinding subcontractor" showStandby={showStandby} />}
+        {usesProductionSubcontract && <SubcontractLabourPanel items={g.productionSubcontractors} calculatedDays={estimatedDays} weekendDaysPerWeek={g.weekendDaysPerWeek} onChange={(items) => patch({ productionSubcontractors: items })} title="Grinding Production Subcontractors" description="Add each grinding subcontractor separately. Their price should include labour, equipment and normal grinding tools." addLabel="Add Grinding Subcontractor" defaultName="Grinding subcontractor" />}
         {usesProductionInHouse && <div className="app-card-strong">
           <div className="panel-heading"><h2 className="text-xl font-semibold">In-House Grinding Labour</h2><p className="text-sm text-slate-500">Uses the shared production labour rates from Admin. Hotel nights are per team, then multiplied by men.</p></div>
           <div className="grid gap-4 p-5">
@@ -1638,7 +1661,7 @@ function GrindingForm({ input, setInput, rates, showStandby = false }: { input: 
             {labourModeButton("Both", "both", surveyorMode, (value) => patch({ surveyorLabourMode: value }))}
           </div>
         </div>
-        {usesSurveyorSubcontract && <SubcontractLabourPanel items={g.surveyorSubcontractors} calculatedDays={estimatedDays} onChange={(items) => patch({ surveyorSubcontractors: items })} title="Surveyor Subcontractors" description="Add subcontracted surveyor/supervisor support separately from production subcontractors." addLabel="Add Surveyor Subcontractor" defaultName="Surveyor subcontractor" showStandby={showStandby} />}
+        {usesSurveyorSubcontract && <SubcontractLabourPanel items={g.surveyorSubcontractors} calculatedDays={estimatedDays} weekendDaysPerWeek={g.weekendDaysPerWeek} onChange={(items) => patch({ surveyorSubcontractors: items })} title="Surveyor Subcontractors" description="Add subcontracted surveyor/supervisor support separately from production subcontractors." addLabel="Add Surveyor Subcontractor" defaultName="Surveyor subcontractor" />}
         {usesSurveyorInHouse && <div className="app-card-strong">
           <div className="panel-heading"><h2 className="text-xl font-semibold">In-House Surveyor Labour</h2><p className="text-sm text-slate-500">Uses the surveyor labour rates from Admin. Hotel nights are per team, then multiplied by surveyors.</p></div>
           <div className="grid gap-4 p-5">
@@ -1721,6 +1744,8 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
   const s = input.screeding;
   const [screedPage, setScreedPageState] = useState<ScreedPage>(input.uiProgress?.screedPage ?? "Programme");
   const patch = (next: Partial<typeof s>) => setInput({ ...input, screeding: { ...s, ...next } });
+  const updateAdditionalMaterial = (index: number, next: Partial<AdditionalItem>) => patch({ additionalMaterials: s.additionalMaterials.map((item, itemIndex) => itemIndex === index ? { ...item, ...next, plCategory: "Materials" } : item) });
+  const addAdditionalMaterial = () => patch({ additionalMaterials: [...s.additionalMaterials, { name: "Additional material", unit: "item", quantity: 0, rate: 0, margin: rates.materialMargin, plCategory: "Materials" }] });
   const setScreedPage = (page: ScreedPage) => {
     setScreedPageState(page);
     setInput({ ...input, uiProgress: { ...input.uiProgress, screedPage: page } });
@@ -1729,7 +1754,7 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
   const updateTeam = (index: number, next: Partial<ScreedTeam>) => patch({ teams: s.teams.map((team, i) => i === index ? { ...team, ...next } : team) });
   const removeTeam = (index: number) => patch({ teams: s.teams.filter((_, i) => i !== index) });
   const screedDays = s.preparationDays + s.screedingDays + s.grindingDays;
-  const addTeam = () => patch({ teams: [...s.teams, { enabled: true, contractorName: `Screed subcontractor ${s.teams.length + 1}`, scabble: false, prep: false, screed: true, grind: false, mobilisation: 0, mobilisationMargin: 0.3, priceType: "day", daysProgrammed: screedDays, preparationDays: 0, screedingDays: s.screedingDays, grindingDays: 0, rate: 0, margin: 0.3 }] });
+  const addTeam = () => patch({ teams: [...s.teams, { enabled: true, contractorName: `Screed subcontractor ${s.teams.length + 1}`, scabble: false, prep: false, screed: true, grind: false, mobilisation: 0, mobilisationMargin: 0.3, priceType: "day", daysProgrammed: screedDays, preparationDays: 0, screedingDays: s.screedingDays, grindingDays: 0, rate: 0, margin: 0.3, standbyDays: 0, standbyRate: 0, standbyMargin: 0.3, weekendUpliftDays: null, weekendUpliftRate: 0, weekendUpliftMargin: 0.3 }] });
   const productionMode = s.productionLabourMode ?? "subcontract";
   const surveyorMode = s.surveyorLabourMode ?? "in_house";
   const usesProductionInHouse = productionMode === "in_house" || productionMode === "both";
@@ -1749,9 +1774,9 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
   const productionSubcontractSell = s.teams.reduce((sum, team) => {
     const activityDays = (team.prep ? team.preparationDays : 0) + (team.screed ? team.screedingDays : 0) + (team.grind ? team.grindingDays : 0);
     const qty = team.priceType === "day" ? activityDays : team.rate ? 1 : 0;
-    return sum + (team.mobilisation * (1 + (team.mobilisationMargin ?? rates.subcontractMargin))) + (team.rate * qty * (1 + (team.margin ?? rates.subcontractMargin)));
+    return sum + (team.mobilisation * (1 + (team.mobilisationMargin ?? rates.subcontractMargin))) + (team.rate * qty * (1 + (team.margin ?? rates.subcontractMargin))) + subcontractAdjustmentSell(team, activityDays || screedDays, s.weekendDaysPerWeek);
   }, 0);
-  const surveyorSubcontractSell = repairSubcontractorSell(s.surveyorSubcontractors);
+  const surveyorSubcontractSell = repairSubcontractorSell(s.surveyorSubcontractors, surveyorDays, s.weekendDaysPerWeek);
   const productionLabourSell = usesProductionInHouse ? s.productionMen * productionDays * rates.productionLabourDayRate * (1 + adminRateMargin(rates, "productionLabourDayRate", rates.defaultMargin)) : 0;
   const surveyorLabourSell = usesSurveyorInHouse ? (
     s.surveyors * surveyorDays * rates.screedSurveyorDayRate * (1 + adminRateMargin(rates, "screedSurveyorDayRate", 0)) +
@@ -1759,9 +1784,12 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
     (s.nightShiftRequired ? s.surveyors * s.surveyorNightShifts * rates.surveyorNightShiftAllowance * (1 + adminRateMargin(rates, "surveyorNightShiftAllowance", rates.defaultMargin)) : 0)
   ) : 0;
   const screedUnits = screedMaterialUnits(s.screedMaterialBags, s.screedMaterialContingency, s.screedMaterialWaste);
+  const toppingTotalUnits = screedMaterialUnits(s.screedToppingUnits, s.screedToppingContingency, s.screedToppingWaste);
   const primerTotalUnits = screedMaterialUnits(s.primerUnits, s.primerContingency, s.primerWaste);
   const sandTotalBags = screedMaterialUnits(s.sandBags, s.sandContingency, s.sandWaste);
-  const materialSell = (screedUnits * s.screedMaterialRate * (1 + s.screedMaterialMargin)) + (primerTotalUnits * s.primerRate * (1 + s.primerMargin)) + (sandTotalBags * s.sandRate * (1 + s.sandMargin)) + (s.materialShipping ? s.materialShipping * (1 + s.materialShippingMargin) : 0);
+  const additionalMaterialSell = additionalItemsSell(s.additionalMaterials);
+  const materialBudget = (screedUnits * s.screedMaterialRate) + (toppingTotalUnits * s.screedToppingRate) + (primerTotalUnits * s.primerRate) + (sandTotalBags * s.sandRate) + s.materialShipping + additionalItemsCost(s.additionalMaterials);
+  const materialSell = (screedUnits * s.screedMaterialRate * (1 + s.screedMaterialMargin)) + (toppingTotalUnits * s.screedToppingRate * (1 + s.screedToppingMargin)) + (primerTotalUnits * s.primerRate * (1 + s.primerMargin)) + (sandTotalBags * s.sandRate * (1 + s.sandMargin)) + (s.materialShipping ? s.materialShipping * (1 + s.materialShippingMargin) : 0) + additionalMaterialSell;
   const toolDays = usesProductionInHouse ? productionDays : 0;
   const grinderCount = Math.max(0, s.propaneGrinders || s.productionMen);
   const grinderDays = grinderCount * toolDays;
@@ -1836,7 +1864,12 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
               const prepDifferent = team.prep && team.preparationDays !== s.preparationDays;
               const screedDifferent = team.screed && team.screedingDays !== s.screedingDays;
               const grindDifferent = team.grind && team.grindingDays !== s.grindingDays;
-              const sell = (team.mobilisation * (1 + (team.mobilisationMargin ?? rates.subcontractMargin))) + (team.rate * qty * (1 + (team.margin ?? rates.subcontractMargin)));
+              const programmeDays = activityDays || screedDays;
+              const calculatedWeekendDays = weekendDaysForProgramme(programmeDays, 5, s.weekendDaysPerWeek);
+              const calculatedNonWorkingDays = nonWorkingDaysForProgramme(programmeDays, s.weekendDaysPerWeek);
+              const weekendUpliftDays = resolvedWeekendUpliftDays(team, programmeDays, s.weekendDaysPerWeek);
+              const adjustmentSell = subcontractAdjustmentSell(team, programmeDays, s.weekendDaysPerWeek);
+              const sell = (team.mobilisation * (1 + (team.mobilisationMargin ?? rates.subcontractMargin))) + (team.rate * qty * (1 + (team.margin ?? rates.subcontractMargin))) + adjustmentSell;
               return (
                 <div className="grid gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4" key={index}>
                   <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1861,6 +1894,25 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
                     {team.screed && <div className={screedDifferent ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Screeding Days" value={team.screedingDays} onChange={(v) => updateTeam(index, { screedingDays: v })} />{screedDifferent && <div className="mt-1 text-xs font-bold text-amber-900">Programme: {s.screedingDays} days</div>}</div>}
                     {team.grind && <div className={grindDifferent ? "rounded-lg border border-amber-200 bg-amber-50 p-2" : ""}><NumberInput label="Grinding Days" value={team.grindingDays} onChange={(v) => updateTeam(index, { grindingDays: v })} />{grindDifferent && <div className="mt-1 text-xs font-bold text-amber-900">Programme: {s.grindingDays} days</div>}</div>}
                   </div>}
+                  <details className="rounded-lg border border-sky-200 bg-sky-50 p-3">
+                    <summary className="cursor-pointer list-none text-sm font-bold text-sky-950">Advanced subcontract adjustments <span className="ml-2 text-xs font-semibold text-sky-700">{adjustmentSell > 0 ? money(adjustmentSell) : "Optional"}</span></summary>
+                    <div className="mt-3 grid gap-4">
+                      <div className="grid gap-3 sm:grid-cols-3"><Mini label="Calculated Weekend Days" value={`${calculatedWeekendDays}`} /><Mini label="Calculated Non-Working Days" value={`${calculatedNonWorkingDays}`} /><Mini label="Adjustment Sell" value={money(adjustmentSell)} /></div>
+                      <p className="text-xs leading-5 text-sky-900">Non-working days are a programme guide only. They are not charged unless entered as standby days.</p>
+                      <div className="grid gap-3 rounded-lg border border-sky-200 bg-white p-3 sm:grid-cols-2 xl:grid-cols-4">
+                        <NumberInput label="Standby Days Charged" value={team.standbyDays ?? 0} step={1} onChange={(standbyDays) => updateTeam(index, { standbyDays })} />
+                        <NumberInput label="Standby Budget / Day" value={team.standbyRate ?? 0} onChange={(standbyRate) => updateTeam(index, { standbyRate })} />
+                        <NumberInput label="Standby Markup %" value={(team.standbyMargin ?? team.margin) * 100} onChange={(value) => updateTeam(index, { standbyMargin: value / 100 })} />
+                        <Mini label="Standby Sell" value={money((team.standbyDays ?? 0) * (team.standbyRate ?? 0) * (1 + (team.standbyMargin ?? team.margin)))} />
+                      </div>
+                      <div className={`grid gap-3 rounded-lg border bg-white p-3 sm:grid-cols-2 xl:grid-cols-4 ${team.weekendUpliftDays != null && team.weekendUpliftDays !== calculatedWeekendDays ? "border-amber-300" : "border-sky-200"}`}>
+                        <div><NumberInput label="Weekend Uplift Days" value={weekendUpliftDays} step={1} onChange={(value) => updateTeam(index, { weekendUpliftDays: value === calculatedWeekendDays ? null : value })} />{team.weekendUpliftDays != null && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => updateTeam(index, { weekendUpliftDays: null })}>Reset to calculated {calculatedWeekendDays}</button>}</div>
+                        <NumberInput label="Weekend Uplift Budget / Day" value={team.weekendUpliftRate ?? 0} onChange={(weekendUpliftRate) => updateTeam(index, { weekendUpliftRate })} />
+                        <NumberInput label="Weekend Uplift Markup %" value={(team.weekendUpliftMargin ?? team.margin) * 100} onChange={(value) => updateTeam(index, { weekendUpliftMargin: value / 100 })} />
+                        <Mini label="Weekend Uplift Sell" value={money(weekendUpliftDays * (team.weekendUpliftRate ?? 0) * (1 + (team.weekendUpliftMargin ?? team.margin)))} />
+                      </div>
+                    </div>
+                  </details>
                 </div>
               );
             })}
@@ -1893,7 +1945,7 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
             {labourModeButton("Both", "both", surveyorMode, (value) => patch({ surveyorLabourMode: value }))}
           </div>
         </div>
-        {usesSurveyorSubcontract && <SubcontractLabourPanel items={s.surveyorSubcontractors} calculatedDays={screedDays} onChange={(items) => patch({ surveyorSubcontractors: items })} title="Screeding Surveyor Subcontractors" description="Add subcontracted surveyor support separately from production subcontractors." addLabel="Add Surveyor Subcontractor" defaultName="Screed surveyor subcontractor" />}
+        {usesSurveyorSubcontract && <SubcontractLabourPanel items={s.surveyorSubcontractors} calculatedDays={screedDays} weekendDaysPerWeek={s.weekendDaysPerWeek} onChange={(items) => patch({ surveyorSubcontractors: items })} title="Screeding Surveyor Subcontractors" description="Add subcontracted surveyor support separately from production subcontractors." addLabel="Add Surveyor Subcontractor" defaultName="Screed surveyor subcontractor" />}
         {usesSurveyorInHouse && <div className="app-card-strong">
           <div className="panel-heading"><h2 className="text-xl font-semibold">In-House Surveyor Labour</h2><p className="text-sm text-slate-500">Uses the surveyor rates from Admin. Hotel nights are per team, then multiplied by surveyors.</p></div>
           <div className="grid gap-4 p-5">
@@ -1918,40 +1970,37 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
       </>}
       {screedPage === "Materials" && <>
         <div className="app-card-strong">
-          <div className="panel-heading"><h2 className="text-xl font-semibold">Screed Materials</h2><p className="text-sm text-slate-500">Enter the base quantity. Contingency and waste are added visibly before the budget and proposal totals are calculated.</p></div>
-          <div className="grid gap-5 p-5">
-            <div className="grid gap-3 border-b border-slate-200 pb-5 sm:grid-cols-2 xl:grid-cols-4">
-              <NumberInput label="Screed Base Bags" value={s.screedMaterialBags} onChange={(v) => patch({ screedMaterialBags: v })} />
-              <NumberInput label="Contingency %" value={(s.screedMaterialContingency ?? 0) * 100} onChange={(v) => patch({ screedMaterialContingency: v / 100 })} />
-              <NumberInput label="Waste %" value={(s.screedMaterialWaste ?? 0) * 100} onChange={(v) => patch({ screedMaterialWaste: v / 100 })} />
-              <Mini label="Total Screed Bags" value={`${screedUnits}`} />
-              <NumberInput label="Screed Budget / Bag" value={s.screedMaterialRate} onChange={(v) => patch({ screedMaterialRate: v })} />
-              <NumberInput label="Screed Markup %" value={s.screedMaterialMargin * 100} onChange={(v) => patch({ screedMaterialMargin: v / 100 })} />
-              <Mini label="Screed Proposal Cost" value={money(screedUnits * s.screedMaterialRate * (1 + s.screedMaterialMargin))} />
+          <div className="panel-heading"><div><h2 className="text-xl font-semibold">Screeding Materials</h2><p className="text-sm text-slate-500">Enter each material manually. Allowances are shown separately and project-only additions stay with this costing.</p></div><button className="secondary-button" onClick={addAdditionalMaterial}>Add Material</button></div>
+          <div className="grid gap-4 p-5">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <Mini label="Material Budget" value={money(materialBudget)} />
+              <Mini label="Material Proposal" value={money(materialSell)} />
+              <Mini label="Material Types Used" value={`${[screedUnits, toppingTotalUnits, primerTotalUnits, sandTotalBags, ...s.additionalMaterials.map((item) => item.quantity)].filter((quantity) => quantity > 0).length}`} />
             </div>
-            <div className="grid gap-3 border-b border-slate-200 pb-5 sm:grid-cols-2 xl:grid-cols-4">
-              <NumberInput label="Primer Base Units" value={s.primerUnits} onChange={(v) => patch({ primerUnits: v })} />
-              <NumberInput label="Contingency %" value={(s.primerContingency ?? 0) * 100} onChange={(v) => patch({ primerContingency: v / 100 })} />
-              <NumberInput label="Waste %" value={(s.primerWaste ?? 0) * 100} onChange={(v) => patch({ primerWaste: v / 100 })} />
-              <Mini label="Total Primer Units" value={`${primerTotalUnits}`} />
-              <NumberInput label="Primer Budget / Unit" value={s.primerRate} onChange={(v) => patch({ primerRate: v })} />
-              <NumberInput label="Primer Markup %" value={s.primerMargin * 100} onChange={(v) => patch({ primerMargin: v / 100 })} />
-              <Mini label="Primer Proposal Cost" value={money(primerTotalUnits * s.primerRate * (1 + s.primerMargin))} />
+            <div className="grid gap-3">
+              <ScreedMaterialRow label="Screed Base" unit="bags" quantity={s.screedMaterialBags} contingency={s.screedMaterialContingency} waste={s.screedMaterialWaste} rate={s.screedMaterialRate} markup={s.screedMaterialMargin} onQuantity={(screedMaterialBags) => patch({ screedMaterialBags })} onContingency={(screedMaterialContingency) => patch({ screedMaterialContingency })} onWaste={(screedMaterialWaste) => patch({ screedMaterialWaste })} onRate={(screedMaterialRate) => patch({ screedMaterialRate })} onMarkup={(screedMaterialMargin) => patch({ screedMaterialMargin })} />
+              <ScreedMaterialRow label="Screed Topping" unit="units" quantity={s.screedToppingUnits} contingency={s.screedToppingContingency} waste={s.screedToppingWaste} rate={s.screedToppingRate} markup={s.screedToppingMargin} onQuantity={(screedToppingUnits) => patch({ screedToppingUnits })} onContingency={(screedToppingContingency) => patch({ screedToppingContingency })} onWaste={(screedToppingWaste) => patch({ screedToppingWaste })} onRate={(screedToppingRate) => patch({ screedToppingRate })} onMarkup={(screedToppingMargin) => patch({ screedToppingMargin })} />
+              <ScreedMaterialRow label="Primer" unit="units" quantity={s.primerUnits} contingency={s.primerContingency} waste={s.primerWaste} rate={s.primerRate} markup={s.primerMargin} onQuantity={(primerUnits) => patch({ primerUnits })} onContingency={(primerContingency) => patch({ primerContingency })} onWaste={(primerWaste) => patch({ primerWaste })} onRate={(primerRate) => patch({ primerRate })} onMarkup={(primerMargin) => patch({ primerMargin })} />
+              <ScreedMaterialRow label="Sand" unit="bags" quantity={s.sandBags} contingency={s.sandContingency} waste={s.sandWaste} rate={s.sandRate} markup={s.sandMargin} onQuantity={(sandBags) => patch({ sandBags })} onContingency={(sandContingency) => patch({ sandContingency })} onWaste={(sandWaste) => patch({ sandWaste })} onRate={(sandRate) => patch({ sandRate })} onMarkup={(sandMargin) => patch({ sandMargin })} />
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <NumberInput label="Sand Base Bags" value={s.sandBags} onChange={(v) => patch({ sandBags: v })} />
-              <NumberInput label="Contingency %" value={(s.sandContingency ?? 0) * 100} onChange={(v) => patch({ sandContingency: v / 100 })} />
-              <NumberInput label="Waste %" value={(s.sandWaste ?? 0) * 100} onChange={(v) => patch({ sandWaste: v / 100 })} />
-              <Mini label="Total Sand Bags" value={`${sandTotalBags}`} />
-              <NumberInput label="Sand Budget / Bag" value={s.sandRate} onChange={(v) => patch({ sandRate: v })} />
-              <NumberInput label="Sand Markup %" value={s.sandMargin * 100} onChange={(v) => patch({ sandMargin: v / 100 })} />
-              <Mini label="Sand Proposal Cost" value={money(sandTotalBags * s.sandRate * (1 + s.sandMargin))} />
+            <div className="grid gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="sm:col-span-2 xl:col-span-1"><div className="text-sm font-bold text-slate-950">Material Shipping</div><p className="mt-1 text-xs text-slate-500">Delivery cost for the screeding materials.</p></div>
+              <NumberInput label="Budget Cost" value={s.materialShipping} onChange={(materialShipping) => patch({ materialShipping })} />
+              <NumberInput label="Markup %" value={s.materialShippingMargin * 100} onChange={(value) => patch({ materialShippingMargin: value / 100 })} />
+              <Mini label="Proposal" value={money(s.materialShipping * (1 + s.materialShippingMargin))} />
             </div>
-            <div className="grid gap-3 border-t border-slate-200 pt-5 sm:grid-cols-2 xl:grid-cols-4">
-            <NumberInput label="Material Shipping" value={s.materialShipping} onChange={(v) => patch({ materialShipping: v })} />
-            <NumberInput label="Shipping Markup %" value={s.materialShippingMargin * 100} onChange={(v) => patch({ materialShippingMargin: v / 100 })} />
-            <Mini label="Shipping Proposal Cost" value={money(s.materialShipping * (1 + s.materialShippingMargin))} />
-            <Mini label="Total Material Sell" value={money(materialSell)} />
+            <div className="grid gap-3">
+              <div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="font-bold text-slate-950">Additional Materials</h3><p className="text-sm text-slate-500">These rows apply only to this project.</p></div><button className="secondary-button" onClick={addAdditionalMaterial}>Add Material</button></div>
+              {s.additionalMaterials.map((item, index) => <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:grid-cols-2 xl:grid-cols-[minmax(180px,1.3fr)_120px_120px_150px_130px_150px_auto]" key={index}>
+                <Text label="Material" value={item.name} onChange={(name) => updateAdditionalMaterial(index, { name })} />
+                <Text label="Unit" value={item.unit} onChange={(unit) => updateAdditionalMaterial(index, { unit })} />
+                <NumberInput label="Quantity" value={item.quantity} onChange={(quantity) => updateAdditionalMaterial(index, { quantity })} />
+                <NumberInput label="Budget / Unit" value={item.rate} onChange={(rate) => updateAdditionalMaterial(index, { rate })} />
+                <NumberInput label="Markup %" value={item.margin * 100} onChange={(value) => updateAdditionalMaterial(index, { margin: value / 100 })} />
+                <Mini label="Proposal" value={money(item.quantity * item.rate * (1 + item.margin))} />
+                <button className="secondary-button self-end" onClick={() => patch({ additionalMaterials: s.additionalMaterials.filter((_, itemIndex) => itemIndex !== index) })}>Remove</button>
+              </div>)}
+              {!s.additionalMaterials.length && <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-sm text-slate-500">No additional project materials.</div>}
             </div>
           </div>
         </div>
@@ -1998,6 +2047,27 @@ function ScreedForm({ input, setInput, rates }: { input: ProjectInput; setInput:
       </>}
     </div>
   );
+}
+
+function ScreedMaterialRow({ label, unit, quantity, contingency, waste, rate, markup, onQuantity, onContingency, onWaste, onRate, onMarkup }: { label: string; unit: string; quantity: number; contingency: number; waste: number; rate: number; markup: number; onQuantity: (value: number) => void; onContingency: (value: number) => void; onWaste: (value: number) => void; onRate: (value: number) => void; onMarkup: (value: number) => void }) {
+  const totalUnits = screedMaterialUnits(quantity, contingency, waste);
+  return <details className="rounded-xl border border-slate-200 bg-white" open={quantity > 0}>
+    <summary className="cursor-pointer list-none px-4 py-3">
+      <div className="grid items-center gap-2 sm:grid-cols-[minmax(150px,1fr)_120px_150px_150px]">
+        <div><div className="font-bold text-slate-950">{label}</div><div className="text-xs text-slate-500">Manual quantity in {unit}</div></div>
+        <Mini label="Total Quantity" value={`${totalUnits} ${unit}`} />
+        <Mini label="Budget" value={money(totalUnits * rate)} />
+        <Mini label="Proposal" value={money(totalUnits * rate * (1 + markup))} />
+      </div>
+    </summary>
+    <div className="grid gap-3 border-t border-slate-200 bg-slate-50 p-4 sm:grid-cols-2 xl:grid-cols-5">
+      <NumberInput label={`Base Quantity (${unit})`} value={quantity} onChange={onQuantity} />
+      <NumberInput label="Contingency %" value={contingency * 100} onChange={(value) => onContingency(value / 100)} />
+      <NumberInput label="Waste %" value={waste * 100} onChange={(value) => onWaste(value / 100)} />
+      <NumberInput label={`Budget / ${unit === "bags" ? "Bag" : "Unit"}`} value={rate} onChange={onRate} />
+      <NumberInput label="Markup %" value={markup * 100} onChange={(value) => onMarkup(value / 100)} />
+    </div>
+  </details>;
 }
 
 function ScreedPageTabs({ screedPage, setScreedPage, placement = "top" }: { screedPage: ScreedPage; setScreedPage: (page: ScreedPage) => void; placement?: "top" | "bottom" }) {
@@ -2255,7 +2325,7 @@ function RepairsForm({ input, setInput, repairCatalog, rates, projectMaterialCal
           ))}
         </div>
       </div>
-      {usesSubcontract && <SubcontractLabourPanel items={r.repairSubcontractors} calculatedDays={effectiveRepairDays} onChange={(items) => patch({ repairSubcontractors: items })} />}
+      {usesSubcontract && <SubcontractLabourPanel items={r.repairSubcontractors} calculatedDays={effectiveRepairDays} weekendDaysPerWeek={r.weekendRequired ? r.weekendDays : 0} onChange={(items) => patch({ repairSubcontractors: items })} />}
       {usesInHouse && <InHouseLabourPanel input={r} officeCount={input.officeCount} distanceUnit={input.distanceUnit} rates={rates} calculatedDays={repairLineDaysTotal} effectiveDays={effectiveRepairDays} hotelRoomNights={hotelRoomNights} calculatedHotelNights={calculatedRepairHotelNights} effectiveHotelNights={effectiveRepairHotelNights} onChange={patch} />}
       <RepairPageTabs repairPage={repairPage} setRepairPage={setRepairPage} placement="bottom" />
       </>}
@@ -2368,10 +2438,11 @@ function InHouseLabourPanel({ input, officeCount, distanceUnit, rates, calculate
   );
 }
 
-function SubcontractLabourPanel({ items, calculatedDays, onChange, title = "Subcontract Labour", description = "Add each subcontractor separately. Mobilisation stays in subcontract costs, not travel.", addLabel = "Add Additional Subcontractor", defaultName = "Subcontractor", showStandby = false }: { items: RepairSubcontractor[]; calculatedDays: number; onChange: (items: RepairSubcontractor[]) => void; title?: string; description?: string; addLabel?: string; defaultName?: string; showStandby?: boolean }) {
-  const currentItems = items.length ? items : [{ name: defaultName, priceType: "lump sum" as PriceType, rate: 0, days: calculatedDays || 0, margin: 0.3, mobilisationCost: 0, mobilisations: 0, mobilisationMargin: 0.3, standbyRate: 0, standbyMargin: 0.3 }];
+function SubcontractLabourPanel({ items, calculatedDays, weekendDaysPerWeek, onChange, title = "Subcontract Labour", description = "Add each subcontractor separately. Mobilisation stays in subcontract costs, not travel.", addLabel = "Add Additional Subcontractor", defaultName = "Subcontractor" }: { items: RepairSubcontractor[]; calculatedDays: number; weekendDaysPerWeek: number; onChange: (items: RepairSubcontractor[]) => void; title?: string; description?: string; addLabel?: string; defaultName?: string }) {
+  const emptySubcontractor = (): RepairSubcontractor => ({ name: defaultName, priceType: "lump sum", rate: 0, days: calculatedDays || 0, margin: 0.3, mobilisationCost: 0, mobilisations: 0, mobilisationMargin: 0.3, standbyDays: 0, standbyRate: 0, standbyMargin: 0.3, weekendUpliftDays: null, weekendUpliftRate: 0, weekendUpliftMargin: 0.3 });
+  const currentItems = items.length ? items : [emptySubcontractor()];
   const update = (index: number, next: Partial<RepairSubcontractor>) => onChange(currentItems.map((item, i) => i === index ? { ...item, ...next } : item));
-  const add = () => onChange([...currentItems, { name: defaultName, priceType: "lump sum", rate: 0, days: calculatedDays || 0, margin: 0.3, mobilisationCost: 0, mobilisations: 0, mobilisationMargin: 0.3, standbyRate: 0, standbyMargin: 0.3 }]);
+  const add = () => onChange([...currentItems, emptySubcontractor()]);
   return (
     <div className="app-card-strong">
       <div className="panel-heading">
@@ -2385,6 +2456,13 @@ function SubcontractLabourPanel({ items, calculatedDays, onChange, title = "Subc
           const labourCost = item.rate * labourQty;
           const mobilisationCost = item.mobilisationCost * item.mobilisations;
           const daysOverridden = item.priceType === "day" && item.days !== calculatedDays;
+          const programmeDays = item.priceType === "day" ? item.days || calculatedDays : calculatedDays;
+          const calculatedWeekendDays = weekendDaysForProgramme(programmeDays, 5, weekendDaysPerWeek);
+          const calculatedNonWorkingDays = nonWorkingDaysForProgramme(programmeDays, weekendDaysPerWeek);
+          const weekendUpliftDays = resolvedWeekendUpliftDays(item, programmeDays, weekendDaysPerWeek);
+          const weekendDaysOverridden = item.weekendUpliftDays != null && item.weekendUpliftDays !== calculatedWeekendDays;
+          const adjustmentSell = subcontractAdjustmentSell(item, programmeDays, weekendDaysPerWeek);
+          const totalSell = (labourCost * (1 + item.margin)) + (mobilisationCost * (1 + item.mobilisationMargin)) + adjustmentSell;
           return (
             <div className="grid min-w-0 gap-4 rounded-xl border border-slate-200 bg-slate-50 p-4" key={index}>
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2403,10 +2481,33 @@ function SubcontractLabourPanel({ items, calculatedDays, onChange, title = "Subc
                 <NumberInput label="Mobilisation Cost" value={item.mobilisationCost} onChange={(v) => update(index, { mobilisationCost: v, mobilisations: v > 0 && item.mobilisations <= 0 ? 1 : item.mobilisations })} />
                 <NumberInput label="No. of Mobilisations" value={item.mobilisations} step={1} onChange={(v) => update(index, { mobilisations: v })} />
                 <NumberInput label="Mobilisation Markup %" value={item.mobilisationMargin * 100} onChange={(v) => update(index, { mobilisationMargin: v / 100 })} />
-                <Mini label="Total Subcontract Sell" value={money((labourCost * (1 + item.margin)) + (mobilisationCost * (1 + item.mobilisationMargin)))} />
+                <Mini label="Total Subcontract Sell" value={money(totalSell)} />
               </div>
               {item.mobilisationCost > 0 && item.mobilisations <= 0 && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-950">Mobilisation cost has been entered but the number of mobilisations is zero.</div>}
-              {showStandby && <div className="grid gap-4 rounded-lg border border-sky-200 bg-sky-50 p-3 sm:grid-cols-3"><NumberInput label="Stand-Down Budget / Day" value={item.standbyRate ?? 0} onChange={(standbyRate) => update(index, { standbyRate })} /><NumberInput label="Stand-Down Markup %" value={(item.standbyMargin ?? item.margin) * 100} onChange={(value) => update(index, { standbyMargin: value / 100 })} /><Mini label="Stand-Down Sell / Day" value={money((item.standbyRate ?? 0) * (1 + (item.standbyMargin ?? item.margin)))} /></div>}
+              <details className="rounded-lg border border-sky-200 bg-sky-50 p-3">
+                <summary className="cursor-pointer list-none text-sm font-bold text-sky-950">Advanced subcontract adjustments <span className="ml-2 text-xs font-semibold text-sky-700">{adjustmentSell > 0 ? money(adjustmentSell) : "Optional"}</span></summary>
+                <div className="mt-3 grid gap-4">
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <Mini label="Calculated Weekend Days" value={`${calculatedWeekendDays}`} />
+                    <Mini label="Calculated Non-Working Days" value={`${calculatedNonWorkingDays}`} />
+                    <Mini label="Adjustment Sell" value={money(adjustmentSell)} />
+                  </div>
+                  <p className="text-xs leading-5 text-sky-900">Non-working days are a programme guide only. They are not charged unless entered below as standby days.</p>
+                  <div className="grid gap-3 rounded-lg border border-sky-200 bg-white p-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <NumberInput label="Standby Days Charged" value={item.standbyDays ?? 0} step={1} onChange={(standbyDays) => update(index, { standbyDays })} />
+                    <NumberInput label="Standby Budget / Day" value={item.standbyRate ?? 0} onChange={(standbyRate) => update(index, { standbyRate })} />
+                    <NumberInput label="Standby Markup %" value={(item.standbyMargin ?? item.margin) * 100} onChange={(value) => update(index, { standbyMargin: value / 100 })} />
+                    <Mini label="Standby Sell" value={money((item.standbyDays ?? 0) * (item.standbyRate ?? 0) * (1 + (item.standbyMargin ?? item.margin)))} />
+                  </div>
+                  <div className={`grid gap-3 rounded-lg border bg-white p-3 sm:grid-cols-2 xl:grid-cols-4 ${weekendDaysOverridden ? "border-amber-300" : "border-sky-200"}`}>
+                    <div><NumberInput label="Weekend Uplift Days" value={weekendUpliftDays} step={1} onChange={(value) => update(index, { weekendUpliftDays: value === calculatedWeekendDays ? null : value })} />{item.weekendUpliftDays != null && <button className="mt-2 text-xs font-bold text-sky-700" onClick={() => update(index, { weekendUpliftDays: null })}>Reset to calculated {calculatedWeekendDays}</button>}</div>
+                    <NumberInput label="Weekend Uplift Budget / Day" value={item.weekendUpliftRate ?? 0} onChange={(weekendUpliftRate) => update(index, { weekendUpliftRate })} />
+                    <NumberInput label="Weekend Uplift Markup %" value={(item.weekendUpliftMargin ?? item.margin) * 100} onChange={(value) => update(index, { weekendUpliftMargin: value / 100 })} />
+                    <Mini label="Weekend Uplift Sell" value={money(weekendUpliftDays * (item.weekendUpliftRate ?? 0) * (1 + (item.weekendUpliftMargin ?? item.margin)))} />
+                  </div>
+                  {weekendDaysOverridden && <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-bold text-amber-950">Weekend uplift days overridden from calculated {calculatedWeekendDays} to {weekendUpliftDays}.</div>}
+                </div>
+              </details>
             </div>
           );
         })}
@@ -2514,7 +2615,7 @@ function ProjectDetail({ project, tab, setTab, actuals, setActuals, saveActuals,
       {deleteOpen && <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-labelledby="delete-project-title">
         <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl">
           <h2 className="text-xl font-bold text-slate-950" id="delete-project-title">Move project to the recycle bin?</h2>
-          <p className="mt-2 text-sm text-slate-600">The costing, actuals, notes and history are retained. A company administrator can restore it from Project Search.</p>
+          <p className="mt-2 text-sm text-slate-600">The costing, actuals, notes and history are retained. A company administrator can restore it from Company Admin.</p>
           <div className="mt-4"><Text label="Reason" value={deletionReason} onChange={setDeletionReason} /></div>
           <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Type <b>{project.inputs.projectReference || project.id}</b> to confirm.</div>
           <div className="mt-4"><Text label="Project reference" value={deleteConfirmation} onChange={setDeleteConfirmation} /></div>
@@ -2879,6 +2980,19 @@ function LineTable({ lines }: { lines: Line[] }) {
     const markup = line.cost ? line.margin / line.cost * 100 : 0;
     return <tr key={`${line.item}-${index}`}><td>{line.section}</td><td className="min-w-[220px] font-semibold">{line.item}</td><td>{money(line.rate)} / {line.unit}</td><td>{line.quantity}</td><td>{money(line.cost)}</td><td>{percent(markup)}</td><td>{money(line.discount)}</td><td className="font-bold">{money(line.total)}</td></tr>;
   })}</tbody></table></div>;
+}
+
+function ProjectArchive({ deletedProjects, restore, purge }: { deletedProjects: ProjectRecord[]; restore: (project: ProjectRecord) => Promise<void>; purge: (project: ProjectRecord) => Promise<void> }) {
+  const auth = useAuth();
+  const [busyProjectId, setBusyProjectId] = useState("");
+  const [purgeTarget, setPurgeTarget] = useState<ProjectRecord | null>(null);
+  const [purgeConfirmation, setPurgeConfirmation] = useState("");
+  if (!hasPermission(auth.role, "projects.delete")) return null;
+  return <details className="app-card-strong mt-5" open={false}>
+    <summary className="cursor-pointer list-none px-5 py-4 font-bold text-slate-900"><span className="flex items-center justify-between gap-3"><span className="flex items-center gap-2"><Trash2 size={17} />Archived Projects</span><span className="rounded-full bg-slate-100 px-2 py-1 text-xs text-slate-600">{deletedProjects.length}</span></span></summary>
+    <div className="border-t border-slate-200"><p className="px-5 py-3 text-sm text-slate-600">Archived projects are excluded from the Dashboard but retain their costing, actuals and activity history.</p><div className="table-shell border-0"><table><thead><tr><th>Project</th><th>Module</th><th>Archived</th><th>Reason</th><th>Actions</th></tr></thead><tbody>{deletedProjects.map((project) => <tr key={project.id}><td><b>{project.inputs.projectReference || "Draft"}</b><div className="text-xs text-slate-500">{project.inputs.client} - {project.inputs.location}</div></td><td>{project.inputs.costingModule ?? "remedial"}</td><td>{project.deletedAt ? formatDateTime(project.deletedAt) : "-"}</td><td>{project.deletionReason || "No reason recorded"}</td><td><div className="flex flex-wrap gap-2"><button className="secondary-button" disabled={busyProjectId === project.id} onClick={async () => { try { setBusyProjectId(project.id); await restore(project); } finally { setBusyProjectId(""); } }}>{busyProjectId === project.id ? "Restoring..." : "Restore"}</button>{auth.role === "super_admin" && <button className="secondary-button border-red-200 text-red-700 hover:bg-red-50" disabled={busyProjectId === project.id} onClick={() => { setPurgeTarget(project); setPurgeConfirmation(""); }}>Delete Permanently</button>}</div></td></tr>)}{!deletedProjects.length && <tr><td colSpan={5} className="py-8 text-center text-sm text-slate-500">There are no archived projects.</td></tr>}</tbody></table></div></div>
+    {purgeTarget && <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/55 p-4" role="dialog" aria-modal="true" aria-labelledby="purge-project-title"><div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl"><h2 className="text-xl font-bold text-slate-950" id="purge-project-title">Permanently delete archived project?</h2><p className="mt-2 text-sm text-slate-600">This is restricted to super admins and cannot be undone. All saved costing, actuals, notes and history will be removed.</p><div className="mt-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900">Type <b>{purgeTarget.inputs.projectReference || purgeTarget.id}</b> to confirm.</div><div className="mt-4"><Text label="Project reference" value={purgeConfirmation} onChange={setPurgeConfirmation} /></div><div className="mt-5 flex flex-wrap justify-end gap-2"><button className="secondary-button" disabled={busyProjectId === purgeTarget.id} onClick={() => setPurgeTarget(null)}>Cancel</button><button className="primary-button bg-red-700 hover:bg-red-800" disabled={busyProjectId === purgeTarget.id || purgeConfirmation.trim() !== (purgeTarget.inputs.projectReference || purgeTarget.id)} onClick={async () => { try { setBusyProjectId(purgeTarget.id); await purge(purgeTarget); setPurgeTarget(null); } finally { setBusyProjectId(""); } }}><Trash2 size={16} />{busyProjectId === purgeTarget.id ? "Deleting..." : "Delete Permanently"}</button></div></div></div>}
+  </details>;
 }
 
 function SearchView({ projects, deletedProjects, open, edit, restore, purge }: { projects: ProjectRecord[]; deletedProjects: ProjectRecord[]; open: (project: ProjectRecord) => void; edit: (project: ProjectRecord) => void; restore: (project: ProjectRecord) => Promise<void>; purge: (project: ProjectRecord) => Promise<void> }) {

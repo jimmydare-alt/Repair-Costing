@@ -305,13 +305,25 @@ function log(existing: ChangeLogEntry[] | undefined, actor: string, action: stri
 }
 
 function makeRevision(input: ProjectInput, calculations: ProjectRecord["calculations"], rates: AdminRates, repairCatalog: RepairCatalog): QuoteRevision {
-  return { id: uid(), label: input.revision || "Revision", createdAt: now(), proposalTotal: calculations.proposalTotal, budgetCost: calculations.budgetCost, budgetMargin: calculations.budgetMargin, discountPercentage: input.costingModule === "survey" ? input.survey?.discountPercentage ?? 0 : input.discountPercentage, inputs: input, calculations, rates, repairCatalog, calculationVersion: input.costingModule === "survey" ? "survey-1.1" : "remedial-6.2" };
+  return { id: uid(), label: input.revision || "Revision", createdAt: now(), proposalTotal: calculations.proposalTotal, budgetCost: calculations.budgetCost, budgetMargin: calculations.budgetMargin, discountPercentage: input.costingModule === "survey" ? input.survey?.discountPercentage ?? 0 : input.discountPercentage, inputs: input, calculations, rates, repairCatalog, calculationVersion: input.costingModule === "survey" ? "survey-1.1" : "remedial-6.3" };
+}
+
+function normaliseSubcontractor(item: ProjectInput["repairs"]["repairSubcontractors"][number]) {
+  return {
+    ...item,
+    standbyDays: asNumber(item.standbyDays, 0),
+    standbyRate: asNumber(item.standbyRate, 0),
+    standbyMargin: asNumber(item.standbyMargin, item.margin ?? 0.3),
+    weekendUpliftDays: item.weekendUpliftDays == null ? null : asNumber(item.weekendUpliftDays, 0),
+    weekendUpliftRate: asNumber(item.weekendUpliftRate, 0),
+    weekendUpliftMargin: asNumber(item.weekendUpliftMargin, item.margin ?? 0.3)
+  };
 }
 
 function normaliseRepairSubcontractors(input?: Partial<ProjectInput>) {
-  if (input?.repairs?.repairSubcontractors?.length) return input.repairs.repairSubcontractors;
+  if (input?.repairs?.repairSubcontractors?.length) return input.repairs.repairSubcontractors.map(normaliseSubcontractor);
   if (input?.repairs?.subcontractors?.length) {
-    return input.repairs.subcontractors.map((item) => ({
+    return input.repairs.subcontractors.map((item) => normaliseSubcontractor({
       name: item.name,
       priceType: item.unit === "day" ? "day" as const : "lump sum" as const,
       rate: item.rate,
@@ -322,12 +334,12 @@ function normaliseRepairSubcontractors(input?: Partial<ProjectInput>) {
       mobilisationMargin: 0.3
     }));
   }
-  return emptyInput.repairs.repairSubcontractors;
+  return emptyInput.repairs.repairSubcontractors.map(normaliseSubcontractor);
 }
 
 function normaliseSubcontractors(items: unknown, fallbackName: string) {
-  if (Array.isArray(items) && items.length) return items as ProjectInput["repairs"]["repairSubcontractors"];
-  return [{ name: fallbackName, priceType: "lump sum" as const, rate: 0, days: 0, margin: 0.3, mobilisationCost: 0, mobilisations: 0, mobilisationMargin: 0.3 }];
+  if (Array.isArray(items) && items.length) return (items as ProjectInput["repairs"]["repairSubcontractors"]).map(normaliseSubcontractor);
+  return [normaliseSubcontractor({ name: fallbackName, priceType: "lump sum" as const, rate: 0, days: 0, margin: 0.3, mobilisationCost: 0, mobilisations: 0, mobilisationMargin: 0.3 })];
 }
 
 function normaliseAdditionalItems(items: unknown): ProjectInput["additionalItems"] {
@@ -437,7 +449,13 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
     screedingDays: Number(team.screedingDays ?? (team.screed ? screedingDays : 0)),
     grindingDays: Number(team.grindingDays ?? (team.grind ? grindingDays : 0)),
     margin: asNumber(team.margin, 0.3),
-    mobilisationMargin: asNumber(team.mobilisationMargin, 0.3)
+    mobilisationMargin: asNumber(team.mobilisationMargin, 0.3),
+    standbyDays: asNumber(team.standbyDays, 0),
+    standbyRate: asNumber(team.standbyRate, 0),
+    standbyMargin: asNumber(team.standbyMargin, team.margin ?? 0.3),
+    weekendUpliftDays: team.weekendUpliftDays == null ? null : asNumber(team.weekendUpliftDays, 0),
+    weekendUpliftRate: asNumber(team.weekendUpliftRate, 0),
+    weekendUpliftMargin: asNumber(team.weekendUpliftMargin, team.margin ?? 0.3)
   }));
   return {
     ...emptyInput,
@@ -500,6 +518,12 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
       totalDaysOnSite: screedDays,
       materialShippingMargin: asNumber(savedScreeding.materialShippingMargin, emptyInput.screeding.materialShippingMargin),
       equipmentShippingMargin: asNumber(savedScreeding.equipmentShippingMargin, emptyInput.screeding.equipmentShippingMargin),
+      screedToppingUnits: asNumber(savedScreeding.screedToppingUnits, 0),
+      screedToppingRate: asNumber(savedScreeding.screedToppingRate, 0),
+      screedToppingMargin: asNumber(savedScreeding.screedToppingMargin, emptyInput.screeding.screedToppingMargin),
+      screedToppingContingency: asNumber(savedScreeding.screedToppingContingency, 0),
+      screedToppingWaste: asNumber(savedScreeding.screedToppingWaste, 0),
+      additionalMaterials: Array.isArray(savedScreeding.additionalMaterials) ? savedScreeding.additionalMaterials.map((item) => ({ ...item, plCategory: "Materials" as const })) : [],
       productionLabourMode: savedScreeding.productionLabourMode ?? "subcontract",
       productionLabourDays: Number(savedScreeding.productionLabourDays ?? 0),
       productionTravelMode: legacyMode(savedScreeding.productionTravelMode, savedScreeding.productionTravelDays, savedScreeding.productionOneWayKm),
@@ -581,7 +605,7 @@ export async function saveProject(input: ProjectInput, rates: AdminRates, existi
     actuals: existing?.actuals,
     rateSnapshot: rates,
     repairCatalogSnapshot: repairCatalog,
-    calculationVersion: inputs.costingModule === "survey" ? "survey-1.1" : "remedial-6.2",
+    calculationVersion: inputs.costingModule === "survey" ? "survey-1.1" : "remedial-6.3",
     revisions: normaliseProjectStatus(status) === "Costing Complete"
       ? [...(existing?.revisions ?? []), makeRevision(inputs, calculations, rates, repairCatalog)]
       : existing?.revisions ?? [],

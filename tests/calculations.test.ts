@@ -729,11 +729,108 @@ describe("FACE GmbH v2 contracting calculations", () => {
     expect(screedMaterialUnits(100, 0, 0)).toBe(100);
     expect(screedMaterialUnits(10, 0.05, 0.05)).toBe(11);
     expect(screedMaterialUnits(20, 0.05, 0.05)).toBe(22);
-    expect(result.proposalLines.find((row) => row.item === "Screed material")?.originalTotal).toBe(5000);
+    expect(result.proposalLines.find((row) => row.item === "Screed base")?.originalTotal).toBe(5000);
     expect(result.proposalLines.find((row) => row.item === "Primer")?.originalTotal).toBe(3960);
     expect(result.proposalLines.find((row) => row.item === "Sand")?.originalTotal).toBe(220);
     expect(result.proposalTotal).toBe(9180);
     expect(result.budgetCost).toBe(7344);
+  });
+
+  it("prices subcontract standby and weekend uplift separately without charging non-working guide days", () => {
+    const input: ProjectInput = {
+      ...emptyInput,
+      includeGrinding: true,
+      grinding: {
+        ...emptyInput.grinding,
+        enabled: true,
+        estimatedDays: 8,
+        weekendDaysPerWeek: 1,
+        productionLabourMode: "subcontract",
+        productionSubcontractors: [{
+          name: "Weekend crew",
+          priceType: "lump sum",
+          rate: 1000,
+          days: 0,
+          margin: 0.3,
+          mobilisationCost: 0,
+          mobilisations: 0,
+          mobilisationMargin: 0.3,
+          standbyDays: 2,
+          standbyRate: 200,
+          standbyMargin: 0.25,
+          weekendUpliftDays: null,
+          weekendUpliftRate: 100,
+          weekendUpliftMargin: 0.2
+        }]
+      }
+    };
+    const result = calculateProject(input, defaultRates);
+    const standby = result.proposalLines.find((row) => row.item === "Weekend crew standby");
+    const weekend = result.proposalLines.find((row) => row.item === "Weekend crew weekend uplift");
+    expect(standby).toMatchObject({ quantity: 2, cost: 400, total: 500, plCategory: "Subcontract" });
+    expect(weekend).toMatchObject({ quantity: 1, cost: 100, total: 120, plCategory: "Subcontract" });
+    expect(result.proposalLines.some((row) => row.item.includes("non-working"))).toBe(false);
+    expect(result.budgetCost).toBe(1500);
+    expect(result.proposalTotal).toBe(1920);
+  });
+
+  it("keeps manual screeding materials and project-only additions in Materials", () => {
+    const input: ProjectInput = {
+      ...emptyInput,
+      includeScreeding: true,
+      screeding: {
+        ...emptyInput.screeding,
+        enabled: true,
+        productionLabourMode: "subcontract",
+        surveyorLabourMode: "subcontract",
+        teams: [],
+        surveyorSubcontractors: [],
+        screedMaterialBags: 10,
+        screedMaterialRate: 20,
+        screedMaterialMargin: 0.1,
+        screedToppingUnits: 5,
+        screedToppingRate: 30,
+        screedToppingMargin: 0.2,
+        primerUnits: 2,
+        primerRate: 10,
+        primerMargin: 0.25,
+        sandBags: 3,
+        sandRate: 5,
+        sandMargin: 0.1,
+        materialShipping: 100,
+        materialShippingMargin: 0.3,
+        additionalMaterials: [{ name: "Fibres", unit: "bag", quantity: 4, rate: 7, margin: 0.5, plCategory: "Materials" }]
+      }
+    };
+    const result = calculateProject(input, defaultRates);
+    expect(result.budgetCost).toBe(513);
+    expect(result.proposalTotal).toBe(613.5);
+    expect(result.proposalLines.find((row) => row.item === "Screed topping")).toMatchObject({ quantity: 5, cost: 150, total: 180, plCategory: "Materials" });
+    expect(result.proposalLines.find((row) => row.item === "Fibres")).toMatchObject({ quantity: 4, cost: 28, total: 42, plCategory: "Materials" });
+    expect(result.proposalLines.filter((row) => ["Screed base", "Screed topping", "Primer", "Sand", "Shipping of materials", "Fibres"].includes(row.item)).every((row) => row.plCategory === "Materials")).toBe(true);
+  });
+
+  it("applies screeding production standby and weekend uplift per subcontractor", () => {
+    const input: ProjectInput = {
+      ...emptyInput,
+      includeScreeding: true,
+      screeding: {
+        ...emptyInput.screeding,
+        enabled: true,
+        preparationDays: 4,
+        screedingDays: 2,
+        weekendDaysPerWeek: 1,
+        productionLabourMode: "subcontract",
+        surveyorLabourMode: "subcontract",
+        surveyorSubcontractors: [],
+        teams: [{ enabled: true, contractorName: "Prep crew", scabble: false, prep: true, screed: true, grind: false, mobilisation: 0, mobilisationMargin: 0.3, priceType: "lump sum", daysProgrammed: 6, preparationDays: 4, screedingDays: 2, grindingDays: 0, rate: 3000, margin: 0.2, standbyDays: 1, standbyRate: 500, standbyMargin: 0.1, weekendUpliftDays: null, weekendUpliftRate: 250, weekendUpliftMargin: 0.2 }]
+      }
+    };
+    const result = calculateProject(input, defaultRates);
+    expect(result.proposalLines.find((row) => row.item.includes("Prep crew standby"))).toMatchObject({ quantity: 1, cost: 500, total: 550, plCategory: "Subcontract" });
+    expect(result.proposalLines.find((row) => row.item.includes("Prep crew weekend uplift"))).toMatchObject({ quantity: 1, cost: 250, total: 300, plCategory: "Subcontract" });
+    expect(result.budgetCost).toBe(3750);
+    expect(result.proposalTotal).toBe(4450);
   });
 
   it("uses service-specific USA grinding surveyor rates", () => {

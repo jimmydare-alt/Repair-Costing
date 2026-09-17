@@ -146,6 +146,12 @@ export type ScreedTeam = {
   grindingDays: number;
   rate: number;
   margin: number;
+  standbyDays?: number;
+  standbyRate?: number;
+  standbyMargin?: number;
+  weekendUpliftDays?: number | null;
+  weekendUpliftRate?: number;
+  weekendUpliftMargin?: number;
 };
 
 export type ScreedScope = {
@@ -211,6 +217,11 @@ export type ScreedScope = {
   screedMaterialMargin: number;
   screedMaterialContingency: number;
   screedMaterialWaste: number;
+  screedToppingUnits: number;
+  screedToppingRate: number;
+  screedToppingMargin: number;
+  screedToppingContingency: number;
+  screedToppingWaste: number;
   primerUnits: number;
   primerRate: number;
   primerMargin: number;
@@ -223,6 +234,7 @@ export type ScreedScope = {
   sandWaste: number;
   materialShipping: number;
   materialShippingMargin: number;
+  additionalMaterials: AdditionalItem[];
   teams: ScreedTeam[];
   generatorDays: number;
   largeGeneratorRequired: boolean;
@@ -343,6 +355,10 @@ export type RepairSubcontractor = {
   mobilisationMargin: number;
   standbyRate?: number;
   standbyMargin?: number;
+  standbyDays?: number;
+  weekendUpliftDays?: number | null;
+  weekendUpliftRate?: number;
+  weekendUpliftMargin?: number;
 };
 
 export type RemedialWorkPackage = {

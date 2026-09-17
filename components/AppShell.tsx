@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
-import { Building2, Calculator, LayoutDashboard, Plus, Search, Settings, Shield, Wrench } from "lucide-react";
+import { Building2, Calculator, LayoutDashboard, Plus, Settings, Shield, Wrench } from "lucide-react";
 import { useAuth } from "@/lib/authContext";
 import { hasPermission, type AppModuleKey } from "@/lib/company";
 import type { CostingModule, View } from "@/lib/types";
@@ -24,7 +24,6 @@ type NavItem = {
 
 export const shellNav: NavItem[] = [
   { view: "Dashboard", href: "/", moduleKey: "dashboard", group: "Workspace", icon: <LayoutDashboard /> },
-  { view: "Project Search", href: "/project-search", moduleKey: "projects", group: "Workspace", icon: <Search /> },
   { view: "Company Admin", href: "/company-admin", moduleKey: "company_admin", group: "Workspace", icon: <Building2 /> },
   { view: "New Project", href: "/survey/new-project", moduleKey: "survey_costing", group: "Costing Builder", icon: <Calculator /> },
   { view: "New Project", href: "/new-project", moduleKey: "remedial_costing", group: "Costing Builder", icon: <Plus /> },

@@ -23,8 +23,12 @@ export function packageCode(index: number) {
 function normaliseSubcontractor(item: RepairSubcontractor): RepairSubcontractor {
   return {
     ...item,
+    standbyDays: Number(item.standbyDays ?? 0),
     standbyRate: Number(item.standbyRate ?? 0),
-    standbyMargin: Number(item.standbyMargin ?? item.margin ?? 0.3)
+    standbyMargin: Number(item.standbyMargin ?? item.margin ?? 0.3),
+    weekendUpliftDays: item.weekendUpliftDays == null ? null : Number(item.weekendUpliftDays),
+    weekendUpliftRate: Number(item.weekendUpliftRate ?? 0),
+    weekendUpliftMargin: Number(item.weekendUpliftMargin ?? item.margin ?? 0.3)
   };
 }
 
@@ -88,7 +92,17 @@ export function normaliseWorkPackages(items: unknown, source: ProjectInput = emp
       } : undefined,
       screeding: item.screeding ? {
         ...clone(source.screeding), ...item.screeding, enabled: true,
-        surveyorSubcontractors: (item.screeding.surveyorSubcontractors ?? source.screeding.surveyorSubcontractors).map(normaliseSubcontractor)
+        surveyorSubcontractors: (item.screeding.surveyorSubcontractors ?? source.screeding.surveyorSubcontractors).map(normaliseSubcontractor),
+        teams: (item.screeding.teams ?? source.screeding.teams).map((team) => ({
+          ...team,
+          standbyDays: Number(team.standbyDays ?? 0),
+          standbyRate: Number(team.standbyRate ?? 0),
+          standbyMargin: Number(team.standbyMargin ?? team.margin ?? 0.3),
+          weekendUpliftDays: team.weekendUpliftDays == null ? null : Number(team.weekendUpliftDays),
+          weekendUpliftRate: Number(team.weekendUpliftRate ?? 0),
+          weekendUpliftMargin: Number(team.weekendUpliftMargin ?? team.margin ?? 0.3)
+        })),
+        additionalMaterials: Array.isArray(item.screeding.additionalMaterials) ? item.screeding.additionalMaterials : []
       } : undefined,
       repairs: item.repairs ? {
         ...clone(source.repairs), ...item.repairs, enabled: true,
