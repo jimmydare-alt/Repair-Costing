@@ -30,6 +30,7 @@ export type AppModuleKey =
   | "time_tracking"
   | "company_admin"
   | "survey_costing"
+  | "qa_costing"
   | "remedial_costing";
 
 export type Permission =

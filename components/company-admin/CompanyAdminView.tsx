@@ -336,8 +336,8 @@ export function CompanyAdminView() {
       distance_unit: newCompanyDistanceUnit, office_count: newCompanyOfficeCount, primary_colour: "#0067a6", accent_colour: "#20a7d8", dark_colour: "#07182f", soft_colour: "#e9eef5"
     }).select("id").single();
     if (error || !data) { setMessage(error?.message ?? "Company was not created."); return; }
-    const { data: appModules } = await client.from("app_modules").select("id");
-    if (appModules?.length) await client.from("company_modules").insert(appModules.map((module) => ({ company_id: data.id, module_id: module.id, enabled: true })));
+    const { data: appModules } = await client.from("app_modules").select("id,module_key");
+    if (appModules?.length) await client.from("company_modules").insert(appModules.map((module) => ({ company_id: data.id, module_id: module.id, enabled: module.module_key !== "qa_costing" })));
     await client.from("admin_rates").insert({ company_id: data.id, rates: {} });
     await client.from("repair_catalogs").insert({ company_id: data.id });
     setNewCompanyName("");

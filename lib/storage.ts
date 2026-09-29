@@ -8,6 +8,8 @@ import { createBrowserSupabaseClient, isSupabaseConfigured } from "./supabaseCli
 import type { AdminRates, ChangeLogEntry, PackageSelection, PLActuals, ProjectInput, ProjectNote, ProjectRecord, ProjectStatus, ProjectTimeEntry, QuoteRevision, RateVersionRecord, RepairCatalog } from "./types";
 import { calculateSurveyProject } from "./costing/survey/calculations";
 import { normaliseSurveyInput, normaliseSurveyRates } from "./costing/survey/defaults";
+import { calculateQaProject } from "./costing/qa/calculations";
+import { normaliseQaInput, normaliseQaRates } from "./costing/qa/defaults";
 import { normaliseWorkPackages } from "./workPackages";
 
 const PROJECTS_KEY = "face-gmbh-contracting-projects-v2";
@@ -162,7 +164,8 @@ function normaliseRates(saved: Partial<AdminRates>): AdminRates {
     grindingPlanerDayRate,
     materialMargin: saved.materialMargin === undefined || saved.materialMargin === 0.2 ? defaultRates.materialMargin : saved.materialMargin,
     rateMargins,
-    surveyRates: normaliseSurveyRates(saved.surveyRates)
+    surveyRates: normaliseSurveyRates(saved.surveyRates),
+    qaRates: normaliseQaRates(saved.qaRates)
   };
 }
 
@@ -304,8 +307,13 @@ function log(existing: ChangeLogEntry[] | undefined, actor: string, action: stri
   return [{ id: uid(), createdAt: now(), actor, action, detail }, ...(existing ?? [])].slice(0, 200);
 }
 
+function calculationVersion(module: ProjectInput["costingModule"]) {
+  return module === "survey" ? "survey-1.2" : module === "qa" ? "qa-1.0" : "remedial-6.3";
+}
+
 function makeRevision(input: ProjectInput, calculations: ProjectRecord["calculations"], rates: AdminRates, repairCatalog: RepairCatalog): QuoteRevision {
-  return { id: uid(), label: input.revision || "Revision", createdAt: now(), proposalTotal: calculations.proposalTotal, budgetCost: calculations.budgetCost, budgetMargin: calculations.budgetMargin, discountPercentage: input.costingModule === "survey" ? input.survey?.discountPercentage ?? 0 : input.discountPercentage, inputs: input, calculations, rates, repairCatalog, calculationVersion: input.costingModule === "survey" ? "survey-1.2" : "remedial-6.3" };
+  const discountPercentage = input.costingModule === "survey" ? input.survey?.discountPercentage ?? 0 : input.costingModule === "qa" ? input.qa?.discountPercentage ?? 0 : input.discountPercentage;
+  return { id: uid(), label: input.revision || "Revision", createdAt: now(), proposalTotal: calculations.proposalTotal, budgetCost: calculations.budgetCost, budgetMargin: calculations.budgetMargin, discountPercentage, inputs: input, calculations, rates, repairCatalog, calculationVersion: calculationVersion(input.costingModule) };
 }
 
 function normaliseSubcontractor(item: ProjectInput["repairs"]["repairSubcontractors"][number]) {
@@ -439,7 +447,8 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
   const grindingDays = Number(savedScreeding.grindingDays ?? savedScreeding.primerDays ?? 0);
   const activityDays = preparationDays + screedingDays + grindingDays;
   const screedDays = Number(savedScreeding.totalDaysOnSite ?? 0) || activityDays;
-  const officeCount: ProjectInput["officeCount"] = input?.officeCount === 2 || Number(input?.survey?.secondaryOfficeDistanceOneWay) > 0 ? 2 : 1;
+  const costingModule = input?.costingModule === "survey" ? "survey" : input?.costingModule === "qa" ? "qa" : "remedial";
+  const officeCount: ProjectInput["officeCount"] = input?.officeCount === 2 || Number(input?.survey?.secondaryOfficeDistanceOneWay) > 0 || input?.qa?.officeCount === 2 ? 2 : 1;
   const legacyMode = (mode: ProjectInput["projectManagement"]["travelMode"] | undefined, ...values: unknown[]) => mode ?? (values.some((value) => Number(value) > 0) ? "Drive" : "None");
   const normalisedTeams = (savedScreeding.teams ?? []).filter((team) => team.enabled !== false || Boolean(team.contractorName || team.rate || team.mobilisation || team.prep || team.screed || team.grind)).map((team) => ({
     ...team,
@@ -460,7 +469,7 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
   return {
     ...emptyInput,
     ...(input ?? {}),
-    costingModule: input?.costingModule === "survey" ? "survey" : "remedial",
+    costingModule,
     distanceUnit: input?.distanceUnit === "miles" ? "miles" : "km",
     officeCount,
     quoteCurrency: input?.quoteCurrency ?? emptyInput.quoteCurrency,
@@ -547,7 +556,9 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
       repairLines: Array.isArray(input?.repairs?.repairLines) ? input.repairs.repairLines : []
     },
     additionalItems: normaliseAdditionalItems(input?.additionalItems),
-    survey: input?.costingModule === "survey" ? normaliseSurveyInput(input.survey, input.quoteCurrency ?? "EUR", input.distanceUnit === "miles" ? "miles" : "km", officeCount) : input?.survey
+    survey: costingModule === "survey" ? normaliseSurveyInput(input?.survey, input?.quoteCurrency ?? "EUR", input?.distanceUnit === "miles" ? "miles" : "km", officeCount) : input?.survey,
+    qa: costingModule === "qa" ? normaliseQaInput(input?.qa, input?.quoteCurrency ?? "EUR", input?.distanceUnit === "miles" ? "miles" : "km", officeCount) : input?.qa,
+    linkedProjectIds: Array.isArray(input?.linkedProjectIds) ? input.linkedProjectIds.map(String) : []
   };
 }
 
@@ -589,7 +600,9 @@ export async function saveProject(input: ProjectInput, rates: AdminRates, existi
   const inputs = normaliseInput(input);
   const calculations = inputs.costingModule === "survey" && inputs.survey
     ? calculateSurveyProject(inputs.survey, rates.surveyRates)
-    : calculateProject(inputs, rates, repairCatalog);
+    : inputs.costingModule === "qa" && inputs.qa
+      ? calculateQaProject(inputs.qa, rates.qaRates)
+      : calculateProject(inputs, rates, repairCatalog);
   const savedActor = actorName(actor);
   const companyId = activeCompanyId();
   const record: ProjectRecord = {
@@ -605,7 +618,7 @@ export async function saveProject(input: ProjectInput, rates: AdminRates, existi
     actuals: existing?.actuals,
     rateSnapshot: rates,
     repairCatalogSnapshot: repairCatalog,
-    calculationVersion: inputs.costingModule === "survey" ? "survey-1.2" : "remedial-6.3",
+    calculationVersion: calculationVersion(inputs.costingModule),
     revisions: normaliseProjectStatus(status) === "Costing Complete"
       ? [...(existing?.revisions ?? []), makeRevision(inputs, calculations, rates, repairCatalog)]
       : existing?.revisions ?? [],
@@ -779,7 +792,7 @@ export function rowToProject(row: Record<string, unknown>, actuals?: PLActuals):
   const { __costingSnapshot, ...inputValues } = storedInputs;
   const inputs = normaliseInput(inputValues);
   const storedCalculations = row.calculations as ProjectRecord["calculations"];
-  const calculations = inputs.costingModule === "survey" ? storedCalculations : normaliseStoredCalculations(storedCalculations);
+  const calculations = inputs.costingModule === "remedial" ? normaliseStoredCalculations(storedCalculations) : storedCalculations;
   const revisions = Array.isArray(row.revisions) ? row.revisions as QuoteRevision[] : [];
   const latestRevision = revisions[revisions.length - 1];
   const storedRateSnapshot = __costingSnapshot?.rates ?? latestRevision?.rates;
@@ -893,6 +906,44 @@ export async function saveProjectPackageSelection(projectId: string, selectedPac
   }
   if (isSupabaseConfigured()) requireCloudContext("Saving a client package selection");
   writeJson(PROJECTS_KEY, projects.map((project) => project.id === projectId ? updated : project));
+  return updated;
+}
+
+export async function saveLinkedProjectSelection(projectId: string, selectedProjectIds: string[], actor = "System", reason = "") {
+  const projects = await loadProjects();
+  const current = projects.find((project) => project.id === projectId);
+  if (!current || current.inputs.costingModule !== "qa") throw new Error("Open the linked QA costing before recording the client service selection.");
+  const validIds = new Set([current.id, ...(current.inputs.linkedProjectIds ?? []), ...(current.inputs.qa?.linkedProjectIds ?? [])]);
+  const selectedIds = Array.from(new Set(selectedProjectIds.filter((id) => validIds.has(id))));
+  if (!selectedIds.length) throw new Error("Select at least one service before confirming the client package.");
+  if (current.packageSelection && !reason.trim()) throw new Error("Add a reason before changing a confirmed client service selection.");
+
+  const confirmedAt = now();
+  const confirmedBy = actorName(actor);
+  const packageSelection: PackageSelection = { selectedPackageIds: selectedIds, confirmedAt, confirmedBy, reason: reason.trim() };
+  const labels = projects.filter((project) => selectedIds.includes(project.id)).map((project) => project.calculations.serviceSummary).join(", ");
+  const updated: ProjectRecord = {
+    ...current,
+    packageSelection,
+    updatedBy: confirmedBy,
+    changeLog: log(current.changeLog, confirmedBy, current.packageSelection ? "Linked service selection changed" : "Linked service selection confirmed", `${labels}${reason.trim() ? ` / ${reason.trim()}` : ""}`)
+  };
+
+  const supabase = await supabaseContext();
+  if (supabase) {
+    const row = projectToRow(updated, supabase.session.user.id);
+    const { error } = await supabase.client.from("projects").update({
+      inputs: row.inputs,
+      change_log: row.change_log,
+      updated_by: supabase.session.user.id,
+      updated_at: confirmedAt
+    }).eq("id", projectId).eq("company_id", supabase.companyId);
+    if (error) throw new Error(`Could not save the linked service selection: ${error.message}`);
+    return updated;
+  }
+  if (isSupabaseConfigured()) requireCloudContext("Saving the linked service selection");
+  const all = readJson<ProjectRecord[]>(PROJECTS_KEY, []);
+  writeJson(PROJECTS_KEY, all.map((project) => project.id === projectId ? updated : project));
   return updated;
 }
 

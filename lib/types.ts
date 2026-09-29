@@ -11,7 +11,7 @@ export type OfficeCount = 1 | 2;
 export type Section = "Labour" | "Travel" | "Hotel" | "Subsistence" | "Equipment" | "Materials" | "Subcontract" | "Repairs" | "Haulage" | "Reports" | "Additional items";
 export type PLCategory = "Labour" | "Subcontract" | "Materials" | "Equipment" | "Travel" | "Hotel/Subsistence" | "Haulage";
 export type ProjectServiceKey = "Grinding" | "Screeding" | "Repairs";
-export type CostingModule = "remedial" | "survey";
+export type CostingModule = "remedial" | "survey" | "qa";
 export type DistanceUnit = "km" | "miles";
 export type RemedialPricingMode = "combined" | "selectable";
 export type PackagePricingBasis = "fixed" | "day_rate";
@@ -472,12 +472,15 @@ export type ProjectInput = {
     screedPage?: "Programme" | "Labour" | "Materials" | "Tools & Review";
     repairPage?: "Details" | "Labour" | "Review";
     surveyStep?: "Project" | "Scope" | "Team" | "Travel & Stay" | "Extras & Review";
+    qaStep?: "Project" | "Areas" | "Review";
   };
   grinding: GrindingScope;
   screeding: ScreedScope;
   repairs: RepairsScope;
   additionalItems: AdditionalItem[];
   survey?: import("./costing/survey/types").SurveyInput;
+  qa?: import("./costing/qa/types").QaInput;
+  linkedProjectIds?: string[];
 };
 
 export type AdminRates = {
@@ -590,6 +593,7 @@ export type AdminRates = {
   repairWasteSkip: number;
   rateMargins?: Partial<Record<string, number>>;
   surveyRates?: import("./costing/survey/types").SurveyAdminRates;
+  qaRates?: import("./costing/qa/types").QaAdminRates;
 };
 
 export type Line = {
@@ -616,7 +620,7 @@ export type CommercialRateSchedule = {
   workPackageId?: string;
   workPackageCode?: string;
   workPackageName: string;
-  service: "Survey" | ProjectServiceKey;
+  service: "Survey" | "QA" | ProjectServiceKey;
   pricingBasis: PackagePricingBasis;
   estimatedDays: number;
   productiveBudgetRate: number;
@@ -704,6 +708,7 @@ export type ProjectCalculations = {
   packageSummaries?: WorkPackageCalculationSummary[];
   rateSchedules?: CommercialRateSchedule[];
   survey?: import("./costing/survey/types").SurveyCalculationDetails;
+  qa?: import("./costing/qa/types").QaCalculationDetails;
 };
 
 export type PLActuals = {

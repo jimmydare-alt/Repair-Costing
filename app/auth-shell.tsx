@@ -24,9 +24,9 @@ function LoginGate({ children }: { children: React.ReactNode }) {
       <main className="auth-page">
         <section className="auth-brand">
           <Image src="/cogri-group-logo.png" alt="CoGri Group" width={150} height={122} style={{ width: "150px", height: "auto" }} priority />
-          <p>SURVEY &amp; REMEDIAL COSTING PLATFORM</p>
-          <h1>Build survey and remedial costings in one secure workspace.</h1>
-          <span>Price surveys, repairs, grinding and screeding with controlled company rates, delivery budgets, P&amp;L actuals and secure cloud storage.</span>
+          <p>SURVEY, QA &amp; REMEDIAL COSTING PLATFORM</p>
+          <h1>Build survey, QA and remedial costings in one secure workspace.</h1>
+          <span>Price surveys, QA reviews, site supervision, repairs, grinding and screeding with controlled company rates, delivery budgets, P&amp;L actuals and secure cloud storage.</span>
         </section>
         <section className="auth-card">
           <div className="auth-tabs">

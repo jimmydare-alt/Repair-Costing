@@ -1,6 +1,7 @@
 import type { AdminRates, ProjectInput, ScreedTeam } from "./types";
 import { createRepairLine } from "./repairCatalog";
 import { defaultSurveyRates } from "./costing/survey/defaults";
+import { defaultQaRates } from "./costing/qa/defaults";
 
 const screedTeam = (): ScreedTeam => ({
   enabled: true,
@@ -221,7 +222,8 @@ export const defaultRates: AdminRates = {
   repairDiamondToolingWeekly: 75,
   repairWasteSkip: 400,
   rateMargins: defaultRateMargins,
-  surveyRates: defaultSurveyRates
+  surveyRates: defaultSurveyRates,
+  qaRates: defaultQaRates
 };
 
 export const emptyInput: ProjectInput = {
@@ -236,6 +238,7 @@ export const emptyInput: ProjectInput = {
   projectType: "",
   pricingMode: "combined",
   selectionConfirmed: false,
+  linkedProjectIds: [],
   sharedCosts: [],
   workPackages: [],
   activeWorkPackageId: "",

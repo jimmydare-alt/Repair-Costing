@@ -26,18 +26,21 @@ export const shellNav: NavItem[] = [
   { view: "Dashboard", href: "/", moduleKey: "dashboard", group: "Workspace", icon: <LayoutDashboard /> },
   { view: "Company Admin", href: "/company-admin", moduleKey: "company_admin", group: "Workspace", icon: <Building2 /> },
   { view: "New Project", href: "/survey/new-project", moduleKey: "survey_costing", group: "Costing Builder", icon: <Calculator /> },
+  { view: "New Project", href: "/qa/new-project", moduleKey: "qa_costing", group: "Costing Builder", icon: <Shield /> },
   { view: "New Project", href: "/new-project", moduleKey: "remedial_costing", group: "Costing Builder", icon: <Plus /> },
   { view: "New Project", href: "/grinding", moduleKey: "remedial_costing", group: "Costing Builder", icon: <Wrench /> },
   { view: "New Project", href: "/screeding", moduleKey: "remedial_costing", group: "Costing Builder", icon: <Calculator /> },
   { view: "New Project", href: "/repairs", moduleKey: "remedial_costing", group: "Costing Builder", icon: <Wrench /> },
   { view: "Admin Rates", href: "/admin-rates", moduleKey: "admin_rates", group: "Admin", icon: <Settings /> },
   { view: "Admin Rates", href: "/admin-rates/survey", moduleKey: "admin_rates", group: "Admin", icon: <Calculator /> },
+  { view: "Admin Rates", href: "/admin-rates/qa", moduleKey: "admin_rates", group: "Admin", icon: <Shield /> },
   { view: "Admin Rates", href: "/admin-rates/repair-types", moduleKey: "repair_database", group: "Admin", icon: <Shield /> },
   { view: "Admin Rates", href: "/admin-rates/repair-materials", moduleKey: "repair_database", group: "Admin", icon: <Shield /> }
 ];
 
 function navLabel(item: NavItem) {
   if (item.href === "/survey/new-project") return "Survey Project";
+  if (item.href === "/qa/new-project") return "QA Project";
   if (item.href === "/new-project") return "Project Setup";
   if (item.href === "/grinding") return "Grinding";
   if (item.href === "/screeding") return "Screeding";
@@ -45,10 +48,11 @@ function navLabel(item: NavItem) {
   if (item.href.includes("repair-types")) return "Repair Types";
   if (item.href.includes("repair-materials")) return "Repair Materials";
   if (item.href === "/admin-rates/survey") return "Survey Rates";
+  if (item.href === "/admin-rates/qa") return "QA Rates";
   return item.view;
 }
 
-export function ProductShell({ view, pathname, selectedContext, activeServices = { grinding: false, screeding: false, repairs: false }, activeCostingModule = "remedial", activeBuilderStep, activeAdminTab, onNewProject, onCostingModule, onBuilderStep, onAdminTab, canNavigate = () => true, children }: { view: View; pathname: string; selectedContext?: string; activeServices?: ActiveServices; activeCostingModule?: CostingModule; activeBuilderStep?: string; activeAdminTab?: "Rates" | "Survey Rates" | "Repair Types" | "Repair Materials"; onNewProject?: () => void; onCostingModule?: (module: CostingModule) => void; onBuilderStep?: (step: "Project" | "Services" | "Grinding" | "Screeding" | "Repairs") => void; onAdminTab?: (tab: "Rates" | "Survey Rates" | "Repair Types" | "Repair Materials") => void; canNavigate?: (href: string) => boolean; children: ReactNode }) {
+export function ProductShell({ view, pathname, selectedContext, activeServices = { grinding: false, screeding: false, repairs: false }, activeCostingModule = "remedial", activeBuilderStep, activeAdminTab, onNewProject, onCostingModule, onBuilderStep, onAdminTab, canNavigate = () => true, children }: { view: View; pathname: string; selectedContext?: string; activeServices?: ActiveServices; activeCostingModule?: CostingModule; activeBuilderStep?: string; activeAdminTab?: "Rates" | "Survey Rates" | "QA Rates" | "Repair Types" | "Repair Materials"; onNewProject?: () => void; onCostingModule?: (module: CostingModule) => void; onBuilderStep?: (step: "Project" | "Services" | "Grinding" | "Screeding" | "Repairs") => void; onAdminTab?: (tab: "Rates" | "Survey Rates" | "QA Rates" | "Repair Types" | "Repair Materials") => void; canNavigate?: (href: string) => boolean; children: ReactNode }) {
   const auth = useAuth();
   const [open, setOpen] = useState(false);
   const configuredLogo = auth.activeCompany.branding.logoPath;
@@ -58,8 +62,10 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
     if (item.moduleKey === "company_admin") return auth.enabledModules.includes("company_admin") && hasPermission(auth.role, "company.manage");
     if (!auth.enabledModules.includes(item.moduleKey)) return false;
     if (item.href === "/admin-rates/survey" && !auth.enabledModules.includes("survey_costing")) return false;
+    if (item.href === "/admin-rates/qa" && !auth.enabledModules.includes("qa_costing")) return false;
     if ((item.href.includes("repair-types") || item.href.includes("repair-materials")) && !auth.enabledModules.includes("remedial_costing")) return false;
     if (item.moduleKey === "survey_costing") return activeCostingModule === "survey";
+    if (item.moduleKey === "qa_costing") return activeCostingModule === "qa";
     if (item.moduleKey === "remedial_costing" && activeCostingModule !== "remedial") return false;
     if (item.href === "/grinding") return activeServices.grinding;
     if (item.href === "/screeding") return activeServices.screeding;
@@ -72,7 +78,7 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
       <aside className="app-sidebar">
         <Link href="/" className="app-brand" onClick={(event) => { if (!canNavigate("/")) { event.preventDefault(); return; } close(); }}>
           <Image src={logo} alt={auth.activeCompany.name} width={84} height={46} priority />
-          <span><b>Costing Workspace</b><small>SURVEY &amp; REMEDIAL</small></span>
+          <span><b>Costing Workspace</b><small>SURVEY, QA &amp; REMEDIAL</small></span>
         </Link>
         <div className="app-nav-scroll">
           {groups.map((group) => {
@@ -80,7 +86,7 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
             if (!items.length) return null;
             return <div key={group} className="app-nav-group"><p className="app-nav-label">{group}</p><nav className="app-nav">{items.map((item, index) => {
               const builderStep = item.href === "/new-project" ? "Project" : item.href === "/grinding" ? "Grinding" : item.href === "/screeding" ? "Screeding" : item.href === "/repairs" ? "Repairs" : undefined;
-              const adminTab = item.href === "/admin-rates" ? "Rates" : item.href === "/admin-rates/survey" ? "Survey Rates" : item.href.includes("repair-types") ? "Repair Types" : item.href.includes("repair-materials") ? "Repair Materials" : undefined;
+              const adminTab = item.href === "/admin-rates" ? "Rates" : item.href === "/admin-rates/survey" ? "Survey Rates" : item.href === "/admin-rates/qa" ? "QA Rates" : item.href.includes("repair-types") ? "Repair Types" : item.href.includes("repair-materials") ? "Repair Materials" : undefined;
               const active = builderStep && view === "New Project" ? activeBuilderStep === builderStep : adminTab && view === "Admin Rates" ? activeAdminTab === adminTab : pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href));
               return <Link key={`${item.href}-${index}`} href={item.href} className={active ? "active" : ""} onClick={(event) => {
                 if (builderStep && onBuilderStep) {
@@ -115,7 +121,7 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
           <div className="command-actions">
             <CostingModuleSwitch active={activeCostingModule} enabled={auth.enabledModules} onChange={(module) => { if (canNavigate(`module-${module}`)) onCostingModule?.(module); }} />
             {auth.companies.length > 1 && <select value={auth.activeCompany.id} onChange={(event) => { if (canNavigate("company-switch")) auth.switchCompany(event.target.value); }} className="command-select">{auth.companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select>}
-            <Link href={activeCostingModule === "survey" ? "/survey/new-project" : "/new-project"} className="command-new" onClick={(event) => { if (!canNavigate(activeCostingModule === "survey" ? "/survey/new-project" : "/new-project")) { event.preventDefault(); return; } if (onNewProject) { event.preventDefault(); onNewProject(); } }}><Plus size={16} />New Project</Link>
+            <Link href={moduleNewProjectHref(activeCostingModule)} className="command-new" onClick={(event) => { if (!canNavigate(moduleNewProjectHref(activeCostingModule))) { event.preventDefault(); return; } if (onNewProject) { event.preventDefault(); onNewProject(); } }}><Plus size={16} />New Project</Link>
             {auth.session && <button className="command-chip" onClick={() => { if (canNavigate("sign-out")) void auth.signOut(); }}><span className="system-dot" />Sign out</button>}
           </div>
         </header>
@@ -126,7 +132,11 @@ export function ProductShell({ view, pathname, selectedContext, activeServices =
 }
 
 function CostingModuleSwitch({ active, enabled, onChange }: { active: CostingModule; enabled: AppModuleKey[]; onChange: (module: CostingModule) => void }) {
-  const options = [{ key: "survey" as const, label: "Survey Costing", module: "survey_costing" as const }, { key: "remedial" as const, label: "Remedial Costing", module: "remedial_costing" as const }].filter((option) => enabled.includes(option.module));
+  const options = [{ key: "survey" as const, label: "Survey Costing", module: "survey_costing" as const }, { key: "qa" as const, label: "QA Costing", module: "qa_costing" as const }, { key: "remedial" as const, label: "Remedial Costing", module: "remedial_costing" as const }].filter((option) => enabled.includes(option.module));
   if (options.length < 2) return options.length ? <span className="module-single">{options[0].label}</span> : null;
   return <div className="module-switch" aria-label="Costing module">{options.map((option) => <button key={option.key} className={active === option.key ? "active" : ""} onClick={() => { if (option.key !== active) onChange(option.key); }}>{option.label}</button>)}</div>;
+}
+
+function moduleNewProjectHref(module: CostingModule) {
+  return module === "survey" ? "/survey/new-project" : module === "qa" ? "/qa/new-project" : "/new-project";
 }

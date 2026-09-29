@@ -3,7 +3,7 @@ import { normaliseProjectStatus } from "./workflow";
 
 export type DashboardFilters = {
   query: string;
-  module: "All" | "survey" | "remedial";
+  module: "All" | "survey" | "qa" | "remedial";
   status: string;
   service: string;
 };
