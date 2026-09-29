@@ -5,6 +5,24 @@ export type SurveyType = "AutoStore" | "Fmin" | "Exotec" | "Robotics" | "Level S
 export type SurveyorSupply = "In-house" | "Subcontracted";
 export type SurveyTravelMode = "Drive" | "Fly";
 export type SurveyAirportTransport = "N/A" | "Drive" | "Uber";
+export type SurveyEquipmentChargingBasis = "site_day" | "deployment";
+
+export type SurveyEquipmentCatalogItem = {
+  id: string;
+  name: string;
+  purchaseCost: number;
+  recoveryUnits: number;
+  budgetRate: number;
+  markup: number;
+  chargingBasis: SurveyEquipmentChargingBasis;
+  active: boolean;
+  checklistNotes: string;
+};
+
+export type SurveyEquipmentSelection = {
+  equipmentId: string;
+  quantity: number;
+};
 
 export type SurveyAdditionalItem = {
   id?: string;
@@ -54,12 +72,15 @@ export type SurveyInput = {
   hotelRequired: boolean;
   weekendDaysWorked: number;
   weekendDaysNotWorked: number;
+  /** Retained so historical survey projects keep their original calculation. */
   numberOfProfs: number;
+  selectedEquipment: SurveyEquipmentSelection[];
   primaryOfficeDistanceOneWay: number;
   secondaryOfficeDistanceOneWay: number;
   driveTimeOneWayDays: number;
   travelMode: SurveyTravelMode;
   numberOfCars: number;
+  numberOfCarsOverridden: boolean;
   airportTransport: SurveyAirportTransport;
   surveyReport: boolean;
   errorPlan: boolean;
@@ -124,6 +145,7 @@ export type SurveyAdminRates = {
   dailyOutputRoboticsArea: number;
   dailyOutputLevelSurveyArea: number;
   dailyOutputProfRunsOnly: number;
+  equipmentCatalog: SurveyEquipmentCatalogItem[];
 };
 
 export type SurveyCalculationDetails = {

@@ -56,3 +56,8 @@ export function changeSurveyType(input: SurveyInput, surveyType: SurveyType): Su
   for (const key of surveyQuantityKeys) next[key] = 0;
   return next;
 }
+
+export function defaultSurveyVehicleCount(input: SurveyInput, primaryDistance = input.primaryOfficeDistanceOneWay, secondaryDistance = input.secondaryOfficeDistanceOneWay) {
+  if (input.travelMode !== "Drive" || input.numberOfCarsOverridden || input.numberOfCars > 0) return input.numberOfCars;
+  return primaryDistance > 0 || secondaryDistance > 0 ? 1 : 0;
+}

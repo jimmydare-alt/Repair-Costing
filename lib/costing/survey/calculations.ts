@@ -78,11 +78,23 @@ export function calculateSurveyProject(input: SurveyInput, savedRates?: Partial<
     : 0;
   const airportDays = travelPackageRequired && input.travelMode === "Fly" && input.airportTransport === "Drive" ? days + safe(input.weekendDaysNotWorked) + 2 : 0;
   const airportReturns = travelPackageRequired && input.travelMode === "Fly" && input.airportTransport === "Uber" ? 1 : 0;
-  const carDays = travelPackageRequired && input.travelMode === "Drive" ? (input.hotelRequired ? travelDaysEach + days + safe(input.weekendDaysNotWorked) : days) * safe(input.numberOfCars) : 0;
-  const rentalDays = travelPackageRequired && input.travelMode === "Fly" ? (days + safe(input.weekendDaysNotWorked) + 2) * safe(input.numberOfCars) : 0;
+  const carProductiveDays = travelPackageRequired && input.travelMode === "Drive" ? days * safe(input.numberOfCars) : 0;
+  const carMobilisationDays = travelPackageRequired && input.travelMode === "Drive" && input.hotelRequired ? (travelDaysEach + safe(input.weekendDaysNotWorked)) * safe(input.numberOfCars) : 0;
+  const rentalProductiveDays = travelPackageRequired && input.travelMode === "Fly" ? days * safe(input.numberOfCars) : 0;
+  const rentalMobilisationDays = travelPackageRequired && input.travelMode === "Fly" ? (safe(input.weekendDaysNotWorked) + 2) * safe(input.numberOfCars) : 0;
   const weekendSurveyorDays = subcontracted ? 0 : safe(input.weekendDaysWorked) * surveyors;
-  const shippingQty = input.equipmentShippingRequired || (travelPackageRequired && input.travelMode === "Fly") ? 2 * safe(input.numberOfProfs) : 0;
-  const equipmentDays = days * safe(input.numberOfProfs);
+  const selectedEquipment = input.selectedEquipment
+    .map((selection) => ({ selection, equipment: rates.equipmentCatalog.find((item) => item.id === selection.equipmentId) }))
+    .filter((row): row is { selection: SurveyInput["selectedEquipment"][number]; equipment: SurveyAdminRates["equipmentCatalog"][number] } => Boolean(row.equipment));
+  const selectedEquipmentQuantity = selectedEquipment.reduce((sum, row) => sum + safe(row.selection.quantity), 0);
+  const legacyEquipmentQuantity = selectedEquipment.length ? 0 : safe(input.numberOfProfs);
+  const shippingEquipmentQuantity = selectedEquipmentQuantity || legacyEquipmentQuantity;
+  const shippingQty = input.equipmentShippingRequired || (travelPackageRequired && input.travelMode === "Fly") ? 2 * shippingEquipmentQuantity : 0;
+  const legacyEquipmentDays = days * legacyEquipmentQuantity;
+  const equipmentBudgetPerDay = selectedEquipment.filter((row) => row.equipment.chargingBasis === "site_day").reduce((sum, row) => sum + row.equipment.budgetRate * safe(row.selection.quantity), 0)
+    + rates.equipmentRentalBudgetDayRate * legacyEquipmentQuantity;
+  const equipmentProposalPerDay = selectedEquipment.filter((row) => row.equipment.chargingBasis === "site_day").reduce((sum, row) => sum + row.equipment.budgetRate * (1 + row.equipment.markup) * safe(row.selection.quantity), 0)
+    + rates.equipmentRentalBudgetDayRate * (1 + rates.equipmentRentalMarkup) * legacyEquipmentQuantity;
   const surveyorMarkup = input.potentialRemedials ? rates.surveyorRemedialsMarkup : rates.surveyorMarkup;
   const dayRateProject = input.pricingBasis === "day_rate";
   const subcontractQuantity = subcontracted ? (dayRateProject ? days : input.subcontractSurveyCost > 0 ? 1 : 0) : 0;
@@ -117,20 +129,23 @@ export function calculateSurveyProject(input: SurveyInput, savedRates?: Partial<
     proposalLine("Labour", "Weekend Surveyor", rates.weekendBudgetDayRate, "day", weekendSurveyorDays, rates.weekendMarkup, "Labour"),
     proposalLine("Subcontract", dayRateProject ? "Subcontracted Survey Productive Day" : "Subcontracted Survey Package", safe(input.subcontractSurveyCost), dayRateProject ? "day" : "item", subcontractQuantity, safe(input.subcontractSurveyMarkup), "Subcontract"),
     proposalLine("Subcontract", "Subcontracted Survey Mobilisation", safe(input.subcontractMobilisationCost), "item", dayRateProject && subcontracted && input.subcontractMobilisationCost > 0 ? 1 : 0, safe(input.subcontractMobilisationMarkup), "Subcontract", undefined, "mobilisation"),
-    proposalLine("Labour", "Surveyor Travel", rates.surveyorTravelBudgetDayRate, "day", surveyorTravelDays, rates.surveyorTravelMarkup, "Labour"),
-    proposalLine("Labour", "Labourer Travel", rates.labourerTravelBudgetDayRate, "day", labourerTravelDays, rates.labourerTravelMarkup, "Labour"),
-    proposalLine("Labour", "Project Manager Travel", rates.projectManagerTravelBudgetDayRate, "day", pmTravelDays, rates.projectManagerTravelMarkup, "Labour"),
-    proposalLine("Travel", input.distanceUnit === "miles" ? "Mileage" : "Kilometres", rates.distanceBudgetRate, distanceRateUnit(input.distanceUnit), distance, rates.distanceMarkup, "Travel"),
-    proposalLine("Travel", "Return Flight", rates.returnFlightBudgetRate, "flight", flights, rates.returnFlightMarkup, "Travel"),
-    proposalLine("Travel", "Return Airport Transfer", rates.airportUberBudgetRate, "return", airportReturns, rates.airportTransportMarkup, "Travel"),
-    proposalLine("Travel", "Airport Parking", rates.airportParkingBudgetDayRate, "day", airportDays, rates.airportTransportMarkup, "Travel"),
+    proposalLine("Labour", "Surveyor Travel", rates.surveyorTravelBudgetDayRate, "day", surveyorTravelDays, rates.surveyorTravelMarkup, "Labour", undefined, "mobilisation"),
+    proposalLine("Labour", "Labourer Travel", rates.labourerTravelBudgetDayRate, "day", labourerTravelDays, rates.labourerTravelMarkup, "Labour", undefined, "mobilisation"),
+    proposalLine("Labour", "Project Manager Travel", rates.projectManagerTravelBudgetDayRate, "day", pmTravelDays, rates.projectManagerTravelMarkup, "Labour", undefined, "mobilisation"),
+    proposalLine("Travel", input.distanceUnit === "miles" ? "Mileage" : "Kilometres", rates.distanceBudgetRate, distanceRateUnit(input.distanceUnit), distance, rates.distanceMarkup, "Travel", undefined, "mobilisation"),
+    proposalLine("Travel", "Return Flight", rates.returnFlightBudgetRate, "flight", flights, rates.returnFlightMarkup, "Travel", undefined, "mobilisation"),
+    proposalLine("Travel", "Return Airport Transfer", rates.airportUberBudgetRate, "return", airportReturns, rates.airportTransportMarkup, "Travel", undefined, "mobilisation"),
+    proposalLine("Travel", "Airport Parking", rates.airportParkingBudgetDayRate, "day", airportDays, rates.airportTransportMarkup, "Travel", undefined, "mobilisation"),
     proposalLine("Hotel", "Surveyor Hotel", rates.hotelBudgetNightRate, "night", surveyorHotelNights, rates.hotelMarkup, "Hotel/Subsistence"),
     proposalLine("Hotel", "Project Manager Hotel", rates.hotelBudgetNightRate, "night", pmHotelNights, rates.hotelMarkup, "Hotel/Subsistence"),
     proposalLine("Hotel", "Labourer Hotel", rates.hotelBudgetNightRate, "night", labourerHotelNights, rates.hotelMarkup, "Hotel/Subsistence"),
-    proposalLine("Haulage", "Equipment Shipping", rates.equipmentShippingBudgetRate, "one way", shippingQty, rates.equipmentShippingMarkup, "Haulage"),
-    proposalLine("Travel", "Company Car", rates.companyCarBudgetDayRate, "day", carDays, rates.companyCarMarkup, "Travel"),
-    proposalLine("Travel", "Car Rental", rates.carRentalBudgetDayRate, "day", rentalDays, rates.carRentalMarkup, "Travel"),
-    proposalLine("Equipment", "Equipment Rental", rates.equipmentRentalBudgetDayRate, "prof day", equipmentDays, rates.equipmentRentalMarkup, "Equipment"),
+    proposalLine("Haulage", "Equipment Shipping", rates.equipmentShippingBudgetRate, "one way", shippingQty, rates.equipmentShippingMarkup, "Haulage", undefined, "mobilisation"),
+    proposalLine("Travel", "Company Car", rates.companyCarBudgetDayRate, "day", carProductiveDays, rates.companyCarMarkup, "Travel"),
+    proposalLine("Travel", "Company Car - Mobilisation", rates.companyCarBudgetDayRate, "day", carMobilisationDays, rates.companyCarMarkup, "Travel", undefined, "mobilisation"),
+    proposalLine("Travel", "Car Rental", rates.carRentalBudgetDayRate, "day", rentalProductiveDays, rates.carRentalMarkup, "Travel"),
+    proposalLine("Travel", "Car Rental - Mobilisation", rates.carRentalBudgetDayRate, "day", rentalMobilisationDays, rates.carRentalMarkup, "Travel", undefined, "mobilisation"),
+    ...selectedEquipment.map(({ selection, equipment }) => proposalLine("Equipment", equipment.name, equipment.budgetRate, equipment.chargingBasis === "site_day" ? "equipment day" : "deployment", safe(selection.quantity) * (equipment.chargingBasis === "site_day" ? days : 1), equipment.markup, "Equipment")),
+    proposalLine("Equipment", "Equipment Rental", rates.equipmentRentalBudgetDayRate, "prof day", legacyEquipmentDays, rates.equipmentRentalMarkup, "Equipment"),
     proposalLine("Subsistence", "Surveyor Subsistence", rates.subsistenceBudgetDayRate, "day", surveyorSubsistenceDays, rates.subsistenceMarkup, "Hotel/Subsistence"),
     proposalLine("Subsistence", "Project Manager Subsistence", rates.subsistenceBudgetDayRate, "day", pmSubsistenceDays, rates.subsistenceMarkup, "Hotel/Subsistence"),
     proposalLine("Subsistence", "Labourer Subsistence", rates.subsistenceBudgetDayRate, "day", labourerSubsistenceDays, rates.subsistenceMarkup, "Hotel/Subsistence"),
@@ -141,25 +156,25 @@ export function calculateSurveyProject(input: SurveyInput, savedRates?: Partial<
   ];
 
   const productiveBudgetRate = subcontracted
-    ? money(safe(input.subcontractSurveyCost) / (dayRateProject ? 1 : Math.max(1, days)))
+    ? money(safe(input.subcontractSurveyCost) / (dayRateProject ? 1 : Math.max(1, days)) + equipmentBudgetPerDay)
     : money(
       rates.surveyorBudgetDayRate * surveyors
       + rates.labourerBudgetDayRate * labourers
       + (days ? rates.weekendBudgetDayRate * weekendSurveyorDays / days : 0)
       + (input.hotelRequired ? rates.hotelBudgetNightRate * standbyPeople : 0)
       + (input.hotelRequired ? rates.subsistenceBudgetDayRate * standbyPeople : 0)
-      + rates.equipmentRentalBudgetDayRate * safe(input.numberOfProfs)
+      + equipmentBudgetPerDay
       + (input.travelMode === "Drive" ? rates.companyCarBudgetDayRate * safe(input.numberOfCars) : rates.carRentalBudgetDayRate * safe(input.numberOfCars))
     );
   const calculatedProductiveProposalRate = subcontracted
-    ? money(safe(input.subcontractSurveyCost) * (1 + safe(input.subcontractSurveyMarkup)) / (dayRateProject ? 1 : Math.max(1, days)))
+    ? money(safe(input.subcontractSurveyCost) * (1 + safe(input.subcontractSurveyMarkup)) / (dayRateProject ? 1 : Math.max(1, days)) + equipmentProposalPerDay)
     : money(
       rates.surveyorBudgetDayRate * (1 + surveyorMarkup) * surveyors
       + rates.labourerBudgetDayRate * (1 + rates.labourerMarkup) * labourers
       + (days ? rates.weekendBudgetDayRate * (1 + rates.weekendMarkup) * weekendSurveyorDays / days : 0)
       + (input.hotelRequired ? rates.hotelBudgetNightRate * (1 + rates.hotelMarkup) * standbyPeople : 0)
       + (input.hotelRequired ? rates.subsistenceBudgetDayRate * (1 + rates.subsistenceMarkup) * standbyPeople : 0)
-      + rates.equipmentRentalBudgetDayRate * (1 + rates.equipmentRentalMarkup) * safe(input.numberOfProfs)
+      + equipmentProposalPerDay
       + (input.travelMode === "Drive" ? rates.companyCarBudgetDayRate * (1 + rates.companyCarMarkup) * safe(input.numberOfCars) : rates.carRentalBudgetDayRate * (1 + rates.carRentalMarkup) * safe(input.numberOfCars))
     );
   const calculatedStandbyBudgetRate = money(standbyBudgetPerDay);
@@ -185,11 +200,9 @@ export function calculateSurveyProject(input: SurveyInput, savedRates?: Partial<
   const budgetProfit = money(proposalTotal - budgetCost);
   const budgetMargin = proposalTotal ? money(budgetProfit / proposalTotal * 100) : 0;
   const budgetMarkup = budgetCost ? money(budgetProfit / budgetCost * 100) : 0;
-  const surveyPackageSell = discountedLines.filter((item) => !item.item.includes("Project Manager") && item.section !== "Reports" && item.section !== "Additional items" && !item.item.includes("Stand-down")).reduce((sum, item) => sum + item.total, 0);
-  const surveyPackageBudget = budgetLines.filter((item) => !item.item.includes("Project Manager") && item.section !== "Reports" && item.section !== "Additional items" && !item.item.includes("Stand-down")).reduce((sum, item) => sum + item.total, 0);
   const dailyRate = money(productiveProposalRate);
-  const mobilisationRate = dayRateProject ? money(Math.max(0, surveyPackageSell - productiveProposalRate * days)) : money(discountedLines.filter((item) => ["Travel", "Haulage", "Reports", "Additional items"].includes(item.section)).reduce((sum, item) => sum + item.total, 0));
-  const mobilisationBudget = dayRateProject ? money(Math.max(0, surveyPackageBudget - productiveBudgetRate * days)) : 0;
+  const mobilisationRate = money(discountedLines.filter((item) => item.costKind === "mobilisation").reduce((sum, item) => sum + item.total, 0));
+  const mobilisationBudget = money(budgetLines.filter((item) => item.costKind === "mobilisation").reduce((sum, item) => sum + item.total, 0));
   const standbyRate = money(standbyProposalRate);
   const details = { surveyType: input.surveyType, calculatedDayRequirement, calculatedSiteDays, siteDaysOverridden: hasSiteDaysOverride && days !== calculatedSiteDays, totalDaysOnSite: days, hotelNights, chargeableDistance: distance, distanceUnit: input.distanceUnit, surveyorDays, projectManagerDays: pmDays, labourerDays, surveyorTravelDays, projectManagerTravelDays: pmTravelDays, labourerTravelDays };
 
@@ -199,7 +212,7 @@ export function calculateSurveyProject(input: SurveyInput, savedRates?: Partial<
     phaseRows: [], proposalLines: discountedLines, budgetLines, repairMaterialCalcs: [], originalProposalTotal,
     discountAmount, proposalTotal, budgetCost, budgetProfit, budgetMargin, budgetMarkup, bdmBonusBudget: 0, bdmBonusRate: 0,
     proposalCompanyCurrency: proposalTotal, budgetCompanyCurrency: budgetCost, proposalGroupCurrency: proposalTotal,
-    budgetGroupCurrency: budgetCost, dailyRate, mobilisationRate, travelTotal: money(discountedLines.filter((item) => item.plCategory === "Travel").reduce((sum, item) => sum + item.total, 0)),
+    budgetGroupCurrency: budgetCost, dailyRate, mobilisationRate, mobilisationBudget, travelTotal: money(discountedLines.filter((item) => item.plCategory === "Travel").reduce((sum, item) => sum + item.total, 0)),
     haulageTotal: money(discountedLines.filter((item) => item.plCategory === "Haulage").reduce((sum, item) => sum + item.total, 0)), standbyRate,
     rateSchedules: [{ workPackageName: `Survey - ${input.surveyType}`, service: "Survey", pricingBasis: input.pricingBasis, estimatedDays: days, productiveBudgetRate, productiveProposalRate: dailyRate, productiveRateOverridden: dayRateProject && input.productiveRateOverride !== null, mobilisationBudget, mobilisationProposal: mobilisationRate, standbyBudgetRate: calculatedStandbyBudgetRate, standbyProposalRate: standbyRate, standbyRateOverridden: dayRateProject && input.standbyRateOverride !== null, expectedStandDownDays, overrideReason: dayRateProject ? input.rateOverrideReason : "" }],
     survey: details

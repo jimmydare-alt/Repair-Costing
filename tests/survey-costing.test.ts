@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { calculatePL, defaultActuals } from "@/lib/calculations";
 import { calculateSurveyDayRequirement, calculateSurveyProject, calculateSurveySiteDays } from "@/lib/costing/survey/calculations";
-import { createEmptySurveyInput, defaultSurveyRates } from "@/lib/costing/survey/defaults";
+import { createEmptySurveyInput, defaultSurveyRates, normaliseSurveyRates } from "@/lib/costing/survey/defaults";
 import { createSurveyProjectInput } from "@/lib/costing/survey/project";
 import { defaultCompanies, distanceRateUnit, distanceUnitCopy } from "@/lib/company";
 import { projectToRow, rowToProject } from "@/lib/storage";
 import { defaultRates } from "@/lib/rates";
 import type { ProjectRecord } from "@/lib/types";
-import { changeSurveyType, surveyFields } from "@/lib/costing/survey/rules";
+import { changeSurveyType, defaultSurveyVehicleCount, surveyFields } from "@/lib/costing/survey/rules";
+import { buildHandoverSummary } from "@/lib/handover";
 
 function inHouseSurvey() {
   return {
@@ -34,6 +35,7 @@ describe("separate Survey costing module", () => {
     const result = calculateSurveyProject(input, defaultSurveyRates);
     expect(input.surveyorsOnSite).toBe(0);
     expect(input.numberOfProfs).toBe(0);
+    expect(input.selectedEquipment).toEqual([]);
     expect(input.subcontractSurveyCost).toBe(0);
     expect(result.siteDays).toBe(0);
     expect(result.proposalTotal).toBe(0);
@@ -92,6 +94,71 @@ describe("separate Survey costing module", () => {
     expect(surveyor.total).toBe(8400);
     expect(surveyor.total).toBeCloseTo(surveyor.cost * (1 + defaultSurveyRates.surveyorMarkup), 2);
     expect(result.budgetMarkup).toBeGreaterThan(0);
+  });
+
+  it("prices multiple catalogue equipment quantities per site day or deployment", () => {
+    const rates = normaliseSurveyRates({
+      ...defaultSurveyRates,
+      equipmentCatalog: [
+        { id: "level-kit", name: "Level Survey Kit", purchaseCost: 10000, recoveryUnits: 200, budgetRate: 50, markup: 0.3, chargingBasis: "site_day", active: true, checklistNotes: "Include tripod" },
+        { id: "scanner", name: "Scanner", purchaseCost: 20000, recoveryUnits: 100, budgetRate: 200, markup: 0.25, chargingBasis: "deployment", active: true, checklistNotes: "Confirm calibration" }
+      ]
+    });
+    const input = { ...inHouseSurvey(), numberOfProfs: 0, selectedEquipment: [{ equipmentId: "level-kit", quantity: 2 }, { equipmentId: "scanner", quantity: 3 }] };
+    const result = calculateSurveyProject(input, rates);
+    const levelKit = result.proposalLines.find((line) => line.item === "Level Survey Kit")!;
+    const scanner = result.proposalLines.find((line) => line.item === "Scanner")!;
+    expect(result.siteDays).toBe(7);
+    expect(levelKit.quantity).toBe(14);
+    expect(levelKit.cost).toBe(700);
+    expect(levelKit.total).toBe(910);
+    expect(scanner.quantity).toBe(3);
+    expect(scanner.cost).toBe(600);
+    expect(scanner.total).toBe(750);
+  });
+
+  it("keeps catalogue equipment, reports and additional costs out of mobilisation", () => {
+    const rates = normaliseSurveyRates({ ...defaultSurveyRates, equipmentCatalog: [{ id: "level-kit", name: "Level Survey Kit", purchaseCost: 10000, recoveryUnits: 200, budgetRate: 50, markup: 0.3, chargingBasis: "site_day", active: true, checklistNotes: "" }] });
+    const input = {
+      ...createEmptySurveyInput("EUR", "km"),
+      projectReference: "SUR-MOB",
+      client: "Client",
+      location: "Site",
+      autoStoreArea: 1000,
+      surveyorsOnSite: 1,
+      selectedEquipment: [{ equipmentId: "level-kit", quantity: 1 }],
+      surveyReport: true,
+      additionalItems: [{ id: "extra", name: "Direct fee", rate: 100, unit: "item", quantity: 1, markup: 0.2, plCategory: "Equipment" as const }]
+    };
+    const result = calculateSurveyProject(input, rates);
+    expect(result.mobilisationRate).toBe(0);
+    expect(result.mobilisationBudget).toBe(0);
+    expect(result.proposalLines.find((line) => line.item === "Level Survey Kit")?.costKind).toBe("operating");
+    expect(result.proposalLines.find((line) => line.item === "Engineering Report")?.costKind).toBe("operating");
+  });
+
+  it("preserves the historical profiler total until an old project is deliberately changed", () => {
+    const legacy = calculateSurveyProject({ ...inHouseSurvey(), numberOfProfs: 2, selectedEquipment: [] }, defaultSurveyRates);
+    const catalogue = calculateSurveyProject({ ...inHouseSurvey(), numberOfProfs: 0, selectedEquipment: [{ equipmentId: "profiler-equipment", quantity: 2 }] }, defaultSurveyRates);
+    expect(legacy.proposalLines.find((line) => line.item === "Equipment Rental")?.total).toBe(3024);
+    expect(catalogue.proposalLines.find((line) => line.item === "Profiler Equipment")?.total).toBe(3024);
+    expect(catalogue.proposalTotal).toBe(legacy.proposalTotal);
+    expect(catalogue.budgetCost).toBe(legacy.budgetCost);
+  });
+
+  it("defaults a drive journey to one vehicle without overwriting a manual choice", () => {
+    const blank = createEmptySurveyInput("EUR", "km");
+    expect(defaultSurveyVehicleCount(blank, 100, 0)).toBe(1);
+    expect(defaultSurveyVehicleCount({ ...blank, numberOfCars: 2 }, 100, 0)).toBe(2);
+    expect(defaultSurveyVehicleCount({ ...blank, numberOfCarsOverridden: true }, 100, 0)).toBe(0);
+    expect(defaultSurveyVehicleCount({ ...blank, travelMode: "Fly" }, 100, 0)).toBe(0);
+  });
+
+  it("adds selected equipment quantities and notes to the PM handover checks", () => {
+    const rates = normaliseSurveyRates({ ...defaultSurveyRates, equipmentCatalog: [{ id: "level-kit", name: "Level Survey Kit", purchaseCost: 10000, recoveryUnits: 200, budgetRate: 50, markup: 0.3, chargingBasis: "site_day", active: true, checklistNotes: "Include tripod and charger" }] });
+    const inputs = createSurveyProjectInput("EUR", "km", { ...inHouseSurvey(), numberOfProfs: 0, selectedEquipment: [{ equipmentId: "level-kit", quantity: 2 }] });
+    const project: ProjectRecord = { id: "equipment-handover", companyId: "face", createdAt: "2026-09-29T00:00:00.000Z", status: "Costing Complete", accountsStatus: "Not Required", inputs, calculations: calculateSurveyProject(inputs.survey!, rates), rateSnapshot: { ...defaultRates, surveyRates: rates } };
+    expect(buildHandoverSummary(project).actions).toContain("Confirm 2 x Level Survey Kit - Include tripod and charger");
   });
 
   it("replaces the complete surveyor package when subcontracted and applies markup", () => {
