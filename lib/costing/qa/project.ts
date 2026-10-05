@@ -13,6 +13,9 @@ function clone<T>(value: T): T {
 export function createQaProjectInput(currency: CurrencyCode, distanceUnit: DistanceUnit, qa?: Partial<QaInput>, officeCount: OfficeCount = 1): ProjectInput {
   const qaInput = normaliseQaInput(qa ?? createEmptyQaInput(currency, distanceUnit, officeCount), currency, distanceUnit, officeCount);
   const surveyInput = createEmptySurveyInput(currency, distanceUnit, officeCount);
+  surveyInput.exchangeRateToCompanyCurrency = qaInput.exchangeRateToCompanyCurrency;
+  surveyInput.exchangeRateToGroupCurrency = qaInput.exchangeRateToGroupCurrency;
+  surveyInput.exchangeRateLockedAt = qaInput.exchangeRateLockedAt;
   return {
     ...clone(emptyInput),
     costingModule: "qa",
@@ -25,6 +28,9 @@ export function createQaProjectInput(currency: CurrencyCode, distanceUnit: Dista
     costedBy: qaInput.costedBy,
     projectType: "QA",
     quoteCurrency: qaInput.quoteCurrency,
+    exchangeRateToCompanyCurrency: qaInput.exchangeRateToCompanyCurrency,
+    exchangeRateToGroupCurrency: qaInput.exchangeRateToGroupCurrency,
+    exchangeRateLockedAt: qaInput.exchangeRateLockedAt,
     qa: qaInput,
     survey: surveyInput,
     pricingMode: "selectable",
@@ -33,7 +39,7 @@ export function createQaProjectInput(currency: CurrencyCode, distanceUnit: Dista
 }
 
 export function syncQaProjectInput(input: ProjectInput, qa: QaInput, survey?: SurveyInput): ProjectInput {
-  const surveyInput = survey ? normaliseSurveyInput({ ...survey, projectReference: qa.projectReference, client: qa.client, location: qa.location, revision: qa.revision, costedBy: qa.costedBy, quoteCurrency: qa.quoteCurrency, distanceUnit: qa.distanceUnit, officeCount: qa.officeCount }, qa.quoteCurrency, qa.distanceUnit, qa.officeCount) : input.survey;
+  const surveyInput = survey ? normaliseSurveyInput({ ...survey, projectReference: qa.projectReference, client: qa.client, location: qa.location, revision: qa.revision, costedBy: qa.costedBy, quoteCurrency: qa.quoteCurrency, exchangeRateToCompanyCurrency: qa.exchangeRateToCompanyCurrency, exchangeRateToGroupCurrency: qa.exchangeRateToGroupCurrency, exchangeRateLockedAt: qa.exchangeRateLockedAt, distanceUnit: qa.distanceUnit, officeCount: qa.officeCount }, qa.quoteCurrency, qa.distanceUnit, qa.officeCount) : input.survey;
   return {
     ...input,
     costingModule: "qa",
@@ -46,6 +52,9 @@ export function syncQaProjectInput(input: ProjectInput, qa: QaInput, survey?: Su
     costedBy: qa.costedBy,
     projectType: "QA",
     quoteCurrency: qa.quoteCurrency,
+    exchangeRateToCompanyCurrency: qa.exchangeRateToCompanyCurrency,
+    exchangeRateToGroupCurrency: qa.exchangeRateToGroupCurrency,
+    exchangeRateLockedAt: qa.exchangeRateLockedAt,
     qa,
     survey: surveyInput,
     pricingMode: qa.surveyIncluded || (qa.designReviewIncluded && qa.siteSupervisionIncluded) ? "selectable" : "combined",

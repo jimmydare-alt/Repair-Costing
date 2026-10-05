@@ -22,6 +22,9 @@ export function createSurveyProjectInput(currency: CurrencyCode, distanceUnit: D
     costedBy: surveyInput.costedBy,
     projectType: "Survey",
     quoteCurrency: surveyInput.quoteCurrency,
+    exchangeRateToCompanyCurrency: surveyInput.exchangeRateToCompanyCurrency,
+    exchangeRateToGroupCurrency: surveyInput.exchangeRateToGroupCurrency,
+    exchangeRateLockedAt: surveyInput.exchangeRateLockedAt,
     survey: surveyInput
   };
 }
@@ -39,6 +42,9 @@ export function syncSurveyProjectInput(input: ProjectInput, survey: SurveyInput)
     costedBy: survey.costedBy,
     projectType: "Survey",
     quoteCurrency: survey.quoteCurrency,
+    exchangeRateToCompanyCurrency: survey.exchangeRateToCompanyCurrency,
+    exchangeRateToGroupCurrency: survey.exchangeRateToGroupCurrency,
+    exchangeRateLockedAt: survey.exchangeRateLockedAt,
     survey
   };
 }

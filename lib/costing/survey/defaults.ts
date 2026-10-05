@@ -71,7 +71,8 @@ export const defaultSurveyRates: SurveyAdminRates = {
 
 export function createEmptySurveyInput(currency: CurrencyCode = "EUR", distanceUnit: DistanceUnit = "km", officeCount: OfficeCount = 1): SurveyInput {
   return {
-    projectReference: "", client: "", location: "", revision: "1", costedBy: "", quoteCurrency: currency, distanceUnit, officeCount,
+    projectReference: "", client: "", location: "", revision: "1", costedBy: "", quoteCurrency: currency,
+    exchangeRateToCompanyCurrency: 1, exchangeRateToGroupCurrency: 1, exchangeRateLockedAt: undefined, distanceUnit, officeCount,
     surveyType: "AutoStore", autoStoreArea: 0, fminRuns: 0, exotecRuns: 0, exotecArea: 0, roboticsArea: 0,
     levelSurveyArea: 0, profRunsOnly: 0, surveyorSupply: "In-house", subcontractSurveyCost: 0,
     subcontractSurveyMarkup: 0, subcontractMobilisationCost: 0, subcontractMobilisationMarkup: 0,
@@ -124,6 +125,9 @@ export function normaliseSurveyInput(saved: Partial<SurveyInput> | undefined, cu
     ...empty,
     ...(saved ?? {}),
     quoteCurrency: saved?.quoteCurrency ?? currency,
+    exchangeRateToCompanyCurrency: Number(saved?.exchangeRateToCompanyCurrency) > 0 ? Number(saved?.exchangeRateToCompanyCurrency) : 1,
+    exchangeRateToGroupCurrency: Number(saved?.exchangeRateToGroupCurrency) > 0 ? Number(saved?.exchangeRateToGroupCurrency) : 1,
+    exchangeRateLockedAt: saved?.exchangeRateLockedAt ? String(saved.exchangeRateLockedAt) : undefined,
     distanceUnit: saved?.distanceUnit ?? distanceUnit,
     officeCount: inferredOfficeCount,
     selectedEquipment: Array.isArray(saved?.selectedEquipment)

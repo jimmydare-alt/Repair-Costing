@@ -10,4 +10,9 @@ describe("Company Admin layout", () => {
     expect(view).toContain('className="app-card-strong repair-catalog-copy-card"');
     expect(styles).toMatch(/\.repair-catalog-copy-card\s*\{\s*grid-column:\s*1\s*\/\s*-1;/);
   });
+
+  it("lets super admins set the currencies available to project costings", () => {
+    expect(view).toContain("Allowed Project Currencies");
+    expect(view).toContain("allowedCurrencies");
+  });
 });

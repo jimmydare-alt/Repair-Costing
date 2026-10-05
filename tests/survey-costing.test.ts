@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { calculatePL, defaultActuals } from "@/lib/calculations";
 import { calculateSurveyDayRequirement, calculateSurveyProject, calculateSurveySiteDays } from "@/lib/costing/survey/calculations";
-import { createEmptySurveyInput, defaultSurveyRates, normaliseSurveyRates } from "@/lib/costing/survey/defaults";
+import { createEmptySurveyInput, defaultSurveyRates, normaliseSurveyInput, normaliseSurveyRates } from "@/lib/costing/survey/defaults";
 import { createSurveyProjectInput } from "@/lib/costing/survey/project";
 import { defaultCompanies, distanceRateUnit, distanceUnitCopy } from "@/lib/company";
 import { projectToRow, rowToProject } from "@/lib/storage";
@@ -94,6 +94,51 @@ describe("separate Survey costing module", () => {
     expect(surveyor.total).toBe(8400);
     expect(surveyor.total).toBeCloseTo(surveyor.cost * (1 + defaultSurveyRates.surveyorMarkup), 2);
     expect(result.budgetMarkup).toBeGreaterThan(0);
+  });
+
+  it("converts company admin rates into the quote currency once and reports company totals", () => {
+    const baseline = calculateSurveyProject(inHouseSurvey(), defaultSurveyRates);
+    const converted = calculateSurveyProject({
+      ...inHouseSurvey(),
+      quoteCurrency: "PLN",
+      exchangeRateToCompanyCurrency: 2,
+      exchangeRateToGroupCurrency: 3,
+      exchangeRateLockedAt: "2026-10-05T09:00:00.000Z"
+    }, defaultSurveyRates);
+
+    expect(converted.budgetCost).toBeCloseTo(baseline.budgetCost / 2, 6);
+    expect(Math.abs(converted.proposalTotal - baseline.proposalTotal / 2)).toBeLessThanOrEqual(0.01);
+    expect(converted.budgetCompanyCurrency).toBeCloseTo(baseline.budgetCost, 6);
+    expect(Math.abs(converted.proposalCompanyCurrency - baseline.proposalTotal)).toBeLessThan(0.011);
+    expect(converted.proposalGroupCurrency).toBeCloseTo(converted.proposalTotal * 3, 6);
+  });
+
+  it("keeps project-entered subcontract prices in the quote currency", () => {
+    const input = {
+      ...createEmptySurveyInput("PLN", "km"),
+      autoStoreArea: 1000,
+      surveyorSupply: "Subcontracted" as const,
+      subcontractSurveyCost: 5000,
+      subcontractSurveyMarkup: 0.3,
+      exchangeRateToCompanyCurrency: 2,
+      exchangeRateToGroupCurrency: 3
+    };
+    const result = calculateSurveyProject(input, defaultSurveyRates);
+    const subcontract = result.proposalLines.find((line) => line.item === "Subcontracted Survey Package")!;
+
+    expect(subcontract.cost).toBe(5000);
+    expect(subcontract.total).toBe(6500);
+    expect(result.budgetCompanyCurrency).toBe(10000);
+    expect(result.proposalCompanyCurrency).toBe(13000);
+  });
+
+  it("defaults legacy Survey exchange rates to one without changing historical values", () => {
+    const legacy = createEmptySurveyInput("EUR", "km") as Partial<ReturnType<typeof createEmptySurveyInput>>;
+    delete legacy.exchangeRateToCompanyCurrency;
+    delete legacy.exchangeRateToGroupCurrency;
+    const normalised = normaliseSurveyInput(legacy);
+    expect(normalised.exchangeRateToCompanyCurrency).toBe(1);
+    expect(normalised.exchangeRateToGroupCurrency).toBe(1);
   });
 
   it("prices multiple catalogue equipment quantities per site day or deployment", () => {

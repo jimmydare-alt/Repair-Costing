@@ -52,6 +52,7 @@ const accessAuditEvents = [
   "invitation_cancelled",
   "password_reset_link_generated"
 ];
+const supportedCurrencies: CurrencyCode[] = ["EUR", "GBP", "PLN", "USD"];
 
 function roleLabel(role: string) {
   return role.split("_").map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
@@ -97,6 +98,7 @@ export function CompanyAdminView() {
   const [companyName, setCompanyName] = useState(auth.activeCompany.name);
   const [defaultCurrency, setDefaultCurrency] = useState<CurrencyCode>(auth.activeCompany.defaultCurrency);
   const [reportingCurrency, setReportingCurrency] = useState<CurrencyCode>(auth.activeCompany.reportingCurrency);
+  const [allowedCurrencies, setAllowedCurrencies] = useState<CurrencyCode[]>(auth.activeCompany.allowedCurrencies);
   const [distanceUnit, setDistanceUnit] = useState<DistanceUnit>(auth.activeCompany.distanceUnit);
   const [officeCount, setOfficeCount] = useState<OfficeCount>(auth.activeCompany.officeCount);
   const [primaryColour, setPrimaryColour] = useState(auth.activeCompany.branding.primaryColour);
@@ -176,6 +178,7 @@ export function CompanyAdminView() {
     setCompanyName(auth.activeCompany.name);
     setDefaultCurrency(auth.activeCompany.defaultCurrency);
     setReportingCurrency(auth.activeCompany.reportingCurrency);
+    setAllowedCurrencies(auth.activeCompany.allowedCurrencies);
     setDistanceUnit(auth.activeCompany.distanceUnit);
     setOfficeCount(auth.activeCompany.officeCount);
     setPrimaryColour(auth.activeCompany.branding.primaryColour);
@@ -187,11 +190,12 @@ export function CompanyAdminView() {
 
   async function saveCompanyBasics() {
     if (!client || !canManageCompany) return;
+    const savedCurrencies = Array.from(new Set([...allowedCurrencies, defaultCurrency, reportingCurrency]));
     const { error } = await client.from("companies").update({
       name: companyName.trim(),
       default_currency: defaultCurrency,
       reporting_currency: reportingCurrency,
-      allowed_currencies: Array.from(new Set([defaultCurrency, reportingCurrency])),
+      allowed_currencies: savedCurrencies,
       distance_unit: distanceUnit,
       office_count: officeCount,
       primary_colour: primaryColour,
@@ -388,6 +392,7 @@ export function CompanyAdminView() {
   const groupCompany = auth.companies.find((company) => company.isSuperAdminCompany || company.name.toLowerCase() === "cogri group");
   const copyTargets = auth.companies.filter((company) => company.id !== groupCompany?.id && company.status === "active");
   const copyConfirmationPhrase = "COPY REPAIR CATALOGUE";
+  const effectiveAllowedCurrencies = Array.from(new Set([...allowedCurrencies, defaultCurrency, reportingCurrency]));
 
   return (
     <div className="company-admin-layout">
@@ -398,6 +403,7 @@ export function CompanyAdminView() {
           <TextField label="Company Name" value={companyName} onChange={(event) => setCompanyName(event.target.value)} />
           <SelectField label="Default Currency" value={defaultCurrency} onChange={(event) => setDefaultCurrency(event.target.value as CurrencyCode)}><option>EUR</option><option>GBP</option><option>PLN</option><option>USD</option></SelectField>
           <SelectField label="Reporting Currency" value={reportingCurrency} onChange={(event) => setReportingCurrency(event.target.value as CurrencyCode)}><option>EUR</option><option>GBP</option><option>PLN</option><option>USD</option></SelectField>
+          <div className="grid gap-1.5 text-xs font-bold uppercase text-slate-500 sm:col-span-2"><span>Allowed Project Currencies</span><div className="grid min-h-[48px] grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-white p-2 sm:grid-cols-4">{supportedCurrencies.map((currency) => { const required = currency === defaultCurrency || currency === reportingCurrency; const checked = effectiveAllowedCurrencies.includes(currency); return <label className={`flex items-center gap-2 rounded-lg px-3 py-2 normal-case ${checked ? "bg-slate-100 text-slate-900" : "text-slate-500"}`} key={currency}><input type="checkbox" checked={checked} disabled={!canManageCompany || required} onChange={(event) => setAllowedCurrencies((current) => event.target.checked ? Array.from(new Set([...current, currency])) : current.filter((item) => item !== currency))} /><span>{currency}</span></label>; })}</div><span className="normal-case font-medium text-slate-500">The default and reporting currencies are always included. Every selected currency is available when starting a costing.</span></div>
           <SelectField label="Distance Unit" value={distanceUnit} disabled={!canManageCompany} onChange={(event) => setDistanceUnit(event.target.value as DistanceUnit)}><option value="km">Kilometres (km)</option><option value="miles">Miles</option></SelectField>
           <SelectField label="Company Offices" value={String(officeCount)} disabled={!canManageCompany} onChange={(event) => setOfficeCount(Number(event.target.value) === 2 ? 2 : 1)}><option value="1">1 office</option><option value="2">2 offices</option></SelectField>
           <TextField label="Primary Colour" value={primaryColour} onChange={(event) => setPrimaryColour(event.target.value)} />

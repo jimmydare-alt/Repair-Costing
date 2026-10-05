@@ -41,6 +41,9 @@ export type SurveyInput = {
   revision: string;
   costedBy: string;
   quoteCurrency: CurrencyCode;
+  exchangeRateToCompanyCurrency: number;
+  exchangeRateToGroupCurrency: number;
+  exchangeRateLockedAt?: string;
   distanceUnit: DistanceUnit;
   officeCount: OfficeCount;
   surveyType: SurveyType;

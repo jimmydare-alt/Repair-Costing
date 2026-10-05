@@ -9,6 +9,26 @@ const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 10
 const safe = (value: number) => Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
 const output = (value: number, fallback: number) => value > 0 ? value : fallback;
 
+const monetaryRateKeys: Array<keyof SurveyAdminRates> = [
+  "surveyorBudgetDayRate", "surveyorTravelBudgetDayRate", "labourerBudgetDayRate", "labourerTravelBudgetDayRate",
+  "projectManagerBudgetDayRate", "projectManagerTravelBudgetDayRate", "weekendBudgetDayRate", "distanceBudgetRate",
+  "returnFlightBudgetRate", "airportUberBudgetRate", "airportParkingBudgetDayRate", "hotelBudgetNightRate",
+  "equipmentShippingBudgetRate", "companyCarBudgetDayRate", "carRentalBudgetDayRate", "equipmentRentalBudgetDayRate",
+  "subsistenceBudgetDayRate", "engineeringReportBudgetRate", "errorPlanBudgetRate", "standbySurveyorBudgetDayRate",
+  "standbyLabourerBudgetDayRate", "standbySubsistenceBudgetDayRate"
+];
+
+export function surveyRatesInQuoteCurrency(savedRates: Partial<SurveyAdminRates> | undefined, companyCurrencyPerQuoteCurrency: number) {
+  const rates = normaliseSurveyRates(savedRates);
+  const divisor = Number(companyCurrencyPerQuoteCurrency) > 0 ? Number(companyCurrencyPerQuoteCurrency) : 1;
+  const converted = { ...rates } as SurveyAdminRates;
+  monetaryRateKeys.forEach((key) => {
+    (converted[key] as number) = (rates[key] as number) / divisor;
+  });
+  converted.equipmentCatalog = rates.equipmentCatalog.map((item) => ({ ...item, budgetRate: item.budgetRate / divisor }));
+  return converted;
+}
+
 function rawSurveyDays(input: SurveyInput, rates: SurveyAdminRates) {
   return (isSurveyQuantityActive(input.surveyType, "autoStoreArea") ? safe(input.autoStoreArea) / output(rates.dailyOutputAutoStoreArea, defaultSurveyRates.dailyOutputAutoStoreArea) : 0)
     + (isSurveyQuantityActive(input.surveyType, "fminRuns") ? safe(input.fminRuns) / output(rates.dailyOutputFminRuns, defaultSurveyRates.dailyOutputFminRuns) : 0)
@@ -48,7 +68,9 @@ function proposalLine(section: Section, item: string, budgetRate: number, unit: 
 }
 
 export function calculateSurveyProject(input: SurveyInput, savedRates?: Partial<SurveyAdminRates>): SurveyCalculationResult {
-  const rates = normaliseSurveyRates(savedRates);
+  const companyExchange = Number(input.exchangeRateToCompanyCurrency) > 0 ? Number(input.exchangeRateToCompanyCurrency) : 1;
+  const groupExchange = Number(input.exchangeRateToGroupCurrency) > 0 ? Number(input.exchangeRateToGroupCurrency) : 1;
+  const rates = surveyRatesInQuoteCurrency(savedRates, companyExchange);
   const subcontracted = input.surveyorSupply === "Subcontracted";
   const pmRequired = Boolean(input.projectManagerRequired);
   const travelPackageRequired = !subcontracted || pmRequired;
@@ -211,8 +233,8 @@ export function calculateSurveyProject(input: SurveyInput, savedRates?: Partial<
     serviceSummary: `Survey - ${input.surveyType}`, grindingDays: 0, screedDays: 0, repairDays: 0, siteDays: days,
     phaseRows: [], proposalLines: discountedLines, budgetLines, repairMaterialCalcs: [], originalProposalTotal,
     discountAmount, proposalTotal, budgetCost, budgetProfit, budgetMargin, budgetMarkup, bdmBonusBudget: 0, bdmBonusRate: 0,
-    proposalCompanyCurrency: proposalTotal, budgetCompanyCurrency: budgetCost, proposalGroupCurrency: proposalTotal,
-    budgetGroupCurrency: budgetCost, dailyRate, mobilisationRate, mobilisationBudget, travelTotal: money(discountedLines.filter((item) => item.plCategory === "Travel").reduce((sum, item) => sum + item.total, 0)),
+    proposalCompanyCurrency: money(proposalTotal * companyExchange), budgetCompanyCurrency: money(budgetCost * companyExchange), proposalGroupCurrency: money(proposalTotal * groupExchange),
+    budgetGroupCurrency: money(budgetCost * groupExchange), dailyRate, mobilisationRate, mobilisationBudget, travelTotal: money(discountedLines.filter((item) => item.plCategory === "Travel").reduce((sum, item) => sum + item.total, 0)),
     haulageTotal: money(discountedLines.filter((item) => item.plCategory === "Haulage").reduce((sum, item) => sum + item.total, 0)), standbyRate,
     rateSchedules: [{ workPackageName: `Survey - ${input.surveyType}`, service: "Survey", pricingBasis: input.pricingBasis, estimatedDays: days, productiveBudgetRate, productiveProposalRate: dailyRate, productiveRateOverridden: dayRateProject && input.productiveRateOverride !== null, mobilisationBudget, mobilisationProposal: mobilisationRate, standbyBudgetRate: calculatedStandbyBudgetRate, standbyProposalRate: standbyRate, standbyRateOverridden: dayRateProject && input.standbyRateOverride !== null, expectedStandDownDays, overrideReason: dayRateProject ? input.rateOverrideReason : "" }],
     survey: details

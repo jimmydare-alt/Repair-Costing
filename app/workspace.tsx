@@ -1235,9 +1235,9 @@ function ProjectBasics({ input, setInput, duplicateReference }: { input: Project
         <Text label="Project Type" value={input.projectType} onChange={(v) => setInput({ ...input, projectType: v })} />
         <Text label="Revision" value={input.revision} onChange={(v) => setInput({ ...input, revision: v })} />
         <Text label="Costed By" value={input.costedBy} onChange={(v) => setInput({ ...input, costedBy: v })} />
-        <Select label="Costing Currency" value={input.quoteCurrency} options={currencies} onChange={(v) => setInput({ ...input, quoteCurrency: v as ProjectInput["quoteCurrency"], exchangeRateToCompanyCurrency: v === auth.activeCompany.defaultCurrency ? 1 : input.exchangeRateToCompanyCurrency, exchangeRateToGroupCurrency: v === auth.activeCompany.reportingCurrency ? 1 : input.exchangeRateToGroupCurrency, exchangeRateLockedAt: new Date().toISOString() })} />
+        <Select label="Costing Currency" value={input.quoteCurrency} options={currencies} onChange={(v) => setInput({ ...input, quoteCurrency: v as ProjectInput["quoteCurrency"], exchangeRateToCompanyCurrency: v === auth.activeCompany.defaultCurrency ? 1 : 0, exchangeRateToGroupCurrency: v === auth.activeCompany.reportingCurrency ? 1 : 0, exchangeRateLockedAt: new Date().toISOString() })} />
         <NumberInput label={`1 ${input.quoteCurrency} = Company ${auth.activeCompany.defaultCurrency}`} value={input.exchangeRateToCompanyCurrency} min={0.00000001} onChange={(v) => setInput({ ...input, exchangeRateToCompanyCurrency: v, exchangeRateLockedAt: new Date().toISOString() })} />
-        <NumberInput label={`1 ${input.quoteCurrency} = Group ${auth.activeCompany.reportingCurrency}`} value={input.exchangeRateToGroupCurrency} min={0.00000001} onChange={(v) => setInput({ ...input, exchangeRateToGroupCurrency: v, exchangeRateLockedAt: new Date().toISOString() })} />
+        <NumberInput label={`1 ${input.quoteCurrency} = Reporting ${auth.activeCompany.reportingCurrency}`} value={input.exchangeRateToGroupCurrency} min={0.00000001} onChange={(v) => setInput({ ...input, exchangeRateToGroupCurrency: v, exchangeRateLockedAt: new Date().toISOString() })} />
       </div>
       {input.exchangeRateLockedAt && <div className="mt-4 text-xs text-slate-500">Exchange rate locked for this costing: {formatDateTime(input.exchangeRateLockedAt)}</div>}
     </div>

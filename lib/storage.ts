@@ -449,6 +449,9 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
   const screedDays = Number(savedScreeding.totalDaysOnSite ?? 0) || activityDays;
   const costingModule = input?.costingModule === "survey" ? "survey" : input?.costingModule === "qa" ? "qa" : "remedial";
   const officeCount: ProjectInput["officeCount"] = input?.officeCount === 2 || Number(input?.survey?.secondaryOfficeDistanceOneWay) > 0 || input?.qa?.officeCount === 2 ? 2 : 1;
+  const quoteCurrency = input?.quoteCurrency ?? emptyInput.quoteCurrency;
+  const exchangeRateToCompanyCurrency = asNumber(input?.exchangeRateToCompanyCurrency, 1) > 0 ? asNumber(input?.exchangeRateToCompanyCurrency, 1) : 1;
+  const exchangeRateToGroupCurrency = asNumber(input?.exchangeRateToGroupCurrency, 1) > 0 ? asNumber(input?.exchangeRateToGroupCurrency, 1) : 1;
   const legacyMode = (mode: ProjectInput["projectManagement"]["travelMode"] | undefined, ...values: unknown[]) => mode ?? (values.some((value) => Number(value) > 0) ? "Drive" : "None");
   const normalisedTeams = (savedScreeding.teams ?? []).filter((team) => team.enabled !== false || Boolean(team.contractorName || team.rate || team.mobilisation || team.prep || team.screed || team.grind)).map((team) => ({
     ...team,
@@ -472,9 +475,9 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
     costingModule,
     distanceUnit: input?.distanceUnit === "miles" ? "miles" : "km",
     officeCount,
-    quoteCurrency: input?.quoteCurrency ?? emptyInput.quoteCurrency,
-    exchangeRateToCompanyCurrency: asNumber(input?.exchangeRateToCompanyCurrency, 1) > 0 ? asNumber(input?.exchangeRateToCompanyCurrency, 1) : 1,
-    exchangeRateToGroupCurrency: asNumber(input?.exchangeRateToGroupCurrency, 1) > 0 ? asNumber(input?.exchangeRateToGroupCurrency, 1) : 1,
+    quoteCurrency,
+    exchangeRateToCompanyCurrency,
+    exchangeRateToGroupCurrency,
     projectTravelPeople: asNumber(input?.projectTravelPeople, emptyInput.projectTravelPeople),
     projectTravelProductionPeople: asNumber(input?.projectTravelProductionPeople, input?.projectTravelPeople ?? emptyInput.projectTravelProductionPeople),
     projectTravelSurveyorPeople: asNumber(input?.projectTravelSurveyorPeople, emptyInput.projectTravelSurveyorPeople),
@@ -556,8 +559,8 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
       repairLines: Array.isArray(input?.repairs?.repairLines) ? input.repairs.repairLines : []
     },
     additionalItems: normaliseAdditionalItems(input?.additionalItems),
-    survey: costingModule === "survey" || costingModule === "qa" ? normaliseSurveyInput(input?.survey, input?.quoteCurrency ?? "EUR", input?.distanceUnit === "miles" ? "miles" : "km", officeCount) : input?.survey,
-    qa: costingModule === "qa" ? normaliseQaInput(input?.qa, input?.quoteCurrency ?? "EUR", input?.distanceUnit === "miles" ? "miles" : "km", officeCount) : input?.qa,
+    survey: costingModule === "survey" || costingModule === "qa" ? normaliseSurveyInput({ ...(input?.survey ?? {}), quoteCurrency, exchangeRateToCompanyCurrency, exchangeRateToGroupCurrency, exchangeRateLockedAt: input?.exchangeRateLockedAt }, quoteCurrency, input?.distanceUnit === "miles" ? "miles" : "km", officeCount) : input?.survey,
+    qa: costingModule === "qa" ? normaliseQaInput({ ...(input?.qa ?? {}), quoteCurrency, exchangeRateToCompanyCurrency, exchangeRateToGroupCurrency, exchangeRateLockedAt: input?.exchangeRateLockedAt }, quoteCurrency, input?.distanceUnit === "miles" ? "miles" : "km", officeCount) : input?.qa,
     linkedProjectIds: Array.isArray(input?.linkedProjectIds) ? input.linkedProjectIds.map(String) : []
   };
 }

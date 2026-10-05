@@ -127,6 +127,9 @@ export type QaInput = {
   revision: string;
   costedBy: string;
   quoteCurrency: CurrencyCode;
+  exchangeRateToCompanyCurrency: number;
+  exchangeRateToGroupCurrency: number;
+  exchangeRateLockedAt?: string;
   distanceUnit: DistanceUnit;
   officeCount: OfficeCount;
   surveyIncluded: boolean;

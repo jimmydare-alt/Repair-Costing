@@ -68,6 +68,32 @@ describe("separate QA costing module", () => {
     expect(result.rateSchedules?.map((item) => item.service)).toEqual(["QA", "QA"]);
   });
 
+  it("converts QA admin rates into quote currency once and reports company totals", () => {
+    const baseline = calculateQaProject(qaInput(), defaultQaRates);
+    const converted = calculateQaProject({
+      ...qaInput(),
+      quoteCurrency: "PLN",
+      exchangeRateToCompanyCurrency: 2,
+      exchangeRateToGroupCurrency: 3,
+      exchangeRateLockedAt: "2026-10-05T09:00:00.000Z"
+    }, defaultQaRates);
+
+    expect(converted.budgetCost).toBeCloseTo(baseline.budgetCost / 2, 6);
+    expect(converted.proposalTotal).toBeCloseTo(baseline.proposalTotal / 2, 6);
+    expect(converted.budgetCompanyCurrency).toBeCloseTo(baseline.budgetCost, 6);
+    expect(converted.proposalCompanyCurrency).toBeCloseTo(baseline.proposalTotal, 6);
+    expect(converted.proposalGroupCurrency).toBeCloseTo(converted.proposalTotal * 3, 6);
+  });
+
+  it("defaults legacy QA exchange rates to one", () => {
+    const legacy = createEmptyQaInput("EUR", "km") as Partial<ReturnType<typeof createEmptyQaInput>>;
+    delete legacy.exchangeRateToCompanyCurrency;
+    delete legacy.exchangeRateToGroupCurrency;
+    const normalised = normaliseQaInput(legacy);
+    expect(normalised.exchangeRateToCompanyCurrency).toBe(1);
+    expect(normalised.exchangeRateToGroupCurrency).toBe(1);
+  });
+
   it("uses only the selected delivery route and keeps subcontract lines in Subcontract P&L", () => {
     const input = qaInput();
     input.areas[0] = {
@@ -187,6 +213,23 @@ describe("separate QA costing module", () => {
     expect(selected.packageSummaries?.find((item) => item.id === "survey")?.selected).toBe(true);
     expect(selected.packageSummaries?.find((item) => item.id === "qa-design")?.selected).toBe(false);
     expect(selected.proposalLines.some((line) => line.item === "Independent review")).toBe(true);
+  });
+
+  it("preserves currency conversions after an integrated package selection", () => {
+    const qa = createEmptyQaInput("PLN", "km");
+    qa.surveyIncluded = true;
+    qa.exchangeRateToCompanyCurrency = 2;
+    qa.exchangeRateToGroupCurrency = 3;
+    const survey = createEmptySurveyInput("PLN", "km");
+    survey.autoStoreArea = 1000;
+    survey.surveyorsOnSite = 1;
+    survey.exchangeRateToCompanyCurrency = 2;
+    survey.exchangeRateToGroupCurrency = 3;
+    const offered = calculateIntegratedQaProject(qa, survey, defaultQaRates, defaultSurveyRates);
+    const selected = selectIntegratedQaPackages(offered, ["survey"]);
+    expect(selected.proposalCompanyCurrency).toBeCloseTo(selected.proposalTotal * 2, 6);
+    expect(selected.budgetCompanyCurrency).toBeCloseTo(selected.budgetCost * 2, 6);
+    expect(selected.proposalGroupCurrency).toBeCloseTo(selected.proposalTotal * 3, 6);
   });
 
   it("normalises legacy direct-quantity QA projects without changing their calculation mode", () => {

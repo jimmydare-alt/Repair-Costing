@@ -38,7 +38,7 @@ function summary(id: string, code: string, name: string, service: "Survey" | "QA
   };
 }
 
-function totals(base: ProjectCalculations, proposalLines: Line[], budgetLines: Line[]) {
+function totals(base: ProjectCalculations, proposalLines: Line[], budgetLines: Line[], companyExchange = 1, groupExchange = 1) {
   const proposalTotal = sum(proposalLines, "total");
   const budgetCost = sum(budgetLines, "total");
   const budgetProfit = round(proposalTotal - budgetCost);
@@ -51,10 +51,10 @@ function totals(base: ProjectCalculations, proposalLines: Line[], budgetLines: L
     budgetProfit,
     budgetMargin: proposalTotal ? round(budgetProfit / proposalTotal * 100) : 0,
     budgetMarkup: budgetCost ? round(budgetProfit / budgetCost * 100) : 0,
-    proposalCompanyCurrency: proposalTotal,
-    budgetCompanyCurrency: budgetCost,
-    proposalGroupCurrency: proposalTotal,
-    budgetGroupCurrency: budgetCost,
+    proposalCompanyCurrency: round(proposalTotal * companyExchange),
+    budgetCompanyCurrency: round(budgetCost * companyExchange),
+    proposalGroupCurrency: round(proposalTotal * groupExchange),
+    budgetGroupCurrency: round(budgetCost * groupExchange),
     mobilisationRate: sum(proposalLines.filter((line) => line.costKind === "mobilisation"), "total"),
     mobilisationBudget: sum(budgetLines.filter((line) => line.costKind === "mobilisation"), "total"),
     travelTotal: sum(proposalLines.filter((line) => line.plCategory === "Travel"), "total"),
@@ -64,6 +64,8 @@ function totals(base: ProjectCalculations, proposalLines: Line[], budgetLines: L
 }
 
 export function calculateIntegratedQaProject(qaInput: QaInput, surveyInput: SurveyInput | undefined, qaRates: QaAdminRates, surveyRates: SurveyAdminRates) {
+  const companyExchange = Number(qaInput.exchangeRateToCompanyCurrency) > 0 ? Number(qaInput.exchangeRateToCompanyCurrency) : 1;
+  const groupExchange = Number(qaInput.exchangeRateToGroupCurrency) > 0 ? Number(qaInput.exchangeRateToGroupCurrency) : 1;
   const sharedVisit = qaInput.surveyIncluded && qaInput.siteSupervisionIncluded && qaInput.visitMode === "shared";
   const sharedOwner = qaInput.sharedTravelOwner === "qa" ? "qa" : "survey";
   const sharedPackageIds = ["survey", "qa-supervision"];
@@ -125,7 +127,7 @@ export function calculateIntegratedQaProject(qaInput: QaInput, surveyInput: Surv
     packageSummaries: packages,
     survey: survey?.survey,
     qa: { ...qa.qa, surveyIncluded: Boolean(survey), visitMode: qaInput.visitMode, sharedTravelOwner: sharedOwner, surveyProposal: survey?.proposalTotal ?? 0, surveyBudget: survey?.budgetCost ?? 0 }
-  }, proposalLines, budgetLines);
+  }, proposalLines, budgetLines, companyExchange, groupExchange);
   return combined;
 }
 
@@ -155,6 +157,12 @@ export function selectIntegratedQaPackages(calculation: ProjectCalculations, sel
     const packageBudget = sum(budgetLines.filter((line) => line.workPackageId === item.id), "total");
     return { ...item, selected: selectedForPackage, proposalTotal: packageProposal, budgetCost: packageBudget, budgetMarkup: packageBudget ? round((packageProposal - packageBudget) / packageBudget * 100) : 0 };
   });
+  const companyExchange = calculation.proposalTotal > 0
+    ? calculation.proposalCompanyCurrency / calculation.proposalTotal
+    : calculation.budgetCost > 0 ? calculation.budgetCompanyCurrency / calculation.budgetCost : 1;
+  const groupExchange = calculation.proposalTotal > 0
+    ? calculation.proposalGroupCurrency / calculation.proposalTotal
+    : calculation.budgetCost > 0 ? calculation.budgetGroupCurrency / calculation.budgetCost : 1;
   const selectedCalculation = totals({
     ...calculation,
     offeredProposalLines: proposalSource,
@@ -163,6 +171,6 @@ export function selectIntegratedQaPackages(calculation: ProjectCalculations, sel
     selectedProposalTotal: sum(proposalLines, "total"),
     selectedBudgetCost: sum(budgetLines, "total"),
     packageSummaries: updatedPackages
-  }, proposalLines, budgetLines);
+  }, proposalLines, budgetLines, companyExchange, groupExchange);
   return selectedCalculation;
 }

@@ -6,6 +6,14 @@ import type { QaAdminRates, QaArea, QaAreaCalculation, QaCalculationResult, QaIn
 const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 const safe = (value: unknown) => Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
 
+export function qaRatesInQuoteCurrency(savedRates: Partial<QaAdminRates> | undefined, companyCurrencyPerQuoteCurrency: number) {
+  const rates = normaliseQaRates(savedRates);
+  const divisor = Number(companyCurrencyPerQuoteCurrency) > 0 ? Number(companyCurrencyPerQuoteCurrency) : 1;
+  return {
+    rates: Object.fromEntries(Object.entries(rates.rates).map(([key, rate]) => [key, { ...rate, budgetRate: rate.budgetRate / divisor }])) as QaAdminRates["rates"]
+  };
+}
+
 function usesDelivery(mode: QaArea["designDeliveryMode"], delivery: QaRateDefinition["delivery"]) {
   return mode === "both" || (mode === "in_house" && delivery === "internal") || (mode === "subcontract" && delivery === "subcontract");
 }
@@ -194,7 +202,9 @@ function schedule(area: QaArea, name: string, basis: PackagePricingBasis, lines:
 }
 
 export function calculateQaProject(input: QaInput, savedRates?: Partial<QaAdminRates>): QaCalculationResult {
-  const rates = normaliseQaRates(savedRates);
+  const companyExchange = Number(input.exchangeRateToCompanyCurrency) > 0 ? Number(input.exchangeRateToCompanyCurrency) : 1;
+  const groupExchange = Number(input.exchangeRateToGroupCurrency) > 0 ? Number(input.exchangeRateToGroupCurrency) : 1;
+  const rates = qaRatesInQuoteCurrency(savedRates, companyExchange);
   const travelIncludedElsewhere = Boolean(input.sharedTravelOwnerProjectId);
   const projectProgramme = Boolean(input.programme);
   const proposalLines = input.areas.flatMap((area) => areaLines(area, rates, travelIncludedElsewhere, projectProgramme));
@@ -294,7 +304,7 @@ export function calculateQaProject(input: QaInput, savedRates?: Partial<QaAdminR
     phaseRows: [], proposalLines: discountedLines, budgetLines, repairMaterialCalcs: [],
     originalProposalTotal: money(originalProposalBeforeAdjustment + adjustment), discountAmount, proposalTotal, budgetCost,
     budgetProfit, budgetMargin, budgetMarkup, bdmBonusBudget: 0, bdmBonusRate: 0,
-    proposalCompanyCurrency: proposalTotal, budgetCompanyCurrency: budgetCost, proposalGroupCurrency: proposalTotal, budgetGroupCurrency: budgetCost,
+    proposalCompanyCurrency: money(proposalTotal * companyExchange), budgetCompanyCurrency: money(budgetCost * companyExchange), proposalGroupCurrency: money(proposalTotal * groupExchange), budgetGroupCurrency: money(budgetCost * groupExchange),
     dailyRate: money(rateSchedules.filter((item) => item.pricingBasis === "day_rate").reduce((sum, item) => sum + item.productiveProposalRate, 0)),
     mobilisationRate: money(mobilisationLines.reduce((sum, item) => sum + item.total, 0)),
     mobilisationBudget: money(mobilisationBudgetLines.reduce((sum, item) => sum + item.total, 0)),
