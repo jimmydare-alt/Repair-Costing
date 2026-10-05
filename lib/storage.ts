@@ -8,7 +8,7 @@ import { createBrowserSupabaseClient, isSupabaseConfigured } from "./supabaseCli
 import type { AdminRates, ChangeLogEntry, PackageSelection, PLActuals, ProjectInput, ProjectNote, ProjectRecord, ProjectStatus, ProjectTimeEntry, QuoteRevision, RateVersionRecord, RepairCatalog } from "./types";
 import { calculateSurveyProject } from "./costing/survey/calculations";
 import { normaliseSurveyInput, normaliseSurveyRates } from "./costing/survey/defaults";
-import { calculateQaProject } from "./costing/qa/calculations";
+import { calculateIntegratedQaProject, selectIntegratedQaPackages } from "./costing/qa/combined";
 import { normaliseQaInput, normaliseQaRates } from "./costing/qa/defaults";
 import { normaliseWorkPackages } from "./workPackages";
 
@@ -308,7 +308,7 @@ function log(existing: ChangeLogEntry[] | undefined, actor: string, action: stri
 }
 
 function calculationVersion(module: ProjectInput["costingModule"]) {
-  return module === "survey" ? "survey-1.2" : module === "qa" ? "qa-1.0" : "remedial-6.3";
+  return module === "survey" ? "survey-1.2" : module === "qa" ? "qa-2.0" : "remedial-6.3";
 }
 
 function makeRevision(input: ProjectInput, calculations: ProjectRecord["calculations"], rates: AdminRates, repairCatalog: RepairCatalog): QuoteRevision {
@@ -556,7 +556,7 @@ export function normaliseInput(input?: Partial<ProjectInput>): ProjectInput {
       repairLines: Array.isArray(input?.repairs?.repairLines) ? input.repairs.repairLines : []
     },
     additionalItems: normaliseAdditionalItems(input?.additionalItems),
-    survey: costingModule === "survey" ? normaliseSurveyInput(input?.survey, input?.quoteCurrency ?? "EUR", input?.distanceUnit === "miles" ? "miles" : "km", officeCount) : input?.survey,
+    survey: costingModule === "survey" || costingModule === "qa" ? normaliseSurveyInput(input?.survey, input?.quoteCurrency ?? "EUR", input?.distanceUnit === "miles" ? "miles" : "km", officeCount) : input?.survey,
     qa: costingModule === "qa" ? normaliseQaInput(input?.qa, input?.quoteCurrency ?? "EUR", input?.distanceUnit === "miles" ? "miles" : "km", officeCount) : input?.qa,
     linkedProjectIds: Array.isArray(input?.linkedProjectIds) ? input.linkedProjectIds.map(String) : []
   };
@@ -601,7 +601,7 @@ export async function saveProject(input: ProjectInput, rates: AdminRates, existi
   const calculations = inputs.costingModule === "survey" && inputs.survey
     ? calculateSurveyProject(inputs.survey, rates.surveyRates)
     : inputs.costingModule === "qa" && inputs.qa
-      ? calculateQaProject(inputs.qa, rates.qaRates)
+      ? calculateIntegratedQaProject(inputs.qa, inputs.survey, normaliseQaRates(rates.qaRates), normaliseSurveyRates(rates.surveyRates))
       : calculateProject(inputs, rates, repairCatalog);
   const savedActor = actorName(actor);
   const companyId = activeCompanyId();
@@ -866,7 +866,8 @@ export async function saveProjectPackageSelection(projectId: string, selectedPac
   const current = projects.find((project) => project.id === projectId);
   if (!current) throw new Error("The selected project no longer exists.");
   if (current.inputs.pricingMode !== "selectable") throw new Error("This project does not use selectable work packages.");
-  const validIds = new Set(current.inputs.workPackages.map((item) => item.id));
+  const integratedQa = current.inputs.costingModule === "qa" && Boolean(current.inputs.qa);
+  const validIds = new Set(integratedQa ? (current.calculations.packageSummaries ?? []).map((item) => item.id) : current.inputs.workPackages.map((item) => item.id));
   const selectedIds = Array.from(new Set(selectedPackageIds.filter((id) => validIds.has(id))));
   if (!selectedIds.length) throw new Error("Select at least one work package before confirming the client award.");
   if (current.packageSelection && !reason.trim()) throw new Error("Add a reason before changing a confirmed client selection.");
@@ -874,13 +875,17 @@ export async function saveProjectPackageSelection(projectId: string, selectedPac
   const confirmedAt = now();
   const confirmedBy = actorName(actor);
   const packageSelection: PackageSelection = { selectedPackageIds: selectedIds, confirmedAt, confirmedBy, reason: reason.trim() };
-  const calculationInput: ProjectInput = {
+  const calculationInput: ProjectInput = integratedQa ? current.inputs : {
     ...current.inputs,
     selectionConfirmed: true,
     workPackages: current.inputs.workPackages.map((item) => ({ ...item, selected: selectedIds.includes(item.id) }))
   };
-  const calculations = calculateProject(calculationInput, current.rateSnapshot ?? defaultRates, current.repairCatalogSnapshot ?? defaultRepairCatalog);
-  const selectedLabels = current.inputs.workPackages.filter((item) => selectedIds.includes(item.id)).map((item) => `${item.code}. ${item.name}`).join(", ");
+  const calculations = integratedQa
+    ? selectIntegratedQaPackages(current.calculations, selectedIds)
+    : calculateProject(calculationInput, current.rateSnapshot ?? defaultRates, current.repairCatalogSnapshot ?? defaultRepairCatalog);
+  const selectedLabels = integratedQa
+    ? (current.calculations.packageSummaries ?? []).filter((item) => selectedIds.includes(item.id)).map((item) => `${item.code}. ${item.name}`).join(", ")
+    : current.inputs.workPackages.filter((item) => selectedIds.includes(item.id)).map((item) => `${item.code}. ${item.name}`).join(", ");
   const updated: ProjectRecord = {
     ...current,
     calculations,

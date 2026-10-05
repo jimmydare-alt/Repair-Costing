@@ -54,6 +54,34 @@ function visitQuantities(visit: QaVisit): Partial<Record<QaRateKey, number>> {
   };
 }
 
+export function calculateQaProgrammeDefaults(input: QaInput) {
+  const programme = input.programme;
+  if (!programme) return null;
+  const visits = Math.max(1, Math.round(safe(programme.visits)));
+  const totalTravelDays = money(safe(programme.travelDaysEachWay) * 2 * visits);
+  const calculatedHotelNightsPerPerson = programme.hotelRequired
+    ? money(safe(programme.siteDays) + visits + safe(programme.nonSupervisionDays) + safe(programme.standDownDays))
+    : 0;
+  const calculatedSubsistenceDaysPerPerson = programme.hotelRequired
+    ? money(safe(programme.siteDays) + totalTravelDays + safe(programme.nonSupervisionDays) + safe(programme.standDownDays))
+    : 0;
+  const hotelNightsPerPerson = programme.hotelNightsOverride ?? calculatedHotelNightsPerPerson;
+  const subsistenceDaysPerPerson = programme.subsistenceDaysOverride ?? calculatedSubsistenceDaysPerPerson;
+  return {
+    siteDays: safe(programme.siteDays),
+    visits,
+    totalTravelDays,
+    calculatedHotelNightsPerPerson,
+    hotelNightsPerPerson: safe(hotelNightsPerPerson),
+    hotelNightsOverridden: programme.hotelNightsOverride !== null && safe(programme.hotelNightsOverride) !== calculatedHotelNightsPerPerson,
+    calculatedSubsistenceDaysPerPerson,
+    subsistenceDaysPerPerson: safe(subsistenceDaysPerPerson),
+    subsistenceDaysOverridden: programme.subsistenceDaysOverride !== null && safe(programme.subsistenceDaysOverride) !== calculatedSubsistenceDaysPerPerson,
+    vehicleDays: money(safe(programme.siteDays) + totalTravelDays + safe(programme.nonSupervisionDays) + safe(programme.standDownDays)),
+    chargeableDistance: money(safe(programme.oneWayDistance) * 2 * Math.max(1, safe(programme.vehicles)) * visits)
+  };
+}
+
 function proposalLineFromAdditional(item: QaInput["additionalItems"][number]): Line {
   const cost = money(safe(item.budgetRate) * safe(item.quantity));
   const total = money(cost * (1 + safe(item.markup)));
@@ -63,11 +91,26 @@ function proposalLineFromAdditional(item: QaInput["additionalItems"][number]): L
   };
 }
 
+function guidedQuantity(area: QaArea, definition: QaRateDefinition) {
+  const people = definition.delivery === "internal" ? Math.max(1, safe(area.internalPeople)) : Math.max(1, safe(area.subcontractPeople));
+  if (definition.group === "design") return safe(area.quantities[definition.key]);
+  if (definition.key.endsWith("SupervisionDay")) return safe(area.siteDays);
+  if (definition.key.endsWith("NonSupervisionDay")) return safe(area.nonSupervisionDays);
+  if (definition.key.endsWith("StandDownDay")) return safe(area.standDownDays);
+  if (definition.key.endsWith("TravelDay")) return safe(area.travelDays) * people;
+  if (definition.key.endsWith("HotelNight")) return safe(area.hotelNights) * people;
+  if (definition.key.endsWith("SubsistenceDay")) return safe(area.subsistenceDays) * people;
+  if (definition.key.endsWith("VehicleDay")) return safe(area.vehicleDays) * Math.max(1, safe(area.vehicles));
+  if (definition.key.endsWith("Distance")) return safe(area.oneWayDistance) * 2 * Math.max(1, safe(area.vehicles));
+  if (definition.key.endsWith("EquipmentTransport")) return safe(area.equipmentTransportTrips);
+  return safe(area.quantities[definition.key]);
+}
+
 function budgetFromProposal(item: Line): Line {
   return { ...item, margin: 0, total: item.cost, originalTotal: item.cost, discount: 0 };
 }
 
-function areaLines(area: QaArea, rates: QaAdminRates, travelIncludedElsewhere: boolean) {
+function areaLines(area: QaArea, rates: QaAdminRates, travelIncludedElsewhere: boolean, projectProgramme: boolean) {
   const lines: Line[] = [];
   Object.values(rates.rates).forEach((definition) => {
     const relevant = definition.group === "design"
@@ -75,20 +118,52 @@ function areaLines(area: QaArea, rates: QaAdminRates, travelIncludedElsewhere: b
       : definition.group === "supervision"
         ? area.supervisionRequired && usesDelivery(area.supervisionDeliveryMode, definition.delivery)
         : (area.designReviewRequired && usesDelivery(area.designDeliveryMode, definition.delivery)) || (area.supervisionRequired && usesDelivery(area.supervisionDeliveryMode, definition.delivery));
-    if (!relevant || (travelIncludedElsewhere && definition.group === "travel")) return;
-    let quantity = safe(area.quantities[definition.key]);
+    if (!relevant || (projectProgramme && definition.group !== "design") || (travelIncludedElsewhere && definition.group === "travel")) return;
+    let quantity = area.guidedSchedule ? guidedQuantity(area, definition) : safe(area.quantities[definition.key]);
     if (definition.group === "supervision" && definition.unit === "person day") {
       quantity *= definition.delivery === "internal" ? Math.max(1, safe(area.internalPeople)) : Math.max(1, safe(area.subcontractPeople));
     }
     if (quantity > 0) lines.push(line(definition, quantity, area, area.rateOverrides[definition.key]));
   });
 
-  area.extraVisits.forEach((visit) => {
+  if (!projectProgramme) area.extraVisits.forEach((visit) => {
     const quantities = visitQuantities(visit);
     Object.entries(quantities).forEach(([key, quantity]) => {
       const definition = rates.rates[key as QaRateKey];
       if (!definition || safe(quantity) <= 0 || (travelIncludedElsewhere && definition.group === "travel")) return;
       lines.push(line(definition, safe(quantity), area, area.rateOverrides[key as QaRateKey], `${area.name} - ${visit.name} - ${definition.label}`));
+    });
+  });
+  return lines;
+}
+
+function programmeLines(input: QaInput, rates: QaAdminRates, travelIncludedElsewhere: boolean) {
+  const programme = calculateQaProgrammeDefaults(input);
+  if (!programme || !input.programme || !input.siteSupervisionIncluded) return [];
+  const lines: Line[] = [];
+  const rateOverrides = input.programme.rateOverrides ?? {};
+  const deliveries: QaRateDefinition["delivery"][] = ["internal", "subcontract"];
+  deliveries.forEach((delivery) => {
+    const sourceArea = input.areas.find((area) => area.supervisionRequired && usesDelivery(area.supervisionDeliveryMode, delivery));
+    if (!sourceArea) return;
+    const prefix = delivery === "internal" ? "internal" : "subcontract";
+    const people = delivery === "internal" ? input.programme!.internalPeople : input.programme!.subcontractPeople;
+    const quantities: Partial<Record<QaRateKey, number>> = {
+      [`${prefix}SupervisionDay` as QaRateKey]: programme.siteDays * Math.max(1, safe(people)),
+      [`${prefix}NonSupervisionDay` as QaRateKey]: safe(input.programme!.nonSupervisionDays) * Math.max(1, safe(people)),
+      [`${prefix}StandDownDay` as QaRateKey]: safe(input.programme!.standDownDays) * Math.max(1, safe(people)),
+      [`${prefix}TravelDay` as QaRateKey]: programme.totalTravelDays * Math.max(1, safe(people)),
+      [`${prefix}HotelNight` as QaRateKey]: programme.hotelNightsPerPerson * Math.max(1, safe(people)),
+      [`${prefix}SubsistenceDay` as QaRateKey]: programme.subsistenceDaysPerPerson * Math.max(1, safe(people)),
+      [`${prefix}VehicleDay` as QaRateKey]: programme.vehicleDays * Math.max(1, safe(input.programme!.vehicles)),
+      [`${prefix}Distance` as QaRateKey]: programme.chargeableDistance,
+      [`${prefix}EquipmentTransport` as QaRateKey]: programme.visits
+    };
+    Object.entries(quantities).forEach(([key, quantity]) => {
+      const definition = rates.rates[key as QaRateKey];
+      if (!definition || safe(quantity) <= 0 || (travelIncludedElsewhere && definition.group === "travel")) return;
+      const programmeArea = { ...sourceArea, id: "qa-programme", name: "QA Programme", rateOverrides };
+      lines.push(line(definition, safe(quantity), programmeArea, rateOverrides[key as QaRateKey], `QA Programme - ${definition.label}`));
     });
   });
   return lines;
@@ -121,7 +196,9 @@ function schedule(area: QaArea, name: string, basis: PackagePricingBasis, lines:
 export function calculateQaProject(input: QaInput, savedRates?: Partial<QaAdminRates>): QaCalculationResult {
   const rates = normaliseQaRates(savedRates);
   const travelIncludedElsewhere = Boolean(input.sharedTravelOwnerProjectId);
-  const proposalLines = input.areas.flatMap((area) => areaLines(area, rates, travelIncludedElsewhere));
+  const projectProgramme = Boolean(input.programme);
+  const proposalLines = input.areas.flatMap((area) => areaLines(area, rates, travelIncludedElsewhere, projectProgramme));
+  proposalLines.push(...programmeLines(input, rates, travelIncludedElsewhere));
   proposalLines.push(...input.additionalItems.filter((item) => item.name.trim() && item.quantity > 0).map(proposalLineFromAdditional));
 
   const originalProposalBeforeAdjustment = money(proposalLines.reduce((sum, item) => sum + item.total, 0));
@@ -155,10 +232,10 @@ export function calculateQaProject(input: QaInput, savedRates?: Partial<QaAdminR
     const designBudgetLines = budgetLines.filter((item) => item.workPackageId === area.id && Array.from(designKeys).some((label) => item.item.endsWith(label)));
     const travelBudgetLines = budgetLines.filter((item) => item.workPackageId === area.id && Array.from(travelKeys).some((label) => item.item.endsWith(label)));
     const supervisionBudgetLines = budgetLines.filter((item) => item.workPackageId === area.id && !designBudgetLines.includes(item) && !travelBudgetLines.includes(item));
-    const internalDays = area.supervisionRequired && usesDelivery(area.supervisionDeliveryMode, "internal") ? safe(area.quantities.internalSupervisionDay) : 0;
-    const subcontractDays = area.supervisionRequired && usesDelivery(area.supervisionDeliveryMode, "subcontract") ? safe(area.quantities.subcontractSupervisionDay) : 0;
-    const visitDays = area.extraVisits.reduce((sum, visit) => sum + safe(visit.siteDays), 0);
-    const supervisionDays = Math.max(internalDays, subcontractDays) + visitDays;
+    const internalDays = !projectProgramme && area.supervisionRequired && usesDelivery(area.supervisionDeliveryMode, "internal") ? (area.guidedSchedule ? safe(area.siteDays) : safe(area.quantities.internalSupervisionDay)) : 0;
+    const subcontractDays = !projectProgramme && area.supervisionRequired && usesDelivery(area.supervisionDeliveryMode, "subcontract") ? (area.guidedSchedule ? safe(area.siteDays) : safe(area.quantities.subcontractSupervisionDay)) : 0;
+    const visitDays = projectProgramme ? 0 : area.extraVisits.reduce((sum, visit) => sum + safe(visit.siteDays), 0);
+    const supervisionDays = projectProgramme && area.supervisionRequired ? safe(input.programme?.siteDays) : Math.max(internalDays, subcontractDays) + visitDays;
     return {
       id: area.id,
       name: area.name,
@@ -173,7 +250,7 @@ export function calculateQaProject(input: QaInput, savedRates?: Partial<QaAdminR
       productivityM2PerDay: supervisionDays > 0 ? money(safe(area.areaM2) / supervisionDays) : 0
     };
   });
-  const siteDays = money(areaDetails.reduce((sum, area) => sum + area.supervisionDays, 0));
+  const siteDays = projectProgramme ? safe(input.programme?.siteDays) : money(areaDetails.reduce((sum, area) => sum + area.supervisionDays, 0));
   const rateSchedules = input.areas.flatMap((area) => {
     const lines = discountedLines.filter((item) => item.workPackageId === area.id);
     const designLabels = new Set(Object.values(rates.rates).filter((item) => item.group === "design").map((item) => item.label));
@@ -184,21 +261,28 @@ export function calculateQaProject(input: QaInput, savedRates?: Partial<QaAdminR
     const details = areaDetails.find((item) => item.id === area.id)!;
     return [
       ...(area.designReviewRequired ? [schedule(area, "Design Review", area.designPricingBasis, designLines, 0)] : []),
-      ...(area.supervisionRequired ? [schedule(area, "Site Supervision", area.supervisionPricingBasis, supervisionLines, details.supervisionDays)] : [])
+      ...(!projectProgramme && area.supervisionRequired ? [schedule(area, "Site Supervision", area.supervisionPricingBasis, supervisionLines, details.supervisionDays)] : [])
     ];
   });
+  if (projectProgramme && input.siteSupervisionIncluded) {
+    const programmeArea = input.areas.find((area) => area.supervisionRequired) ?? input.areas[0];
+    const programmeCostLines = discountedLines.filter((item) => item.workPackageId === "qa-programme");
+    if (programmeArea) rateSchedules.push(schedule({ ...programmeArea, id: "qa-programme", name: "QA Programme", rateOverrides: input.programme!.rateOverrides ?? {} }, "Site Supervision", programmeArea.supervisionPricingBasis, programmeCostLines, siteDays));
+  }
   const mobilisationLines = discountedLines.filter((item) => item.costKind === "mobilisation");
   const mobilisationBudgetLines = budgetLines.filter((item) => item.costKind === "mobilisation");
   const details = {
     areas: areaDetails,
     designReviewProposal: money(areaDetails.reduce((sum, item) => sum + item.designReviewProposal, 0)),
     designReviewBudget: money(areaDetails.reduce((sum, item) => sum + item.designReviewBudget, 0)),
-    supervisionProposal: money(areaDetails.reduce((sum, item) => sum + item.supervisionProposal, 0)),
-    supervisionBudget: money(areaDetails.reduce((sum, item) => sum + item.supervisionBudget, 0)),
-    travelProposal: money(areaDetails.reduce((sum, item) => sum + item.travelProposal, 0)),
-    travelBudget: money(areaDetails.reduce((sum, item) => sum + item.travelBudget, 0)),
-    overrideCount: input.areas.reduce((sum, area) => sum + Object.values(area.rateOverrides).filter((item) => item && (item.budgetRate !== null || item.markup !== null)).length, 0),
-    linkedProjectIds: input.linkedProjectIds
+    supervisionProposal: money(discountedLines.filter((item) => item.workPackageId === "qa-programme" && item.costKind !== "mobilisation").reduce((sum, item) => sum + item.total, 0) + areaDetails.reduce((sum, item) => sum + item.supervisionProposal, 0)),
+    supervisionBudget: money(budgetLines.filter((item) => item.workPackageId === "qa-programme" && item.costKind !== "mobilisation").reduce((sum, item) => sum + item.total, 0) + areaDetails.reduce((sum, item) => sum + item.supervisionBudget, 0)),
+    travelProposal: money(discountedLines.filter((item) => item.workPackageId === "qa-programme" && item.costKind === "mobilisation").reduce((sum, item) => sum + item.total, 0) + areaDetails.reduce((sum, item) => sum + item.travelProposal, 0)),
+    travelBudget: money(budgetLines.filter((item) => item.workPackageId === "qa-programme" && item.costKind === "mobilisation").reduce((sum, item) => sum + item.total, 0) + areaDetails.reduce((sum, item) => sum + item.travelBudget, 0)),
+    overrideCount: input.areas.reduce((sum, area) => sum + Object.values(area.rateOverrides).filter((item) => item && (item.budgetRate !== null || item.markup !== null)).length, 0)
+      + Object.values(input.programme?.rateOverrides ?? {}).filter((item) => item && (item.budgetRate !== null || item.markup !== null)).length,
+    linkedProjectIds: input.linkedProjectIds,
+    programme: calculateQaProgrammeDefaults(input) ?? undefined
   };
   const result: ProjectCalculations = {
     costingModule: "qa",

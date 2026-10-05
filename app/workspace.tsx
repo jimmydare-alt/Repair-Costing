@@ -29,7 +29,7 @@ import { CommercialRateEditor } from "@/components/CommercialRateEditor";
 import { createEmptySurveyInput, normaliseSurveyRates } from "@/lib/costing/survey/defaults";
 import { calculateSurveyProject } from "@/lib/costing/survey/calculations";
 import { createSurveyProjectInput, syncSurveyProjectInput } from "@/lib/costing/survey/project";
-import { calculateQaProject } from "@/lib/costing/qa/calculations";
+import { calculateIntegratedQaProject } from "@/lib/costing/qa/combined";
 import { normaliseQaRates } from "@/lib/costing/qa/defaults";
 import { createQaProjectInput, syncQaProjectInput } from "@/lib/costing/qa/project";
 import { chargeableJourneyDistance, effectiveReturnFlights } from "@/lib/travel";
@@ -317,8 +317,8 @@ export default function Workspace() {
   const [adminTab, setAdminTab] = useState<AdminTab>(routeAdminTab);
   const companyLoadToken = useRef(0);
   const [actuals, setActuals] = useState(defaultActuals(calculateProject(emptyInput, defaultRates, defaultRepairCatalog)));
-  const calculations = useMemo(() => input.costingModule === "survey" && input.survey ? calculateSurveyProject(input.survey, pricingRates.surveyRates) : input.costingModule === "qa" && input.qa ? calculateQaProject(input.qa, pricingRates.qaRates) : calculateProject(input, pricingRates, pricingCatalog), [input, pricingRates, pricingCatalog]);
-  const currentAdminCalculation = useMemo(() => input.costingModule === "survey" && input.survey ? calculateSurveyProject(input.survey, rates.surveyRates) : input.costingModule === "qa" && input.qa ? calculateQaProject(input.qa, rates.qaRates) : calculateProject(input, rates, repairCatalog), [input, rates, repairCatalog]);
+  const calculations = useMemo(() => input.costingModule === "survey" && input.survey ? calculateSurveyProject(input.survey, pricingRates.surveyRates) : input.costingModule === "qa" && input.qa ? calculateIntegratedQaProject(input.qa, input.survey, normaliseQaRates(pricingRates.qaRates), normaliseSurveyRates(pricingRates.surveyRates)) : calculateProject(input, pricingRates, pricingCatalog), [input, pricingRates, pricingCatalog]);
+  const currentAdminCalculation = useMemo(() => input.costingModule === "survey" && input.survey ? calculateSurveyProject(input.survey, rates.surveyRates) : input.costingModule === "qa" && input.qa ? calculateIntegratedQaProject(input.qa, input.survey, normaliseQaRates(rates.qaRates), normaliseSurveyRates(rates.surveyRates)) : calculateProject(input, rates, repairCatalog), [input, rates, repairCatalog]);
   const selected = projects.find((project) => project.id === selectedId);
   const selectedCalcs = selected?.calculations ?? calculations;
   const pl = calculatePL(selectedCalcs, selected?.actuals ?? actuals);
@@ -380,7 +380,7 @@ export default function Workspace() {
       setEditingId("");
       setSelectedId("");
       setLastSavedAt("");
-      setActuals(defaultActuals(routeIsSurvey && routedBlank.survey ? calculateSurveyProject(routedBlank.survey, loadedRates.surveyRates) : routeIsQa && routedBlank.qa ? calculateQaProject(routedBlank.qa, loadedRates.qaRates) : calculateProject(companyBlank, loadedRates, loadedRepairCatalog)));
+      setActuals(defaultActuals(routeIsSurvey && routedBlank.survey ? calculateSurveyProject(routedBlank.survey, loadedRates.surveyRates) : routeIsQa && routedBlank.qa ? calculateIntegratedQaProject(routedBlank.qa, routedBlank.survey, normaliseQaRates(loadedRates.qaRates), normaliseSurveyRates(loadedRates.surveyRates)) : calculateProject(companyBlank, loadedRates, loadedRepairCatalog)));
       setWorkspaceLoaded(true);
     }).catch((error: unknown) => { if (loadToken === companyLoadToken.current) setWorkspaceError(error instanceof Error ? error.message : "Could not load the company workspace."); }).finally(() => { if (loadToken === companyLoadToken.current) setWorkspaceLoading(false); });
     return () => { if (loadToken === companyLoadToken.current) companyLoadToken.current += 1; };
@@ -481,7 +481,7 @@ export default function Workspace() {
     setPricingCatalog(repairCatalog);
     setSelectedId("");
     setEditingId("");
-    setActuals(defaultActuals(calculateQaProject(blank.qa!, rates.qaRates)));
+    setActuals(defaultActuals(calculateIntegratedQaProject(blank.qa!, blank.survey, normaliseQaRates(rates.qaRates), normaliseSurveyRates(rates.surveyRates))));
     setLastSavedAt("");
     setSaveState("idle");
     setView("New Project");
@@ -632,7 +632,7 @@ export default function Workspace() {
         {view === "New Project" && (editingId && selected?.rateSnapshot ? <PricingSnapshotPanel saved={calculations} current={currentAdminCalculation} reprice={() => { setPricingRates(rates); setPricingCatalog(repairCatalog); setInput({ ...input, exchangeRateLockedAt: new Date().toISOString() }); }} /> : <div className="pricing-snapshot-status">Using current admin rates.</div>)}
         {view === "Dashboard" && <Dashboard projects={visibleProjects} companyCurrency={auth.activeCompany.defaultCurrency} open={(project) => openProject(project)} edit={editProject} />}
         {workspaceLoaded && !workspaceLoading && view === "New Project" && input.costingModule === "survey" && input.survey && <SurveyBuilder step={input.uiProgress?.surveyStep ?? "Project"} setStep={(surveyStep) => setInput({ ...input, uiProgress: { ...input.uiProgress, surveyStep } })} input={input.survey} onChange={(survey) => setInput(syncSurveyProjectInput(input, survey))} rates={normaliseSurveyRates(pricingRates.surveyRates)} onSave={(complete) => void saveCurrentProject(complete ? "Costing Complete" : "Draft")} saving={saveState === "saving" || saveState === "autosaving"} duplicateReference={duplicateProjectReference} />}
-        {workspaceLoaded && !workspaceLoading && view === "New Project" && input.costingModule === "qa" && input.qa && <QaBuilder step={input.uiProgress?.qaStep ?? "Project"} setStep={(qaStep) => setInput({ ...input, uiProgress: { ...input.uiProgress, qaStep } })} input={input.qa} onChange={(qa) => setInput(syncQaProjectInput(input, qa))} rates={normaliseQaRates(pricingRates.qaRates)} projects={projects.filter((project) => project.id !== editingId)} onSave={(complete) => void saveCurrentProject(complete ? "Costing Complete" : "Draft")} saving={saveState === "saving" || saveState === "autosaving"} duplicateReference={duplicateProjectReference} />}
+        {workspaceLoaded && !workspaceLoading && view === "New Project" && input.costingModule === "qa" && input.qa && input.survey && <QaBuilder step={input.uiProgress?.qaStep ?? "Project"} setStep={(qaStep) => setInput({ ...input, uiProgress: { ...input.uiProgress, qaStep } })} input={input.qa} survey={input.survey} onChange={(qa) => setInput(syncQaProjectInput(input, qa, input.survey))} onSurveyChange={(survey) => setInput(syncQaProjectInput(input, input.qa!, survey))} rates={normaliseQaRates(pricingRates.qaRates)} surveyRates={normaliseSurveyRates(pricingRates.surveyRates)} onSave={(complete) => void saveCurrentProject(complete ? "Costing Complete" : "Draft")} saving={saveState === "saving" || saveState === "autosaving"} duplicateReference={duplicateProjectReference} />}
 {workspaceLoaded && !workspaceLoading && view === "New Project" && input.costingModule === "remedial" && <ProjectBuilder input={input} setInput={setInput} rates={pricingRates} repairCatalog={pricingCatalog} calculations={calculations} onSave={saveCurrentProject} duplicateReference={duplicateProjectReference} saving={saveState === "saving" || saveState === "autosaving"} dirty={hasUnsavedChanges} />}
         {workspaceLoaded && !workspaceLoading && view === "Admin Rates" && <AdminRatesView rates={rates} setRates={setRatesState} repairCatalog={repairCatalog} setRepairCatalog={setRepairCatalog} adminTab={adminTab} setAdminTab={setAdminTab} rateVersions={rateVersions} restoreRateVersion={(version) => setRatesState(version.rates)} save={async () => { try { await saveAdminData(rates, repairCatalog); setBaselineRates(JSON.parse(JSON.stringify(rates)) as AdminRates); setBaselineRepairCatalog(JSON.parse(JSON.stringify(repairCatalog)) as RepairCatalog); setRateVersions(await loadRateVersions()); alert("Admin data saved and versioned. New costings use these values; saved projects keep their pricing snapshot until explicitly repriced."); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "Admin data could not be saved."); } }} />}
         {view === "Company Admin" && <><CompanyAdminPanel /><ProjectArchive deletedProjects={deletedProjects.filter((project) => moduleEnabled(project.inputs.costingModule ?? "remedial"))} restore={async (project) => { try { await restoreProject(project.id); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "The project could not be restored."); throw error; } }} purge={async (project) => { try { await purgeProject(project.id); await refresh(); } catch (error) { setWorkspaceError(error instanceof Error ? error.message : "The project could not be permanently deleted."); throw error; } }} /></>}

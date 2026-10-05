@@ -66,6 +66,22 @@ export type QaVisit = {
   equipmentTransportTrips: number;
 };
 
+export type QaProgramme = {
+  siteDays: number;
+  visits: number;
+  travelDaysEachWay: number;
+  nonSupervisionDays: number;
+  standDownDays: number;
+  internalPeople: number;
+  subcontractPeople: number;
+  hotelRequired: boolean;
+  hotelNightsOverride: number | null;
+  subsistenceDaysOverride: number | null;
+  oneWayDistance: number;
+  vehicles: number;
+  rateOverrides: Partial<Record<QaRateKey, QaRateOverride>>;
+};
+
 export type QaArea = {
   id: string;
   name: string;
@@ -78,6 +94,17 @@ export type QaArea = {
   supervisionDeliveryMode: LabourMode;
   internalPeople: number;
   subcontractPeople: number;
+  guidedSchedule: boolean;
+  siteDays: number;
+  nonSupervisionDays: number;
+  standDownDays: number;
+  travelDays: number;
+  hotelNights: number;
+  subsistenceDays: number;
+  vehicleDays: number;
+  oneWayDistance: number;
+  vehicles: number;
+  equipmentTransportTrips: number;
   quantities: Partial<Record<QaRateKey, number>>;
   rateOverrides: Partial<Record<QaRateKey, QaRateOverride>>;
   extraVisits: QaVisit[];
@@ -102,6 +129,12 @@ export type QaInput = {
   quoteCurrency: CurrencyCode;
   distanceUnit: DistanceUnit;
   officeCount: OfficeCount;
+  surveyIncluded: boolean;
+  designReviewIncluded: boolean;
+  siteSupervisionIncluded: boolean;
+  visitMode: "separate" | "shared";
+  sharedTravelOwner: "survey" | "qa";
+  programme: QaProgramme | null;
   areas: QaArea[];
   additionalItems: QaAdditionalItem[];
   discountPercentage: number;
@@ -135,6 +168,23 @@ export type QaCalculationDetails = {
   travelBudget: number;
   overrideCount: number;
   linkedProjectIds: string[];
+  surveyIncluded?: boolean;
+  visitMode?: "separate" | "shared";
+  sharedTravelOwner?: "survey" | "qa";
+  programme?: {
+    siteDays: number;
+    visits: number;
+    totalTravelDays: number;
+    calculatedHotelNightsPerPerson: number;
+    hotelNightsPerPerson: number;
+    hotelNightsOverridden: boolean;
+    calculatedSubsistenceDaysPerPerson: number;
+    subsistenceDaysPerPerson: number;
+    subsistenceDaysOverridden: boolean;
+    chargeableDistance: number;
+  };
+  surveyProposal?: number;
+  surveyBudget?: number;
 };
 
 export type QaCalculationResult = ProjectCalculations & {

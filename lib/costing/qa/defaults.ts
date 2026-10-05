@@ -1,6 +1,6 @@
 import type { CurrencyCode } from "../../company";
 import type { DistanceUnit, OfficeCount, PLCategory, Section } from "../../types";
-import type { QaAdminRates, QaArea, QaInput, QaRateDefinition, QaRateKey, QaVisit } from "./types";
+import type { QaAdminRates, QaArea, QaInput, QaProgramme, QaRateDefinition, QaRateKey, QaVisit } from "./types";
 import { QA_RATE_KEYS } from "./types";
 
 type RateSeed = [QaRateKey, string, string, number, Section, PLCategory, "internal" | "subcontract", "design" | "supervision" | "travel"];
@@ -59,7 +59,27 @@ export function createEmptyQaArea(index = 1): QaArea {
     supervisionDeliveryMode: "in_house",
     internalPeople: 1,
     subcontractPeople: 1,
-    quantities: {},
+    guidedSchedule: true,
+    siteDays: 0,
+    nonSupervisionDays: 0,
+    standDownDays: 0,
+    travelDays: 0,
+    hotelNights: 0,
+    subsistenceDays: 0,
+    vehicleDays: 0,
+    oneWayDistance: 0,
+    vehicles: 1,
+    equipmentTransportTrips: 0,
+    quantities: {
+      internalOfficeWork: 1,
+      internalMeeting: 1,
+      internalConferenceCall: 0,
+      internalReportReview: 1,
+      subcontractOfficeWork: 1,
+      subcontractMeeting: 1,
+      subcontractConferenceCall: 0,
+      subcontractReportReview: 1
+    },
     rateOverrides: {},
     extraVisits: []
   };
@@ -82,6 +102,24 @@ export function createEmptyQaVisit(index = 1, delivery: "internal" | "subcontrac
   };
 }
 
+export function createEmptyQaProgramme(): QaProgramme {
+  return {
+    siteDays: 0,
+    visits: 1,
+    travelDaysEachWay: 0,
+    nonSupervisionDays: 0,
+    standDownDays: 0,
+    internalPeople: 1,
+    subcontractPeople: 1,
+    hotelRequired: false,
+    hotelNightsOverride: null,
+    subsistenceDaysOverride: null,
+    oneWayDistance: 0,
+    vehicles: 1,
+    rateOverrides: {}
+  };
+}
+
 export function createEmptyQaInput(currency: CurrencyCode = "EUR", distanceUnit: DistanceUnit = "km", officeCount: OfficeCount = 1): QaInput {
   return {
     projectReference: "",
@@ -92,6 +130,12 @@ export function createEmptyQaInput(currency: CurrencyCode = "EUR", distanceUnit:
     quoteCurrency: currency,
     distanceUnit,
     officeCount,
+    surveyIncluded: false,
+    designReviewIncluded: true,
+    siteSupervisionIncluded: true,
+    visitMode: "separate",
+    sharedTravelOwner: "survey",
+    programme: createEmptyQaProgramme(),
     areas: [createEmptyQaArea()],
     additionalItems: [],
     discountPercentage: 0,
@@ -126,13 +170,42 @@ export function normaliseQaRates(saved?: Partial<QaAdminRates>): QaAdminRates {
 
 export function normaliseQaInput(saved: Partial<QaInput> | undefined, currency: CurrencyCode = "EUR", distanceUnit: DistanceUnit = "km", officeCount: OfficeCount = 1): QaInput {
   const empty = createEmptyQaInput(currency, distanceUnit, officeCount);
-  const sourceAreas = Array.isArray(saved?.areas) && saved.areas.length ? saved.areas : empty.areas;
+  const hasSavedAreas = Boolean(Array.isArray(saved?.areas) && saved.areas.length);
+  const sourceAreas = hasSavedAreas ? saved!.areas! : empty.areas;
   return {
     ...empty,
     ...(saved ?? {}),
     quoteCurrency: saved?.quoteCurrency ?? currency,
     distanceUnit: saved?.distanceUnit ?? distanceUnit,
     officeCount: saved?.officeCount === 2 ? 2 : officeCount,
+    surveyIncluded: Boolean(saved?.surveyIncluded),
+    designReviewIncluded: saved?.designReviewIncluded !== false,
+    siteSupervisionIncluded: saved?.siteSupervisionIncluded !== false,
+    visitMode: saved?.visitMode === "shared" ? "shared" : "separate",
+    sharedTravelOwner: saved?.sharedTravelOwner === "qa" ? "qa" : "survey",
+    // A missing programme identifies a legacy project. Its per-area schedule is
+    // retained so reopening an old pricing snapshot does not alter its totals.
+    programme: saved?.programme ? {
+      ...createEmptyQaProgramme(),
+      ...saved.programme,
+      siteDays: safe(saved.programme.siteDays),
+      visits: Math.max(1, Math.round(safe(saved.programme.visits, 1))),
+      travelDaysEachWay: safe(saved.programme.travelDaysEachWay),
+      nonSupervisionDays: safe(saved.programme.nonSupervisionDays),
+      standDownDays: safe(saved.programme.standDownDays),
+      internalPeople: Math.max(1, Math.round(safe(saved.programme.internalPeople, 1))),
+      subcontractPeople: Math.max(1, Math.round(safe(saved.programme.subcontractPeople, 1))),
+      hotelRequired: Boolean(saved.programme.hotelRequired),
+      hotelNightsOverride: saved.programme.hotelNightsOverride == null ? null : safe(saved.programme.hotelNightsOverride),
+      subsistenceDaysOverride: saved.programme.subsistenceDaysOverride == null ? null : safe(saved.programme.subsistenceDaysOverride),
+      oneWayDistance: safe(saved.programme.oneWayDistance),
+      vehicles: Math.max(1, Math.round(safe(saved.programme.vehicles, 1))),
+      rateOverrides: Object.fromEntries(Object.entries(saved.programme.rateOverrides ?? {}).map(([key, value]) => [key, {
+        budgetRate: value?.budgetRate == null ? null : safe(value.budgetRate),
+        markup: value?.markup == null ? null : safe(value.markup),
+        reason: String(value?.reason ?? "")
+      }]))
+    } : hasSavedAreas ? null : createEmptyQaProgramme(),
     areas: sourceAreas.map((area, index) => ({
       ...createEmptyQaArea(index + 1),
       ...area,
@@ -141,6 +214,18 @@ export function normaliseQaInput(saved: Partial<QaInput> | undefined, currency: 
       areaM2: safe(area.areaM2),
       internalPeople: Math.max(1, safe(area.internalPeople, 1)),
       subcontractPeople: Math.max(1, safe(area.subcontractPeople, 1)),
+      // Existing QA projects stored direct rate quantities before guided schedules existed.
+      guidedSchedule: area.guidedSchedule ?? !hasSavedAreas,
+      siteDays: safe(area.siteDays),
+      nonSupervisionDays: safe(area.nonSupervisionDays),
+      standDownDays: safe(area.standDownDays),
+      travelDays: safe(area.travelDays),
+      hotelNights: safe(area.hotelNights),
+      subsistenceDays: safe(area.subsistenceDays),
+      vehicleDays: safe(area.vehicleDays),
+      oneWayDistance: safe(area.oneWayDistance),
+      vehicles: Math.max(1, safe(area.vehicles, 1)),
+      equipmentTransportTrips: safe(area.equipmentTransportTrips),
       quantities: Object.fromEntries(Object.entries(area.quantities ?? {}).map(([key, value]) => [key, safe(value)])),
       rateOverrides: Object.fromEntries(Object.entries(area.rateOverrides ?? {}).map(([key, value]) => [key, {
         budgetRate: value?.budgetRate == null ? null : safe(value.budgetRate),

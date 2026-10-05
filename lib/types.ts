@@ -472,7 +472,7 @@ export type ProjectInput = {
     screedPage?: "Programme" | "Labour" | "Materials" | "Tools & Review";
     repairPage?: "Details" | "Labour" | "Review";
     surveyStep?: "Project" | "Scope" | "Team" | "Travel & Stay" | "Extras & Review";
-    qaStep?: "Project" | "Areas" | "Review";
+    qaStep?: "Project" | "Services" | "Visits" | "Survey" | "QA Areas" | "Logistics" | "Review" | "Areas";
   };
   grinding: GrindingScope;
   screeding: ScreedScope;
@@ -613,6 +613,7 @@ export type Line = {
   workPackageCode?: string;
   workPackageName?: string;
   commercialGroup?: "common" | "package";
+  sharedCostForPackageIds?: string[];
   costKind?: "operating" | "mobilisation" | "stand_down";
 };
 
@@ -639,7 +640,7 @@ export type WorkPackageCalculationSummary = {
   id: string;
   code: string;
   name: string;
-  service: ProjectServiceKey;
+  service: ProjectServiceKey | "Survey" | "QA";
   selected: boolean;
   pricingBasis: PackagePricingBasis;
   mobilisationMode: PackageMobilisationMode;

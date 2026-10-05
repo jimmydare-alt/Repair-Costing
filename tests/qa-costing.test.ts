@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { calculateQaProject } from "@/lib/costing/qa/calculations";
+import { calculateQaProgrammeDefaults, calculateQaProject } from "@/lib/costing/qa/calculations";
+import { calculateIntegratedQaProject, selectIntegratedQaPackages } from "@/lib/costing/qa/combined";
 import { createEmptyQaInput, defaultQaRates, normaliseQaInput } from "@/lib/costing/qa/defaults";
 import { createQaProjectInput } from "@/lib/costing/qa/project";
+import { createEmptySurveyInput, defaultSurveyRates } from "@/lib/costing/survey/defaults";
 import { defaultRates } from "@/lib/rates";
 import { projectToRow, rowToProject } from "@/lib/storage";
 import type { ProjectRecord } from "@/lib/types";
@@ -12,10 +14,12 @@ function qaInput() {
   input.projectReference = "QA-001";
   input.client = "Example Client";
   input.location = "Madrid";
+  input.programme = null;
   input.areas[0] = {
     ...input.areas[0],
     name: "Warehouse A",
     areaM2: 12000,
+    guidedSchedule: false,
     quantities: {
       internalOfficeWork: 1,
       internalMeeting: 2,
@@ -37,11 +41,21 @@ describe("separate QA costing module", () => {
     expect(sql).toContain("lower(company.name) like '%cgfe%'");
   });
 
-  it("starts blank and does not create a preset cost", () => {
+  it("starts with the workbook design package but no supervision cost", () => {
     const result = calculateQaProject(createEmptyQaInput("EUR", "km"), defaultQaRates);
-    expect(result.proposalTotal).toBe(0);
-    expect(result.budgetCost).toBe(0);
+    expect(result.proposalTotal).toBe(6600);
+    expect(result.budgetCost).toBe(6600);
     expect(result.siteDays).toBe(0);
+    expect(result.qa.designReviewBudget).toBe(6600);
+    expect(result.qa.supervisionBudget).toBe(0);
+  });
+
+  it("treats a missing programme override map from an older open draft as empty", () => {
+    const input = createEmptyQaInput("EUR", "km");
+    input.programme = { ...input.programme!, siteDays: 2, rateOverrides: undefined } as unknown as NonNullable<typeof input.programme>;
+    const result = calculateQaProject(input, defaultQaRates);
+    expect(result.qa.supervisionBudget).toBe(1360);
+    expect(result.qa.overrideCount).toBe(0);
   });
 
   it("keeps Design Review and Site Supervision as separate prices", () => {
@@ -116,7 +130,120 @@ describe("separate QA costing module", () => {
     const restored = rowToProject(projectToRow(project, "00000000-0000-0000-0000-000000000001"));
     expect(restored.inputs.costingModule).toBe("qa");
     expect(restored.inputs.qa?.areas[0].name).toBe("Warehouse A");
+    expect(restored.inputs.survey?.autoStoreArea).toBe(0);
     expect(restored.calculations.proposalTotal).toBe(calculations.proposalTotal);
     expect(restored.calculations.qa?.areas[0].productivityM2PerDay).toBe(3000);
+  });
+
+  it("prices embedded Survey and QA independently, then combines them once", () => {
+    const qa = createEmptyQaInput("EUR", "km");
+    qa.surveyIncluded = true;
+    qa.programme = { ...qa.programme!, siteDays: 2, travelDaysEachWay: 0.5, oneWayDistance: 100 };
+    const survey = createEmptySurveyInput("EUR", "km");
+    survey.autoStoreArea = 1000;
+    survey.surveyorsOnSite = 1;
+    const combined = calculateIntegratedQaProject(qa, survey, defaultQaRates, defaultSurveyRates);
+    const packageTotal = combined.packageSummaries?.reduce((sum, item) => sum + item.proposalTotal, 0) ?? 0;
+    expect(combined.packageSummaries?.map((item) => item.name)).toEqual(["Survey", "Design Review", "Site Supervision"]);
+    expect(combined.proposalTotal).toBe(packageTotal);
+    expect(combined.qa?.surveyIncluded).toBe(true);
+  });
+
+  it("charges QA travel separately by default and removes it when the visit is shared", () => {
+    const qa = createEmptyQaInput("EUR", "km");
+    qa.surveyIncluded = true;
+    qa.programme = { ...qa.programme!, siteDays: 3, travelDaysEachWay: 0.5, hotelRequired: true, hotelNightsOverride: 2, oneWayDistance: 100 };
+    const survey = createEmptySurveyInput("EUR", "km");
+    survey.autoStoreArea = 1000;
+    survey.surveyorsOnSite = 1;
+    const separate = calculateIntegratedQaProject(qa, survey, defaultQaRates, defaultSurveyRates);
+    const shared = calculateIntegratedQaProject({ ...qa, visitMode: "shared" }, survey, defaultQaRates, defaultSurveyRates);
+    expect(separate.siteDays).toBe(4);
+    expect(shared.siteDays).toBe(3);
+    expect(shared.proposalTotal).toBeLessThan(separate.proposalTotal);
+    expect(shared.proposalLines.filter((line) => line.workPackageId === "qa-supervision").some((line) => line.costKind === "mobilisation")).toBe(false);
+  });
+
+  it("removes a disabled QA service even when an old area still has it enabled", () => {
+    const qa = createEmptyQaInput("EUR", "km");
+    qa.designReviewIncluded = false;
+    qa.siteSupervisionIncluded = true;
+    qa.programme = { ...qa.programme!, siteDays: 2 };
+    const result = calculateIntegratedQaProject(qa, createEmptySurveyInput(), defaultQaRates, defaultSurveyRates);
+    expect(result.proposalLines.some((line) => line.item.includes("Office Work"))).toBe(false);
+    expect(result.packageSummaries?.map((item) => item.name)).toEqual(["Site Supervision"]);
+  });
+
+  it("keeps shared costs once when client package selection is confirmed", () => {
+    const qa = createEmptyQaInput("EUR", "km");
+    qa.surveyIncluded = true;
+    qa.additionalItems = [{ id: "extra", name: "Independent review", budgetRate: 100, quantity: 1, unit: "item", markup: 0.2, plCategory: "Labour" }];
+    const survey = createEmptySurveyInput("EUR", "km");
+    survey.autoStoreArea = 1000;
+    survey.surveyorsOnSite = 1;
+    const offered = calculateIntegratedQaProject(qa, survey, defaultQaRates, defaultSurveyRates);
+    const selected = selectIntegratedQaPackages(offered, ["survey"]);
+    expect(selected.selectionConfirmed).toBe(true);
+    expect(selected.packageSummaries?.find((item) => item.id === "survey")?.selected).toBe(true);
+    expect(selected.packageSummaries?.find((item) => item.id === "qa-design")?.selected).toBe(false);
+    expect(selected.proposalLines.some((line) => line.item === "Independent review")).toBe(true);
+  });
+
+  it("normalises legacy direct-quantity QA projects without changing their calculation mode", () => {
+    const legacy = qaInput();
+    delete (legacy.areas[0] as Partial<typeof legacy.areas[0]>).guidedSchedule;
+    const normalised = normaliseQaInput(legacy);
+    expect(normalised.programme).toBeNull();
+    expect(normalised.areas[0].guidedSchedule).toBe(false);
+    expect(calculateQaProject(normalised, defaultQaRates).qa.areas[0].supervisionDays).toBe(4);
+  });
+
+  it("calculates project-level QA visits, hotel, subsistence and distance", () => {
+    const input = createEmptyQaInput("EUR", "km");
+    input.programme = {
+      ...input.programme!,
+      siteDays: 10,
+      visits: 2,
+      travelDaysEachWay: 1,
+      hotelRequired: true,
+      oneWayDistance: 150,
+      vehicles: 2
+    };
+    const defaults = calculateQaProgrammeDefaults(input)!;
+    expect(defaults.totalTravelDays).toBe(4);
+    expect(defaults.calculatedHotelNightsPerPerson).toBe(12);
+    expect(defaults.calculatedSubsistenceDaysPerPerson).toBe(14);
+    expect(defaults.chargeableDistance).toBe(1200);
+    const result = calculateQaProject(input, defaultQaRates);
+    expect(result.siteDays).toBe(10);
+    expect(result.qa.programme?.visits).toBe(2);
+    expect(result.proposalLines.find((line) => line.item === "QA Programme - Internal Distance")?.quantity).toBe(1200);
+  });
+
+  it("uses QA hotel and subsistence overrides only when they differ", () => {
+    const input = createEmptyQaInput("EUR", "km");
+    input.programme = { ...input.programme!, siteDays: 10, visits: 2, travelDaysEachWay: 1, hotelRequired: true, hotelNightsOverride: 11, subsistenceDaysOverride: 13 };
+    const defaults = calculateQaProgrammeDefaults(input)!;
+    expect(defaults.hotelNightsOverridden).toBe(true);
+    expect(defaults.subsistenceDaysOverridden).toBe(true);
+    expect(defaults.hotelNightsPerPerson).toBe(11);
+    expect(defaults.subsistenceDaysPerPerson).toBe(13);
+  });
+
+  it("charges shared visits to QA and reassigns them if only Survey is selected", () => {
+    const qa = createEmptyQaInput("EUR", "km");
+    qa.surveyIncluded = true;
+    qa.visitMode = "shared";
+    qa.sharedTravelOwner = "qa";
+    qa.programme = { ...qa.programme!, siteDays: 2, visits: 1, travelDaysEachWay: 1, oneWayDistance: 100 };
+    const survey = createEmptySurveyInput("EUR", "km");
+    survey.autoStoreArea = 1000;
+    survey.surveyorsOnSite = 1;
+    survey.primaryOfficeDistanceOneWay = 200;
+    const offered = calculateIntegratedQaProject(qa, survey, defaultQaRates, defaultSurveyRates);
+    expect(offered.proposalLines.filter((line) => line.workPackageId === "survey").some((line) => line.item === "Kilometres")).toBe(false);
+    expect(offered.proposalLines.some((line) => line.workPackageId === "qa-supervision" && line.sharedCostForPackageIds?.includes("survey"))).toBe(true);
+    const selected = selectIntegratedQaPackages(offered, ["survey"]);
+    expect(selected.proposalLines.some((line) => line.workPackageId === "survey" && line.source.includes("reassigned"))).toBe(true);
   });
 });
