@@ -41,12 +41,12 @@ describe("separate QA costing module", () => {
     expect(sql).toContain("lower(company.name) like '%cgfe%'");
   });
 
-  it("starts with the workbook design package but no supervision cost", () => {
+  it("starts with no design or supervision cost until hours or days are entered", () => {
     const result = calculateQaProject(createEmptyQaInput("EUR", "km"), defaultQaRates);
-    expect(result.proposalTotal).toBe(6600);
-    expect(result.budgetCost).toBe(6600);
+    expect(result.proposalTotal).toBe(0);
+    expect(result.budgetCost).toBe(0);
     expect(result.siteDays).toBe(0);
-    expect(result.qa.designReviewBudget).toBe(6600);
+    expect(result.qa.designReviewBudget).toBe(0);
     expect(result.qa.supervisionBudget).toBe(0);
   });
 
@@ -66,6 +66,51 @@ describe("separate QA costing module", () => {
     expect(result.qa.areas[0].supervisionDays).toBe(4);
     expect(result.qa.areas[0].productivityM2PerDay).toBe(3000);
     expect(result.rateSchedules?.map((item) => item.service)).toEqual(["QA", "QA"]);
+  });
+
+  it("prices new design reviews and meetings from senior engineer hours", () => {
+    const input = createEmptyQaInput("EUR", "km");
+    input.siteSupervisionIncluded = false;
+    input.areas[0].quantities = { internalDesignReviewHour: 8, internalDesignMeetingHour: 2 };
+    const result = calculateQaProject(input, defaultQaRates);
+    expect(result.qa.designReviewBudget).toBe(600);
+    expect(result.proposalLines.find((line) => line.item.includes("Design Review"))?.quantity).toBe(8);
+    expect(result.proposalLines.find((line) => line.item.includes("Meeting"))?.quantity).toBe(2);
+  });
+
+  it("keeps QA-assisted Survey separate without duplicating survey labour or visits", () => {
+    const qa = createEmptyQaInput("EUR", "km");
+    qa.surveyIncluded = true;
+    qa.surveyDeliveryMode = "qa_assisted";
+    qa.visitMode = "shared";
+    qa.sharedTravelOwner = "qa";
+    qa.qaAssistedAdditionalSurveyDays = 1;
+    qa.programme = { ...qa.programme!, siteDays: 5, travelDaysEachWay: 1, oneWayDistance: 100 };
+    const survey = createEmptySurveyInput("EUR", "km");
+    survey.autoStoreArea = 1000;
+    survey.surveyorsOnSite = 1;
+    survey.primaryOfficeDistanceOneWay = 100;
+    survey.selectedTests = [{ testId: "abrasion-resistance", quantity: 2, visitMode: "qa_visit" }];
+    const surveyRates = { ...defaultSurveyRates, testCatalog: defaultSurveyRates.testCatalog.map((item) => item.id === "abrasion-resistance" ? { ...item, budgetRate: 100 } : item) };
+    const result = calculateIntegratedQaProject(qa, survey, defaultQaRates, surveyRates);
+    const surveyLines = result.proposalLines.filter((line) => line.workPackageId === "survey");
+    expect(surveyLines.find((line) => line.item === "Surveyor")).toBeUndefined();
+    expect(surveyLines.some((line) => line.plCategory === "Travel" || line.plCategory === "Hotel/Subsistence")).toBe(false);
+    expect(surveyLines.find((line) => line.item === "Survey Analysis & Reporting")?.cost).toBe(500);
+    expect(surveyLines.find((line) => line.item === "Additional QA Engineer Survey Day")?.cost).toBe(680);
+    expect(surveyLines.find((line) => line.item === "Test - Abrasion Resistance")?.cost).toBe(200);
+    expect(result.packageSummaries?.find((item) => item.id === "survey")?.days).toBe(1);
+    expect(result.siteDays).toBe(6);
+  });
+
+  it("retains independent Survey costing when QA assistance is not selected", () => {
+    const qa = createEmptyQaInput("EUR", "km");
+    qa.surveyIncluded = true;
+    const survey = createEmptySurveyInput("EUR", "km");
+    survey.autoStoreArea = 1000;
+    survey.surveyorsOnSite = 1;
+    const result = calculateIntegratedQaProject(qa, survey, defaultQaRates, defaultSurveyRates);
+    expect(result.proposalLines.find((line) => line.workPackageId === "survey" && line.item === "Surveyor")?.quantity).toBe(1);
   });
 
   it("converts QA admin rates into quote currency once and reports company totals", () => {

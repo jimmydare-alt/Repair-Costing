@@ -68,7 +68,7 @@ export function buildHandoverSummary(project: ProjectRecord): HandoverSummary {
     budget: lines.filter((line) => lineCategory(line) === category).reduce((sum, line) => sum + line.cost, 0)
   })).filter((row) => row.budget > 0);
   const actions: string[] = [];
-  if (project.inputs.costingModule === "survey" && project.inputs.survey) {
+  if (project.inputs.survey) {
     const catalog = project.rateSnapshot?.surveyRates?.equipmentCatalog ?? [];
     project.inputs.survey.selectedEquipment?.forEach((selection) => {
       const equipmentItem = catalog.find((item) => item.id === selection.equipmentId);
@@ -76,6 +76,12 @@ export function buildHandoverSummary(project: ProjectRecord): HandoverSummary {
       actions.push(`Confirm ${selection.quantity} x ${equipmentItem.name} ${equipmentItem.checklistNotes ? `- ${equipmentItem.checklistNotes}` : "are dispatched to site."}`);
     });
     if (!project.inputs.survey.selectedEquipment?.length && project.inputs.survey.numberOfProfs > 0) actions.push(`Confirm ${project.inputs.survey.numberOfProfs} x legacy profiler equipment set${project.inputs.survey.numberOfProfs === 1 ? " is" : "s are"} dispatched to site.`);
+    const tests = project.rateSnapshot?.surveyRates?.testCatalog ?? [];
+    project.inputs.survey.selectedTests?.forEach((selection) => {
+      const test = tests.find((item) => item.id === selection.testId);
+      if (!test || selection.quantity <= 0) return;
+      actions.push(`Confirm ${test.name} (${test.chargingBasis === "fixed" ? 1 : selection.quantity} ${test.chargingBasis === "fixed" ? "package" : test.chargingBasis})${test.checklistNotes ? ` - ${test.checklistNotes}` : "."}`);
+    });
   }
   if (materials.length) actions.push(`Order and confirm ${materials.length} material type${materials.length === 1 ? "" : "s"}.`);
   if (subcontractors.length) actions.push(`Appoint and confirm ${subcontractors.length} subcontract work package${subcontractors.length === 1 ? "" : "s"}.`);

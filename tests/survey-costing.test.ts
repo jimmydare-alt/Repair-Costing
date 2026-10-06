@@ -206,6 +206,21 @@ describe("separate Survey costing module", () => {
     expect(buildHandoverSummary(project).actions).toContain("Confirm 2 x Level Survey Kit - Include tripod and charger");
   });
 
+  it("prices shared catalogue tests with their own delivery and P&L treatment", () => {
+    const rates = normaliseSurveyRates({ ...defaultSurveyRates, testCatalog: [
+      { id: "abrasion", name: "Abrasion", description: "", budgetRate: 150, markup: 0.2, chargingBasis: "each", delivery: "internal", plCategory: "Labour", active: true, checklistNotes: "Take test kit" },
+      { id: "friction", name: "Friction", description: "", budgetRate: 400, markup: 0.25, chargingBasis: "fixed", delivery: "subcontract", plCategory: "Subcontract", active: true, checklistNotes: "" }
+    ] });
+    const result = calculateSurveyProject({ ...inHouseSurvey(), selectedTests: [
+      { testId: "abrasion", quantity: 3, visitMode: "survey_visit" },
+      { testId: "friction", quantity: 9, visitMode: "standalone_visit" }
+    ] }, rates);
+    const abrasion = result.proposalLines.find((line) => line.item === "Test - Abrasion");
+    const friction = result.proposalLines.find((line) => line.item === "Test - Friction");
+    expect(abrasion).toMatchObject({ quantity: 3, cost: 450, total: 540, plCategory: "Labour" });
+    expect(friction).toMatchObject({ quantity: 1, cost: 400, total: 500, plCategory: "Subcontract" });
+  });
+
   it("replaces the complete surveyor package when subcontracted and applies markup", () => {
     const input = { ...inHouseSurvey(), surveyorSupply: "Subcontracted" as const, subcontractSurveyCost: 5000, subcontractSurveyMarkup: 0.3 };
     const result = calculateSurveyProject(input, defaultSurveyRates);

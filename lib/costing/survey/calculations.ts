@@ -15,7 +15,7 @@ const monetaryRateKeys: Array<keyof SurveyAdminRates> = [
   "returnFlightBudgetRate", "airportUberBudgetRate", "airportParkingBudgetDayRate", "hotelBudgetNightRate",
   "equipmentShippingBudgetRate", "companyCarBudgetDayRate", "carRentalBudgetDayRate", "equipmentRentalBudgetDayRate",
   "subsistenceBudgetDayRate", "engineeringReportBudgetRate", "errorPlanBudgetRate", "standbySurveyorBudgetDayRate",
-  "standbyLabourerBudgetDayRate", "standbySubsistenceBudgetDayRate"
+  "standbyLabourerBudgetDayRate", "standbySubsistenceBudgetDayRate", "qaAssistedAnalysisReportBudgetRate"
 ];
 
 export function surveyRatesInQuoteCurrency(savedRates: Partial<SurveyAdminRates> | undefined, companyCurrencyPerQuoteCurrency: number) {
@@ -26,6 +26,7 @@ export function surveyRatesInQuoteCurrency(savedRates: Partial<SurveyAdminRates>
     (converted[key] as number) = (rates[key] as number) / divisor;
   });
   converted.equipmentCatalog = rates.equipmentCatalog.map((item) => ({ ...item, budgetRate: item.budgetRate / divisor }));
+  converted.testCatalog = rates.testCatalog.map((item) => ({ ...item, budgetRate: item.budgetRate / divisor }));
   return converted;
 }
 
@@ -109,6 +110,9 @@ export function calculateSurveyProject(input: SurveyInput, savedRates?: Partial<
     .map((selection) => ({ selection, equipment: rates.equipmentCatalog.find((item) => item.id === selection.equipmentId) }))
     .filter((row): row is { selection: SurveyInput["selectedEquipment"][number]; equipment: SurveyAdminRates["equipmentCatalog"][number] } => Boolean(row.equipment));
   const selectedEquipmentQuantity = selectedEquipment.reduce((sum, row) => sum + safe(row.selection.quantity), 0);
+  const selectedTests = input.selectedTests
+    .map((selection) => ({ selection, test: rates.testCatalog.find((item) => item.id === selection.testId) }))
+    .filter((row): row is { selection: SurveyInput["selectedTests"][number]; test: SurveyAdminRates["testCatalog"][number] } => Boolean(row.test));
   const legacyEquipmentQuantity = selectedEquipment.length ? 0 : safe(input.numberOfProfs);
   const shippingEquipmentQuantity = selectedEquipmentQuantity || legacyEquipmentQuantity;
   const shippingQty = input.equipmentShippingRequired || (travelPackageRequired && input.travelMode === "Fly") ? 2 * shippingEquipmentQuantity : 0;
@@ -173,6 +177,15 @@ export function calculateSurveyProject(input: SurveyInput, savedRates?: Partial<
     proposalLine("Subsistence", "Labourer Subsistence", rates.subsistenceBudgetDayRate, "day", labourerSubsistenceDays, rates.subsistenceMarkup, "Hotel/Subsistence"),
     proposalLine("Reports", "Engineering Report", rates.engineeringReportBudgetRate, "item", input.surveyReport ? 1 : 0, rates.engineeringReportMarkup, "Labour"),
     proposalLine("Reports", "Error Plan", rates.errorPlanBudgetRate, "item", input.errorPlan ? 1 : 0, rates.errorPlanMarkup, "Labour"),
+    ...selectedTests.map(({ selection, test }) => proposalLine(
+      test.delivery === "subcontract" ? "Subcontract" : "Reports",
+      `Test - ${test.name}`,
+      test.budgetRate,
+      test.chargingBasis === "fixed" ? "item" : test.chargingBasis,
+      test.chargingBasis === "fixed" ? 1 : safe(selection.quantity),
+      test.markup,
+      test.delivery === "subcontract" ? "Subcontract" : test.plCategory
+    )),
     ...input.additionalItems.map((item) => proposalLine("Additional items", item.name, item.rate, item.unit, item.quantity, item.markup, item.plCategory)),
     ...standbyProposalLines
   ];

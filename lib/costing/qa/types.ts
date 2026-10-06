@@ -2,6 +2,10 @@ import type { CurrencyCode } from "../../company";
 import type { DistanceUnit, LabourMode, Line, OfficeCount, PackagePricingBasis, PLCategory, ProjectCalculations, Section, TravelMode } from "../../types";
 
 export type QaRateKey =
+  | "internalDesignReviewHour"
+  | "internalDesignMeetingHour"
+  | "subcontractDesignReviewHour"
+  | "subcontractDesignMeetingHour"
   | "internalOfficeWork"
   | "internalMeeting"
   | "internalConferenceCall"
@@ -39,6 +43,7 @@ export type QaRateDefinition = {
   plCategory: PLCategory;
   delivery: "internal" | "subcontract";
   group: "design" | "supervision" | "travel";
+  legacy?: boolean;
 };
 
 export type QaAdminRates = {
@@ -133,6 +138,8 @@ export type QaInput = {
   distanceUnit: DistanceUnit;
   officeCount: OfficeCount;
   surveyIncluded: boolean;
+  surveyDeliveryMode: "independent" | "qa_assisted";
+  qaAssistedAdditionalSurveyDays: number;
   designReviewIncluded: boolean;
   siteSupervisionIncluded: boolean;
   visitMode: "separate" | "shared";
@@ -198,6 +205,7 @@ export type QaCalculationResult = ProjectCalculations & {
 };
 
 export const QA_RATE_KEYS: QaRateKey[] = [
+  "internalDesignReviewHour", "internalDesignMeetingHour", "subcontractDesignReviewHour", "subcontractDesignMeetingHour",
   "internalOfficeWork", "internalMeeting", "internalConferenceCall", "internalReportReview",
   "subcontractOfficeWork", "subcontractMeeting", "subcontractConferenceCall", "subcontractReportReview",
   "internalSupervisionDay", "internalNonSupervisionDay", "internalStandDownDay", "internalTravelDay",

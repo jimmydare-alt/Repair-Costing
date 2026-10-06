@@ -6,6 +6,9 @@ export type SurveyorSupply = "In-house" | "Subcontracted";
 export type SurveyTravelMode = "Drive" | "Fly";
 export type SurveyAirportTransport = "N/A" | "Drive" | "Uber";
 export type SurveyEquipmentChargingBasis = "site_day" | "deployment";
+export type SurveyTestChargingBasis = "each" | "hour" | "day" | "m2" | "fixed";
+export type SurveyTestDelivery = "internal" | "subcontract";
+export type SurveyTestVisitMode = "survey_visit" | "qa_visit" | "standalone_visit";
 
 export type SurveyEquipmentCatalogItem = {
   id: string;
@@ -22,6 +25,25 @@ export type SurveyEquipmentCatalogItem = {
 export type SurveyEquipmentSelection = {
   equipmentId: string;
   quantity: number;
+};
+
+export type SurveyTestCatalogItem = {
+  id: string;
+  name: string;
+  description: string;
+  budgetRate: number;
+  markup: number;
+  chargingBasis: SurveyTestChargingBasis;
+  delivery: SurveyTestDelivery;
+  plCategory: PLCategory;
+  active: boolean;
+  checklistNotes: string;
+};
+
+export type SurveyTestSelection = {
+  testId: string;
+  quantity: number;
+  visitMode: SurveyTestVisitMode;
 };
 
 export type SurveyAdditionalItem = {
@@ -78,6 +100,7 @@ export type SurveyInput = {
   /** Retained so historical survey projects keep their original calculation. */
   numberOfProfs: number;
   selectedEquipment: SurveyEquipmentSelection[];
+  selectedTests: SurveyTestSelection[];
   primaryOfficeDistanceOneWay: number;
   secondaryOfficeDistanceOneWay: number;
   driveTimeOneWayDays: number;
@@ -134,6 +157,8 @@ export type SurveyAdminRates = {
   engineeringReportMarkup: number;
   errorPlanBudgetRate: number;
   errorPlanMarkup: number;
+  qaAssistedAnalysisReportBudgetRate: number;
+  qaAssistedAnalysisReportMarkup: number;
   defaultSubcontractMarkup: number;
   standbySurveyorBudgetDayRate: number;
   standbySurveyorMarkup: number;
@@ -149,6 +174,7 @@ export type SurveyAdminRates = {
   dailyOutputLevelSurveyArea: number;
   dailyOutputProfRunsOnly: number;
   equipmentCatalog: SurveyEquipmentCatalogItem[];
+  testCatalog: SurveyTestCatalogItem[];
 };
 
 export type SurveyCalculationDetails = {

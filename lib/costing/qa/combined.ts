@@ -1,6 +1,6 @@
-import { calculateSurveyProject } from "../survey/calculations";
+import { calculateSurveyProject, surveyRatesInQuoteCurrency } from "../survey/calculations";
 import type { SurveyAdminRates, SurveyInput } from "../survey/types";
-import { calculateQaProject } from "./calculations";
+import { calculateQaProject, qaRatesInQuoteCurrency } from "./calculations";
 import type { QaAdminRates, QaInput } from "./types";
 import type { Line, ProjectCalculations, WorkPackageCalculationSummary } from "../../types";
 
@@ -27,6 +27,14 @@ function qaLinePackage(line: Line, rates: QaAdminRates) {
 function isSurveyVisitCost(line: Line) {
   if (line.item === "Subcontracted Survey Mobilisation" || line.item === "Equipment Shipping") return false;
   return line.plCategory === "Travel" || line.plCategory === "Hotel/Subsistence" || (line.costKind === "mobilisation" && line.plCategory === "Labour");
+}
+
+function directLine(item: string, budgetRate: number, quantity: number, markup: number, section: Line["section"], plCategory: Line["plCategory"], discountPercentage = 0): { proposal: Line; budget: Line } {
+  const cost = round(Math.max(0, budgetRate) * Math.max(0, quantity));
+  const originalTotal = round(cost * (1 + Math.max(0, markup)));
+  const total = round(originalTotal * (1 - Math.min(100, Math.max(0, discountPercentage)) / 100));
+  const base: Line = { section, item, rate: Math.max(0, budgetRate), unit: "item", quantity: Math.max(0, quantity), cost, margin: round(total - cost), total, discount: round(originalTotal - total), originalTotal, source: "QA-assisted survey calculation", plCategory };
+  return { proposal: base, budget: { ...base, margin: 0, total: cost, originalTotal: cost, discount: 0 } };
 }
 
 function summary(id: string, code: string, name: string, service: "Survey" | "QA", lines: Line[], budgetLines: Line[], days: number, basis: "fixed" | "day_rate"): WorkPackageCalculationSummary {
@@ -80,13 +88,39 @@ export function calculateIntegratedQaProject(qaInput: QaInput, surveyInput: Surv
   };
   const qa = calculateQaProject(qaForCalculation, qaRates);
   const survey = qaInput.surveyIncluded && surveyInput ? calculateSurveyProject(surveyInput, surveyRates) : undefined;
+  const qaAssisted = Boolean(survey && qaInput.siteSupervisionIncluded && qaInput.surveyDeliveryMode === "qa_assisted");
 
   const proposalLines: Line[] = [];
   const budgetLines: Line[] = [];
   if (survey) {
-    const includeSurveyLine = (line: Line) => !(sharedVisit && sharedOwner === "qa" && isSurveyVisitCost(line));
+    const separateTestVisit = Boolean(surveyInput?.selectedTests.some((item) => item.visitMode !== "qa_visit"));
+    const includeQaAssistedLine = (line: Line) => {
+      if (line.item.startsWith("Test - ") || line.item === "Error Plan" || line.section === "Equipment" || line.section === "Haulage" || line.section === "Additional items") return true;
+      if (separateTestVisit && isSurveyVisitCost(line)) return true;
+      return false;
+    };
+    const includeSurveyLine = (line: Line) => qaAssisted
+      ? includeQaAssistedLine(line)
+      : !(sharedVisit && sharedOwner === "qa" && isSurveyVisitCost(line));
     proposalLines.push(...survey.proposalLines.filter(includeSurveyLine).map((line) => packageLine(line, "survey", "Survey", "A", sharedVisit && sharedOwner === "survey" && isSurveyVisitCost(line) ? sharedPackageIds : undefined)));
     budgetLines.push(...survey.budgetLines.filter(includeSurveyLine).map((line) => packageLine(line, "survey", "Survey", "A", sharedVisit && sharedOwner === "survey" && isSurveyVisitCost(line) ? sharedPackageIds : undefined)));
+    if (qaAssisted && surveyInput) {
+      const surveyQuoteRates = surveyRatesInQuoteCurrency(surveyRates, companyExchange);
+      const report = directLine("Survey Analysis & Reporting", surveyQuoteRates.qaAssistedAnalysisReportBudgetRate, 1, surveyQuoteRates.qaAssistedAnalysisReportMarkup, "Reports", "Labour", surveyInput.discountPercentage);
+      proposalLines.push(packageLine(report.proposal, "survey", "Survey", "A"));
+      budgetLines.push(packageLine(report.budget, "survey", "Survey", "A"));
+      const extraDays = Math.max(0, Math.round(qaInput.qaAssistedAdditionalSurveyDays));
+      if (extraDays > 0) {
+        const qaQuoteRates = qaRatesInQuoteCurrency(qaRates, companyExchange);
+        const subcontract = qaInput.areas.find((area) => area.supervisionRequired)?.supervisionDeliveryMode === "subcontract";
+        const dayRate = qaQuoteRates.rates[subcontract ? "subcontractSupervisionDay" : "internalSupervisionDay"];
+        const extra = directLine("Additional QA Engineer Survey Day", dayRate.budgetRate, extraDays, dayRate.markup, dayRate.section, dayRate.plCategory, surveyInput.discountPercentage);
+        extra.proposal.unit = "day";
+        extra.budget.unit = "day";
+        proposalLines.push(packageLine(extra.proposal, "survey", "Survey", "A"));
+        budgetLines.push(packageLine(extra.budget, "survey", "Survey", "A"));
+      }
+    }
   }
   const mapQaLine = (line: Line) => {
     const group = qaLinePackage(line, qaRates);
@@ -100,13 +134,15 @@ export function calculateIntegratedQaProject(qaInput: QaInput, surveyInput: Surv
   budgetLines.push(...qa.budgetLines.map(mapQaLine));
 
   const packages: WorkPackageCalculationSummary[] = [];
-  if (survey) packages.push(summary("survey", "A", "Survey", "Survey", proposalLines.filter((line) => line.workPackageId === "survey"), budgetLines.filter((line) => line.workPackageId === "survey"), survey.siteDays, surveyInput?.pricingBasis ?? "fixed"));
+  if (survey) packages.push(summary("survey", "A", "Survey", "Survey", proposalLines.filter((line) => line.workPackageId === "survey"), budgetLines.filter((line) => line.workPackageId === "survey"), qaAssisted ? Math.max(0, Math.round(qaInput.qaAssistedAdditionalSurveyDays)) : survey.siteDays, surveyInput?.pricingBasis ?? "fixed"));
   if (qaInput.designReviewIncluded) packages.push(summary("qa-design", survey ? "B" : "A", "Design Review", "QA", proposalLines.filter((line) => line.workPackageId === "qa-design"), budgetLines.filter((line) => line.workPackageId === "qa-design"), 0, "fixed"));
   if (qaInput.siteSupervisionIncluded) packages.push(summary("qa-supervision", survey ? "C" : qaInput.designReviewIncluded ? "B" : "A", "Site Supervision", "QA", proposalLines.filter((line) => line.workPackageId === "qa-supervision"), budgetLines.filter((line) => line.workPackageId === "qa-supervision"), qa.siteDays, qaInput.areas[0]?.supervisionPricingBasis ?? "day_rate"));
 
   const commonProposal = sum(proposalLines.filter((line) => line.commercialGroup === "common"), "total");
   const commonBudget = sum(budgetLines.filter((line) => line.commercialGroup === "common"), "total");
-  const siteDays = survey && qaInput.visitMode === "shared" ? Math.max(survey.siteDays, qa.siteDays) : (survey?.siteDays ?? 0) + qa.siteDays;
+  const siteDays = qaAssisted
+    ? qa.siteDays + Math.max(0, Math.round(qaInput.qaAssistedAdditionalSurveyDays))
+    : survey && qaInput.visitMode === "shared" ? Math.max(survey.siteDays, qa.siteDays) : (survey?.siteDays ?? 0) + qa.siteDays;
   const services = [survey ? "Survey" : "", qaInput.designReviewIncluded ? "Design Review" : "", qaInput.siteSupervisionIncluded ? "Site Supervision" : ""].filter(Boolean);
   const combined = totals({
     ...qa,

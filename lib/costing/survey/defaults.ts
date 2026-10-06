@@ -1,6 +1,6 @@
 import type { CurrencyCode } from "../../company";
 import type { DistanceUnit, OfficeCount } from "../../types";
-import type { SurveyAdminRates, SurveyEquipmentCatalogItem, SurveyInput } from "./types";
+import type { SurveyAdminRates, SurveyEquipmentCatalogItem, SurveyInput, SurveyTestCatalogItem, SurveyTestSelection } from "./types";
 import { clearInactiveSurveyQuantities } from "./rules";
 
 export const defaultSurveyRates: SurveyAdminRates = {
@@ -42,6 +42,8 @@ export const defaultSurveyRates: SurveyAdminRates = {
   engineeringReportMarkup: 0.2,
   errorPlanBudgetRate: 500,
   errorPlanMarkup: 0.3,
+  qaAssistedAnalysisReportBudgetRate: 500,
+  qaAssistedAnalysisReportMarkup: 0.2,
   defaultSubcontractMarkup: 0.2,
   standbySurveyorBudgetDayRate: 600,
   standbySurveyorMarkup: 1 / 3,
@@ -66,7 +68,12 @@ export const defaultSurveyRates: SurveyAdminRates = {
     chargingBasis: "site_day",
     active: true,
     checklistNotes: "Confirm the profiler and associated survey accessories are dispatched."
-  }]
+  }],
+  testCatalog: [
+    { id: "abrasion-resistance", name: "Abrasion Resistance", description: "Abrasion resistance testing and results.", budgetRate: 0, markup: 0.2, chargingBasis: "each", delivery: "internal", plCategory: "Labour", active: true, checklistNotes: "Confirm the abrasion test equipment and test locations." },
+    { id: "surface-roughness", name: "Surface Roughness", description: "Surface roughness testing and results.", budgetRate: 0, markup: 0.2, chargingBasis: "each", delivery: "internal", plCategory: "Labour", active: true, checklistNotes: "Confirm the roughness test equipment and test locations." },
+    { id: "friction-testing", name: "Friction Testing", description: "Floor friction testing and results.", budgetRate: 0, markup: 0.2, chargingBasis: "each", delivery: "internal", plCategory: "Labour", active: true, checklistNotes: "Confirm the friction test equipment and test locations." }
+  ]
 };
 
 export function createEmptySurveyInput(currency: CurrencyCode = "EUR", distanceUnit: DistanceUnit = "km", officeCount: OfficeCount = 1): SurveyInput {
@@ -80,7 +87,7 @@ export function createEmptySurveyInput(currency: CurrencyCode = "EUR", distanceU
     productiveRateOverride: null, standbyRateOverride: null, rateOverrideReason: "",
     projectManagerRequired: false, surveyorsOnSite: 0, additionalDays: 0, siteDaysOverride: null,
     labourerRequired: false, numberOfLabourers: 0, hotelRequired: false, weekendDaysWorked: 0,
-    weekendDaysNotWorked: 0, numberOfProfs: 0, selectedEquipment: [], primaryOfficeDistanceOneWay: 0, secondaryOfficeDistanceOneWay: 0,
+    weekendDaysNotWorked: 0, numberOfProfs: 0, selectedEquipment: [], selectedTests: [], primaryOfficeDistanceOneWay: 0, secondaryOfficeDistanceOneWay: 0,
     driveTimeOneWayDays: 0, travelMode: "Drive", numberOfCars: 0, numberOfCarsOverridden: false, airportTransport: "N/A", surveyReport: false,
     errorPlan: false, potentialRemedials: false, equipmentShippingRequired: false, additionalFlights: 0,
     additionalItems: [], discountPercentage: 0, markupOverrideReason: ""
@@ -89,12 +96,32 @@ export function createEmptySurveyInput(currency: CurrencyCode = "EUR", distanceU
 
 export function normaliseSurveyRates(saved?: Partial<SurveyAdminRates>): SurveyAdminRates {
   const savedCatalog = saved?.equipmentCatalog;
+  const savedTestCatalog = saved?.testCatalog;
   return {
     ...defaultSurveyRates,
     ...(saved ?? {}),
     equipmentCatalog: Array.isArray(savedCatalog)
       ? savedCatalog.map((item, index) => normaliseEquipment(item, index))
-      : defaultSurveyRates.equipmentCatalog.map((item) => ({ ...item }))
+      : defaultSurveyRates.equipmentCatalog.map((item) => ({ ...item })),
+    testCatalog: Array.isArray(savedTestCatalog)
+      ? savedTestCatalog.map((item, index) => normaliseTest(item, index))
+      : defaultSurveyRates.testCatalog.map((item) => ({ ...item }))
+  };
+}
+
+function normaliseTest(item: Partial<SurveyTestCatalogItem>, index: number): SurveyTestCatalogItem {
+  const bases: SurveyTestCatalogItem["chargingBasis"][] = ["each", "hour", "day", "m2", "fixed"];
+  return {
+    id: String(item.id || `survey-test-${index}`),
+    name: String(item.name || "Survey test"),
+    description: String(item.description || ""),
+    budgetRate: Math.max(0, Number(item.budgetRate) || 0),
+    markup: Math.max(0, Number(item.markup) || 0),
+    chargingBasis: bases.includes(item.chargingBasis as SurveyTestCatalogItem["chargingBasis"]) ? item.chargingBasis! : "each",
+    delivery: item.delivery === "subcontract" ? "subcontract" : "internal",
+    plCategory: item.plCategory || (item.delivery === "subcontract" ? "Subcontract" : "Labour"),
+    active: item.active !== false,
+    checklistNotes: String(item.checklistNotes || "")
   };
 }
 
@@ -134,6 +161,13 @@ export function normaliseSurveyInput(saved: Partial<SurveyInput> | undefined, cu
       ? saved.selectedEquipment
         .map((item) => ({ equipmentId: String(item.equipmentId || ""), quantity: Math.max(0, Number(item.quantity) || 0) }))
         .filter((item) => item.equipmentId && item.quantity > 0)
+      : [],
+    selectedTests: Array.isArray(saved?.selectedTests)
+      ? saved.selectedTests.map((item) => ({
+        testId: String(item.testId || ""),
+        quantity: Math.max(0, Number(item.quantity) || 0),
+        visitMode: (item.visitMode === "qa_visit" || item.visitMode === "standalone_visit" ? item.visitMode : "survey_visit") as SurveyTestSelection["visitMode"]
+      })).filter((item) => item.testId && item.quantity > 0)
       : [],
     numberOfCars: !numberOfCarsOverridden && savedCars === 0 && hasDriveDistance ? 1 : savedCars,
     numberOfCarsOverridden,

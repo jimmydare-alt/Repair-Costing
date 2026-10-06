@@ -9,6 +9,10 @@ type RateSeed = [QaRateKey, string, string, number, Section, PLCategory, "intern
 // combines hotel, subsistence and vehicle at EUR 200; that value starts in Hotel
 // while the other two components remain visible at zero for completion in Admin.
 const workbookRateSeeds: RateSeed[] = [
+  ["internalDesignReviewHour", "Internal Senior Engineer - Design Review", "hour", 60, "Labour", "Labour", "internal", "design"],
+  ["internalDesignMeetingHour", "Internal Senior Engineer - Meeting", "hour", 60, "Labour", "Labour", "internal", "design"],
+  ["subcontractDesignReviewHour", "Subcontract Senior Engineer - Design Review", "hour", 0, "Subcontract", "Subcontract", "subcontract", "design"],
+  ["subcontractDesignMeetingHour", "Subcontract Senior Engineer - Meeting", "hour", 0, "Subcontract", "Subcontract", "subcontract", "design"],
   ["internalOfficeWork", "Internal Office Work", "item", 4800, "Labour", "Labour", "internal", "design"],
   ["internalMeeting", "Internal Meeting Attendance", "meeting", 1000, "Labour", "Labour", "internal", "design"],
   ["internalConferenceCall", "Internal Conference Call", "call", 120, "Labour", "Labour", "internal", "design"],
@@ -39,7 +43,8 @@ const workbookRateSeeds: RateSeed[] = [
 
 function rate(seed: RateSeed): QaRateDefinition {
   const [key, label, unit, budgetRate, section, plCategory, delivery, group] = seed;
-  return { key, label, unit, budgetRate, markup: 0, section, plCategory, delivery, group };
+  const legacy = ["internalOfficeWork", "internalMeeting", "internalConferenceCall", "internalReportReview", "subcontractOfficeWork", "subcontractMeeting", "subcontractConferenceCall", "subcontractReportReview"].includes(key);
+  return { key, label, unit, budgetRate, markup: 0, section, plCategory, delivery, group, legacy };
 }
 
 export const defaultQaRates: QaAdminRates = {
@@ -71,14 +76,18 @@ export function createEmptyQaArea(index = 1): QaArea {
     vehicles: 1,
     equipmentTransportTrips: 0,
     quantities: {
-      internalOfficeWork: 1,
-      internalMeeting: 1,
+      internalDesignReviewHour: 0,
+      internalDesignMeetingHour: 0,
+      subcontractDesignReviewHour: 0,
+      subcontractDesignMeetingHour: 0,
+      internalOfficeWork: 0,
+      internalMeeting: 0,
       internalConferenceCall: 0,
-      internalReportReview: 1,
-      subcontractOfficeWork: 1,
-      subcontractMeeting: 1,
+      internalReportReview: 0,
+      subcontractOfficeWork: 0,
+      subcontractMeeting: 0,
       subcontractConferenceCall: 0,
-      subcontractReportReview: 1
+      subcontractReportReview: 0
     },
     rateOverrides: {},
     extraVisits: []
@@ -134,6 +143,8 @@ export function createEmptyQaInput(currency: CurrencyCode = "EUR", distanceUnit:
     distanceUnit,
     officeCount,
     surveyIncluded: false,
+    surveyDeliveryMode: "independent",
+    qaAssistedAdditionalSurveyDays: 0,
     designReviewIncluded: true,
     siteSupervisionIncluded: true,
     visitMode: "separate",
@@ -185,6 +196,8 @@ export function normaliseQaInput(saved: Partial<QaInput> | undefined, currency: 
     distanceUnit: saved?.distanceUnit ?? distanceUnit,
     officeCount: saved?.officeCount === 2 ? 2 : officeCount,
     surveyIncluded: Boolean(saved?.surveyIncluded),
+    surveyDeliveryMode: saved?.surveyDeliveryMode === "qa_assisted" ? "qa_assisted" : "independent",
+    qaAssistedAdditionalSurveyDays: Math.round(safe(saved?.qaAssistedAdditionalSurveyDays)),
     designReviewIncluded: saved?.designReviewIncluded !== false,
     siteSupervisionIncluded: saved?.siteSupervisionIncluded !== false,
     visitMode: saved?.visitMode === "shared" ? "shared" : "separate",
